@@ -3,7 +3,7 @@
 import os
 import json
 import tempfile
-from core.project import Project, Track, SourceInfo, CursorSettings, FrameStyle
+from core.project import Project, Track, Clip, SourceInfo, CursorSettings, FrameStyle
 
 
 class TestProject:
@@ -23,8 +23,12 @@ class TestProject:
             video="test.mp4", fps=30,
             width=1920, height=1080, duration=10.0,
         )
-        p.timeline.append(Track(type="video", start=0, end=5, content="track1"))
-        p.timeline.append(Track(type="audio", start=1, end=3, content="mic"))
+        p.timeline.append(Track(type="video", clips=[
+            Clip(type="video", start=0, end=5, content="track1"),
+        ]))
+        p.timeline.append(Track(type="audio", clips=[
+            Clip(type="audio", start=1, end=3, content="mic"),
+        ]))
         p.cursor.smooth = True
         p.cursor.trail = True
         p.cursor.style = "macos-dark"
@@ -51,7 +55,7 @@ class TestProject:
             assert loaded.source.fps == 30
             assert loaded.source.width == 1920
             assert len(loaded.timeline) == 2
-            assert loaded.timeline[0].content == "track1"
+            assert loaded.timeline[0].clips[0].content == "track1"
             assert loaded.cursor.smooth is True
             assert loaded.frame_style.background == "gradient"
         finally:
@@ -98,19 +102,16 @@ class TestTrack:
     def test_default_values(self):
         t = Track()
         assert t.type == "video"
-        assert t.start == 0.0
-        assert t.end == 0.0
-        assert t.speed == 1.0
-        assert t.content == ""
-        assert t.rect is None
-        assert t.color == "white"
+        assert t.clips == []
 
     def test_custom_track(self):
-        t = Track(type="zoom", start=2.0, end=8.0,
-                  speed=2.0, content="zoom-in",
-                  rect=[100, 200, 500, 300])
+        t = Track(type="zoom", name="缩放", clips=[
+            Clip(type="zoom", start=2.0, end=8.0,
+                 speed=2.0, content="zoom-in",
+                 rect=[100, 200, 500, 300]),
+        ])
         assert t.type == "zoom"
-        assert t.rect == [100, 200, 500, 300]
+        assert t.clips[0].rect == [100, 200, 500, 300]
 
 
 class TestSourceInfo:

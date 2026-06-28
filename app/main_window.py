@@ -344,22 +344,19 @@ class MainWindow(FluentWindow):
         if not frames:
             return
         duration = len(frames) / self._compositor.fps
-        from core.project import Track
+        from core.project import Clip, Track
 
         tracks = []
 
-        # 视频轨道（全时长）
-        tracks.append(Track(
-            type="video", start=0, end=duration,
-            content=f"屏幕录制 {self._compositor.width}x{self._compositor.height}",
-        ))
+        tracks.append(Track(type="video", name="视频", clips=[
+            Clip(type="video", start=0, end=duration,
+                 content=f"屏幕录制 {self._compositor.width}x{self._compositor.height}"),
+        ]))
 
-        # 音频轨道（全时长）
-        tracks.append(Track(
-            type="audio", start=0, end=duration, content="麦克风",
-        ))
+        tracks.append(Track(type="audio", name="音频", clips=[
+            Clip(type="audio", start=0, end=duration, content="麦克风"),
+        ]))
 
-        # 智能镜头系统：语义目标识别 + Comfort Zone + Minimum-Jerk
         clicks = self._recorded_data.get("clicks", [])
         cursor_events = self._recorded_data.get("cursor_events", [])
         base_time = frames[0].timestamp
@@ -370,12 +367,10 @@ class MainWindow(FluentWindow):
                               cursor_events, base_time)
         self._compositor.load_camera(camera)
 
-        # 时间线显示单个缩放轨道 + 多段视觉块（按实际缩放范围）
-        tracks.append(Track(
-            type="zoom", start=0, end=duration, content="镜头缩放",
-        ))
         zoom_segs = camera.zoomed_segments if camera else []
-        self._timeline.set_zoom_segments(zoom_segs)
+        zoom_clips = [Clip(type="zoom", start=s, end=e, content="缩放")
+                      for s, e in zoom_segs]
+        tracks.append(Track(type="zoom", name="缩放", clips=zoom_clips))
 
         self._timeline.set_tracks(tracks)
         self._timeline.duration = duration
@@ -407,7 +402,6 @@ class MainWindow(FluentWindow):
         if not self._playback:
             from ui.preview_widget import PlaybackController
             self._playback = PlaybackController(self._preview, self._compositor)
-            self._seek_slider.setRange(0, self._playback.total_frames - 1)
             self._playback.set_on_frame_changed(self._update_frame_counter)
             start_frame = int(self._timeline.playhead * self._compositor.fps)
             self._playback.play(start_frame)
@@ -612,11 +606,16 @@ class MainWindow(FluentWindow):
     def _on_delete_selected_track(self):
         idx = self._timeline.selected_index
         if idx >= 0:
-            self._timeline.delete_track(idx)
+            track = self._timeline.tracks[idx]
+            if track.clips:
+                self._timeline.delete_clip(idx, 0)
 
     def _make_track(self, type_: str, content: str):
-        from core.project import Track
-        return Track(type=type_, content=content, start=0.0, end=self._timeline.duration)
+        from core.project import Clip, Track
+        return Track(type=type_, name=type_, clips=[
+            Clip(type=type_, content=content,
+                 start=0.0, end=self._timeline.duration),
+        ])
 
     @property
     def timeline_tracks(self) -> list:

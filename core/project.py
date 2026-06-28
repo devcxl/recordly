@@ -10,17 +10,30 @@ from core.frame_style import FrameStyle
 
 
 @dataclass
-class Track:
-    type: str = "video"        # "video" / "audio" / "zoom" / "text" / "cursor"
+class Clip:
+    type: str = "video"
     start: float = 0.0
     end: float = 0.0
     speed: float = 1.0
     content: str = ""
-    rect: list[int] | None = None  # [x, y, w, h] for zoom
+    rect: list[int] | None = None
     x: int = 0
     y: int = 0
     font_size: int = 24
     color: str = "white"
+
+
+@dataclass
+class Track:
+    type: str = "video"
+    name: str = ""
+    clips: list[Clip] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.clips = [
+            Clip(**c) if isinstance(c, dict) else c
+            for c in self.clips
+        ]
 
 
 @dataclass

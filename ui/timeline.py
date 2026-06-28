@@ -1,4 +1,4 @@
-"""时间线组件 — 轨道可视化和交互编辑"""
+"""时间线组件 — 支持多 clip 轨道剪辑"""
 
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
@@ -7,8 +7,6 @@ from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
 from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand
 
 
-# ── 时间线控件 ────────────────────────────────────────────
-
 TRACK_COLORS = {
     "video": QColor("#4A90D9"),
     "audio": QColor("#50C878"),
@@ -16,49 +14,39 @@ TRACK_COLORS = {
     "text": QColor("#A855F7"),
     "zoom": QColor("#F97316"),
 }
-TIMELINE_HEIGHT = 120
-TRACK_HEIGHT = 24
+TRACK_HEADER_WIDTH = 80
+TRACK_HEIGHT = 48
 RULER_HEIGHT = 20
-PADDING = 20
+PADDING = 4
 
 
 class TimelineWidget(QWidget):
-    """QPainter 时间线控件，支持拖拽编辑 + 撤销/重做"""
+    playhead_changed = pyqtSignal(float)
+    zoom_double_clicked = pyqtSignal(float)
 
-    playhead_changed = pyqtSignal(float)  # 播放头时间变化（秒）
-
-    SnapDistance = 5  # 吸附像素距离
+    SnapDistance = 5
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._tracks = []                 # list[Track]
+        self._tracks = []
         self._playhead_s = 0.0
         self._duration = 60.0
         self._pixels_per_sec = 30.0
-        self._selected = -1               # 选中的轨道索引
-        self._drag_state = None           # None / "move" / "resize_left" / "resize_right"
-        self._drag_index = -1
+        self._selected_track = -1
+        self._selected_clip = -1
+        self._drag_track = -1
+        self._drag_clip = -1
+        self._drag_state = None
         self._drag_start_x = 0
         self._drag_orig_start = 0.0
         self._drag_orig_end = 0.0
+        self._undo_stack = []
+        self._redo_stack = []
 
-        # 撤销栈
-        self._undo_stack: list[UndoCommand] = []
-        self._redo_stack: list[UndoCommand] = []
-
-        # 独立的缩放段列表（单轨道内绘制多条）
-        self._zoom_segments: list[tuple[float, float]] = []
-
-        self.setFixedHeight(TIMELINE_HEIGHT + RULER_HEIGHT + 10)
+        self.setMinimumHeight(RULER_HEIGHT + TRACK_HEIGHT + 10)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
-
-    def set_zoom_segments(self, segments: list[tuple[float, float]]):
-        self._zoom_segments = segments
-        self.update()
-
-    # ── 属性 ──────────────────────────────────────────────
 
     @property
     def duration(self) -> float:
@@ -84,20 +72,20 @@ class TimelineWidget(QWidget):
 
     def set_tracks(self, tracks: list):
         self._tracks = tracks
-        self._selected = -1
+        self._selected_track = -1
+        self._selected_clip = -1
+        self._update_height()
         self.update()
 
-    @property
-    def active_tracks(self) -> list[dict]:
-        """导出用的活动轨道列表（时间线可见范围）"""
-        return [
-            t for t in self._tracks
-            if t.start <= self._playhead_s < t.end
-        ]
+    def _update_height(self):
+        h = RULER_HEIGHT + len(self._tracks) * TRACK_HEIGHT + 10
+        self.setMinimumHeight(h)
+        self.setMaximumHeight(h)
 
     @property
     def selected_index(self) -> int:
-        return self._selected
+        """兼容旧接口，返回选中 clip 所在 track 索引"""
+        return self._selected_track if self._selected_clip >= 0 else -1
 
     @property
     def can_undo(self) -> bool:
@@ -106,6 +94,39 @@ class TimelineWidget(QWidget):
     @property
     def can_redo(self) -> bool:
         return len(self._redo_stack) > 0
+
+    def _time_to_x(self, s: float) -> int:
+        return int(TRACK_HEADER_WIDTH + s * self._pixels_per_sec)
+
+    def _x_to_time(self, x: int) -> float:
+        return max(0.0, (x - TRACK_HEADER_WIDTH) / self._pixels_per_sec)
+
+    def _clip_rect(self, track_idx: int, clip_idx: int) -> QRectF:
+        track = self._tracks[track_idx]
+        clip = track.clips[clip_idx]
+        y = RULER_HEIGHT + track_idx * TRACK_HEIGHT + 2
+        x1 = self._time_to_x(clip.start)
+        x2 = self._time_to_x(clip.end)
+        return QRectF(x1, y, x2 - x1, TRACK_HEIGHT - 4)
+
+    def _hit_test(self, pos: QPointF) -> tuple[int, int]:
+        for ti, track in enumerate(self._tracks):
+            for ci in range(len(track.clips)):
+                if self._clip_rect(ti, ci).contains(pos):
+                    return ti, ci
+        return -1, -1
+
+    def _hit_edge(self, pos: QPointF) -> tuple[int, int, str] | None:
+        for ti, track in enumerate(self._tracks):
+            for ci in range(len(track.clips)):
+                rect = self._clip_rect(ti, ci)
+                left = abs(pos.x() - rect.left())
+                right = abs(pos.x() - rect.right())
+                if left < self.SnapDistance and rect.top() <= pos.y() <= rect.bottom():
+                    return ti, ci, "resize_left"
+                if right < self.SnapDistance and rect.top() <= pos.y() <= rect.bottom():
+                    return ti, ci, "resize_right"
+        return None
 
     # ── 撤销/重做 ─────────────────────────────────────────
 
@@ -131,42 +152,6 @@ class TimelineWidget(QWidget):
         self._undo_stack.append(cmd)
         self.update()
 
-    # ── 坐标转换 ──────────────────────────────────────────
-
-    def time_to_x(self, s: float) -> int:
-        return int(PADDING + s * self._pixels_per_sec)
-
-    def x_to_time(self, x: int) -> float:
-        return max(0.0, (x - PADDING) / self._pixels_per_sec)
-
-    def _track_rect(self, index: int) -> QRectF:
-        y = RULER_HEIGHT + index * TRACK_HEIGHT + 2
-        t = self._tracks[index]
-        x1 = self.time_to_x(t.start)
-        x2 = self.time_to_x(t.end)
-        return QRectF(x1, y, x2 - x1, TRACK_HEIGHT - 4)
-
-    # ── 选择 ──────────────────────────────────────────────
-
-    def _hit_test(self, pos: QPointF) -> int:
-        """判断点击位置命中的轨道索引，-1 表示未命中"""
-        for i, t in enumerate(self._tracks):
-            if self._track_rect(i).contains(pos):
-                return i
-        return -1
-
-    def _hit_edge(self, pos: QPointF) -> tuple[int, str] | None:
-        """判断是否点击到轨道边缘，返回 (index, side) 或 None"""
-        for i, t in enumerate(self._tracks):
-            rect = self._track_rect(i)
-            left = abs(pos.x() - rect.left())
-            right = abs(pos.x() - rect.right())
-            if left < TimelineWidget.SnapDistance and rect.top() <= pos.y() <= rect.bottom():
-                return (i, "resize_left")
-            if right < TimelineWidget.SnapDistance and rect.top() <= pos.y() <= rect.bottom():
-                return (i, "resize_right")
-        return None
-
     # ── 鼠标事件 ──────────────────────────────────────────
 
     def mousePressEvent(self, event):
@@ -174,39 +159,37 @@ class TimelineWidget(QWidget):
             return
         pos = event.localPos()
 
-        # 点击任意位置 → 跳转播放头
-        self._playhead_s = self.x_to_time(pos.x())
+        self._playhead_s = self._x_to_time(int(pos.x()))
         self._drag_state = "playhead"
         self.update()
         self.playhead_changed.emit(self._playhead_s)
 
-        # 轨道编辑（仅对轨道区域生效）
         if pos.y() >= RULER_HEIGHT:
-            # 边缘检测
             edge = self._hit_edge(pos)
             if edge:
-                self._drag_index, self._drag_state = edge
+                self._drag_track, self._drag_clip, self._drag_state = edge
                 self._drag_start_x = pos.x()
-                t = self._tracks[self._drag_index]
-                self._drag_orig_start = t.start
-                self._drag_orig_end = t.end
+                clip = self._tracks[self._drag_track].clips[self._drag_clip]
+                self._drag_orig_start = clip.start
+                self._drag_orig_end = clip.end
                 return
 
-            # 轨道内点击 → 移动或选中
-            idx = self._hit_test(pos)
-            if idx >= 0:
-                self._selected = idx
-                self._drag_index = idx
+            ti, ci = self._hit_test(pos)
+            if ti >= 0 and ci >= 0:
+                self._selected_track = ti
+                self._selected_clip = ci
+                self._drag_track = ti
+                self._drag_clip = ci
                 self._drag_state = "move"
                 self._drag_start_x = pos.x()
-                t = self._tracks[idx]
-                self._drag_orig_start = t.start
-                self._drag_orig_end = t.end
+                clip = self._tracks[ti].clips[ci]
+                self._drag_orig_start = clip.start
+                self._drag_orig_end = clip.end
                 self.update()
                 return
 
-            # 点击空白 → 取消选中
-            self._selected = -1
+            self._selected_track = -1
+            self._selected_clip = -1
             self.update()
 
     def mouseMoveEvent(self, event):
@@ -214,25 +197,25 @@ class TimelineWidget(QWidget):
             pos = event.localPos()
 
             if self._drag_state == "playhead":
-                self._playhead_s = self.x_to_time(pos.x())
+                self._playhead_s = self._x_to_time(int(pos.x()))
                 self.update()
                 self.playhead_changed.emit(self._playhead_s)
                 return
 
-            t = self._tracks[self._drag_index]
+            clip = self._tracks[self._drag_track].clips[self._drag_clip]
             dt = (pos.x() - self._drag_start_x) / self._pixels_per_sec
 
             if self._drag_state == "move":
                 new_start = max(0.0, self._drag_orig_start + dt)
                 new_end = new_start + (self._drag_orig_end - self._drag_orig_start)
-                t.start = new_start
-                t.end = new_end
+                clip.start = new_start
+                clip.end = new_end
             elif self._drag_state == "resize_left":
-                new_start = max(0.0, min(self._drag_orig_start + dt, t.end - 0.5))
-                t.start = new_start
+                new_start = max(0.0, min(self._drag_orig_start + dt, clip.end - 0.5))
+                clip.start = new_start
             elif self._drag_state == "resize_right":
-                new_end = max(t.start + 0.5, self._drag_orig_end + dt)
-                t.end = new_end
+                new_end = max(clip.start + 0.5, self._drag_orig_end + dt)
+                clip.end = new_end
 
             self.update()
 
@@ -240,77 +223,98 @@ class TimelineWidget(QWidget):
         if event.button() != Qt.LeftButton:
             return
 
-        if self._drag_state != "playhead":
-            # 生成并压入撤销命令
-            cmd = self._make_move_cmd()
-            if cmd:
-                self._undo_stack.append(cmd)
-                self._redo_stack.clear()
+        if self._drag_state not in ("move", "resize_left", "resize_right"):
+            self._drag_state = None
+            self._drag_track = -1
+            self._drag_clip = -1
+            self.update()
+            return
+
+        cmd = self._make_move_cmd()
+        if cmd:
+            self._undo_stack.append(cmd)
+            self._redo_stack.clear()
 
         self._drag_state = None
-        self._drag_index = -1
+        self._drag_track = -1
+        self._drag_clip = -1
         self.update()
 
+    def mouseDoubleClickEvent(self, event):
+        pos = event.localPos()
+        ti, ci = self._hit_test(pos)
+        if ti >= 0 and self._tracks[ti].type == "zoom":
+            self.zoom_double_clicked.emit(self._playhead_s)
+        super().mouseDoubleClickEvent(event)
+
     def _make_move_cmd(self) -> MoveClipCommand | None:
-        """从拖动状态生成撤销命令"""
         if self._drag_state in ("move", "resize_left", "resize_right"):
-            t = self._tracks[self._drag_index]
-            if abs(t.start - self._drag_orig_start) > 0.01 or abs(t.end - self._drag_orig_end) > 0.01:
+            clip = self._tracks[self._drag_track].clips[self._drag_clip]
+            if abs(clip.start - self._drag_orig_start) > 0.01 or abs(clip.end - self._drag_orig_end) > 0.01:
                 return MoveClipCommand(
-                    track_index=self._drag_index,
-                    old_start=self._drag_orig_start, new_start=t.start,
-                    old_end=self._drag_orig_end, new_end=t.end,
+                    track_index=self._drag_track, clip_index=self._drag_clip,
+                    old_start=self._drag_orig_start, new_start=clip.start,
+                    old_end=self._drag_orig_end, new_end=clip.end,
                 )
         return None
 
     # ── 右键菜单 ──────────────────────────────────────────
 
     def _show_context_menu(self, pos):
-        idx = self._hit_test(pos)
+        ti, ci = self._hit_test(pos)
         menu = QMenu(self)
-        if idx >= 0:
-            menu.addAction("删除轨道", lambda i=idx: self.delete_track(i))
-            menu.addAction("拆分", lambda i=idx: self._split_track(i))
+        if ti >= 0 and ci >= 0:
+            menu.addAction("删除", lambda ti=ti, ci=ci: self.delete_clip(ti, ci))
+            menu.addAction("拆分", lambda ti=ti, ci=ci: self._split_clip(ti, ci))
             menu.addSeparator()
-            menu.addAction("选中", lambda i=idx: setattr(self, '_selected', i) or self.update())
+            menu.addAction("选中", lambda ti=ti, ci=ci: self._select_clip(ti, ci))
         menu.addAction("全选", self._select_all)
-        menu.addAction("清除选中", lambda: setattr(self, '_selected', -1) or self.update())
+        menu.addAction("清除选中", lambda: setattr(self, '_selected_clip', -1) or self.update())
         menu.exec_(self.mapToGlobal(pos))
 
-    def delete_track(self, index: int):
-        cmd = DeleteClipCommand(track_index=index)
+    def delete_clip(self, track_index: int, clip_index: int):
+        cmd = DeleteClipCommand(track_index=track_index, clip_index=clip_index)
         self._push_undo(cmd)
 
-    def _split_track(self, index: int):
-        if self._playhead_s <= self._tracks[index].start or self._playhead_s >= self._tracks[index].end:
+    def _split_clip(self, track_index: int, clip_index: int):
+        clip = self._tracks[track_index].clips[clip_index]
+        if self._playhead_s <= clip.start or self._playhead_s >= clip.end:
             return
-        cmd = SplitClipCommand(track_index=index, split_time=self._playhead_s)
+        cmd = SplitClipCommand(track_index=track_index, clip_index=clip_index, split_time=self._playhead_s)
         self._push_undo(cmd)
+
+    def _select_clip(self, track_index: int, clip_index: int):
+        self._selected_track = track_index
+        self._selected_clip = clip_index
+        self.update()
 
     def _select_all(self):
-        self._selected = -2  # 特殊值表示全选
+        self._selected_track = -2
+        self._selected_clip = -2
         self.update()
 
     # ── 键盘事件 ──────────────────────────────────────────
 
     def keyPressEvent(self, event):
         if event.matches(Qt.Key_Delete) or event.matches(Qt.Key_Backspace):
-            if self._selected >= 0:
-                self.delete_track(self._selected)
-                self._selected = -1
+            if self._selected_clip >= 0:
+                self.delete_clip(self._selected_track, self._selected_clip)
+                self._selected_clip = -1
             return
         if event.key() == Qt.Key_S and (event.modifiers() & Qt.ControlModifier) == 0:
-            if self._selected >= 0:
-                self._split_track(self._selected)
+            if self._selected_clip >= 0:
+                self._split_clip(self._selected_track, self._selected_clip)
             return
-        if event.matches(Qt.Key_Left) and self._selected >= 0:
-            t = self._tracks[self._selected]
-            cmd = MoveClipCommand(self._selected, t.start, t.start - 0.5, t.end, t.end - 0.5)
+        if event.matches(Qt.Key_Left) and self._selected_clip >= 0:
+            clip = self._tracks[self._selected_track].clips[self._selected_clip]
+            cmd = MoveClipCommand(self._selected_track, self._selected_clip,
+                                  clip.start, clip.start - 0.5, clip.end, clip.end - 0.5)
             self._push_undo(cmd)
             return
-        if event.matches(Qt.Key_Right) and self._selected >= 0:
-            t = self._tracks[self._selected]
-            cmd = MoveClipCommand(self._selected, t.start, t.start + 0.5, t.end, t.end + 0.5)
+        if event.matches(Qt.Key_Right) and self._selected_clip >= 0:
+            clip = self._tracks[self._selected_track].clips[self._selected_clip]
+            cmd = MoveClipCommand(self._selected_track, self._selected_clip,
+                                  clip.start, clip.start + 0.5, clip.end, clip.end + 0.5)
             self._push_undo(cmd)
             return
         super().keyPressEvent(event)
@@ -320,44 +324,39 @@ class TimelineWidget(QWidget):
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        w, content_h = self.width(), TIMELINE_HEIGHT + RULER_HEIGHT
+        w = self.width()
+        content_h = RULER_HEIGHT + len(self._tracks) * TRACK_HEIGHT
 
-        # 背景
-        p.fillRect(0, 0, w, content_h, QColor("#2d2d2d"))
+        p.fillRect(0, 0, w, content_h + 10, QColor("#2d2d2d"))
 
-        # 标尺
         self._draw_ruler(p)
 
-        # 轨道（只画行分隔线和文本手柄）
         for i, track in enumerate(self._tracks):
             self._draw_track(p, track, i)
 
-        # 内容段（所有轨道的可视化块）
-        self._draw_content_segments(p)
-
-        # 播放头
         self._draw_playhead(p)
 
     def _draw_ruler(self, p: QPainter):
         p.fillRect(0, 0, self.width(), RULER_HEIGHT, QColor("#3d3d3d"))
         p.setPen(QColor("#aaaaaa"))
         p.setFont(QFont("monospace", 9))
-        total_px = self._duration * self._pixels_per_sec
 
-        # 刻度间距：自适应
         tick_interval = self._auto_tick_interval()
         t = 0.0
         while t <= self._duration:
-            x = self.time_to_x(t)
-            if self.time_to_x(t) < self.width():
+            x = self._time_to_x(t)
+            if x < self.width():
                 p.drawText(int(x), RULER_HEIGHT - 4, self._format_time(t))
                 p.setPen(QColor("#666666"))
                 p.drawLine(int(x), RULER_HEIGHT, int(x), RULER_HEIGHT + 4)
                 p.setPen(QColor("#aaaaaa"))
             t += tick_interval
+        p.fillRect(0, 0, TRACK_HEADER_WIDTH, RULER_HEIGHT, QColor("#333333"))
+        p.setPen(QColor("#888"))
+        p.setFont(QFont("sans-serif", 8))
+        p.drawText(QRectF(0, 0, TRACK_HEADER_WIDTH, RULER_HEIGHT), Qt.AlignCenter, "时间线")
 
     def _auto_tick_interval(self) -> float:
-        """根据 pixels_per_sec 自动选择刻度间距"""
         for interval in [30, 20, 10, 5, 2, 1, 0.5]:
             if interval * self._pixels_per_sec >= 60:
                 return interval
@@ -368,66 +367,63 @@ class TimelineWidget(QWidget):
         return f"{m}:{s:02d}"
 
     def _draw_track(self, p: QPainter, track, index: int):
-        """画轨道行分隔线和标签（无色背景）"""
         y = RULER_HEIGHT + index * TRACK_HEIGHT
 
-        # 明暗交替行
         if index % 2 == 0:
-            p.fillRect(PADDING, y, self.width() - PADDING + 1, TRACK_HEIGHT, QColor("#2a2a2a"))
+            p.fillRect(0, y, self.width(), TRACK_HEIGHT, QColor("#2a2a2a"))
 
-        # 轨道分隔线
-        p.setPen(QPen(QColor("#3a3a3a"), 1))
-        p.drawLine(int(PADDING), y, int(self.width()), y)
+        p.setPen(QPen(QColor("#383838"), 1))
+        p.drawLine(0, y, self.width(), y)
+        p.drawLine(0, y + TRACK_HEIGHT, self.width(), y + TRACK_HEIGHT)
 
-        rect = self._track_rect(index)
-        if rect.width() < 1:
+        # 轨道头
+        header_rect = QRectF(0, y, TRACK_HEADER_WIDTH, TRACK_HEIGHT)
+        p.fillRect(header_rect, QColor("#252525"))
+        p.setPen(QColor("#aaa"))
+        p.setFont(QFont("sans-serif", 9, QFont.Bold))
+        p.drawText(QRectF(0, y, TRACK_HEADER_WIDTH, TRACK_HEIGHT),
+                   Qt.AlignCenter, track.name or track.type)
+
+        # 所有 clip
+        for ci in range(len(track.clips)):
+            self._draw_clip(p, track, index, ci)
+
+    def _draw_clip(self, p: QPainter, track, track_idx: int, clip_idx: int):
+        clip = track.clips[clip_idx]
+        rect = self._clip_rect(track_idx, clip_idx)
+        if rect.width() < 1 or rect.x() > self.width():
+            return
+        if rect.right() < TRACK_HEADER_WIDTH:
             return
 
-        # 轨道标签
+        color = TRACK_COLORS.get(clip.type, QColor("#888888"))
+        selected = (track_idx == self._selected_track and clip_idx == self._selected_clip)
+
+        if selected:
+            p.setBrush(QBrush(color.lighter(130)))
+            p.setPen(QPen(color.lighter(150), 2))
+        else:
+            p.setBrush(QBrush(color))
+            p.setPen(QPen(color.darker(120), 1))
+
+        p.drawRoundedRect(rect, 3, 3)
+
         if rect.width() > 40:
             p.setPen(QColor("white"))
             p.setFont(QFont("sans-serif", 8))
-            label = f"{track.type}: {track.content[:20]}" if track.content else track.type
+            label = f"{clip.type}: {clip.content[:20]}" if clip.content else clip.type
             p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
                        Qt.AlignLeft | Qt.AlignVCenter, label)
 
-        # 拖动手柄
-        if index == self._selected or self._drag_index == index:
+        if selected:
             p.fillRect(QRectF(rect.x() - 2, rect.y(), 4, rect.height()), QColor("white"))
             p.fillRect(QRectF(rect.right() - 2, rect.y(), 4, rect.height()), QColor("white"))
 
-    def _draw_content_segments(self, p: QPainter):
-        """绘制所有轨道的内容段（彩色块）"""
-        for i, track in enumerate(self._tracks):
-            color = TRACK_COLORS.get(track.type, QColor("#888888"))
-            y = RULER_HEIGHT + i * TRACK_HEIGHT + 2
-            h = TRACK_HEIGHT - 4
-
-            segments = []
-            if track.type == "zoom" and self._zoom_segments:
-                segments = self._zoom_segments
-            elif track.content:
-                segments = [(track.start, track.end)]
-
-            for start_s, end_s in segments:
-                x1 = self.time_to_x(start_s)
-                x2 = self.time_to_x(end_s)
-                if x2 - x1 < 2:
-                    continue
-                if i == self._selected:
-                    p.setBrush(QBrush(color.lighter(130)))
-                    p.setPen(QPen(color.lighter(150), 2))
-                else:
-                    p.setBrush(QBrush(color))
-                    p.setPen(QPen(color.darker(120), 1))
-                p.drawRoundedRect(QRectF(x1, y, x2 - x1, h), 3, 3)
-
     def _draw_playhead(self, p: QPainter):
-        x = self.time_to_x(self._playhead_s)
+        x = self._time_to_x(self._playhead_s)
         p.setPen(QPen(QColor("#ff4444"), 2))
-        p.drawLine(int(x), RULER_HEIGHT, int(x), RULER_HEIGHT + TIMELINE_HEIGHT)
+        p.drawLine(int(x), RULER_HEIGHT, int(x), RULER_HEIGHT + len(self._tracks) * TRACK_HEIGHT)
 
-        # 播放头顶部三角
         p.setBrush(QColor("#ff4444"))
         p.setPen(Qt.NoPen)
         tri = QPointF(x - 4, RULER_HEIGHT), QPointF(x + 4, RULER_HEIGHT), QPointF(x, RULER_HEIGHT - 6)

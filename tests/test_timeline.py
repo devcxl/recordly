@@ -9,47 +9,51 @@ class TestTimelineCommands:
     @pytest.fixture
     def mock_timeline(self):
         from unittest.mock import MagicMock
-        from core.project import Track
+        from core.project import Track, Clip
         tl = MagicMock()
         tl._tracks = [
-            Track(type="video", content="clip1", start=0.0, end=5.0),
-            Track(type="audio", content="clip2", start=2.0, end=7.0),
+            Track(type="video", clips=[
+                Clip(type="video", content="clip1", start=0.0, end=5.0),
+            ]),
+            Track(type="audio", clips=[
+                Clip(type="audio", content="clip2", start=2.0, end=7.0),
+            ]),
         ]
         return tl
 
     def test_move_clip_command(self, mock_timeline):
         from core.commands import MoveClipCommand
         cmd = MoveClipCommand(
-            track_index=0,
+            track_index=0, clip_index=0,
             old_start=0.0, new_start=1.0,
             old_end=5.0, new_end=6.0,
         )
         cmd.execute(mock_timeline)
-        assert mock_timeline._tracks[0].start == 1.0
+        assert mock_timeline._tracks[0].clips[0].start == 1.0
         cmd.undo(mock_timeline)
-        assert mock_timeline._tracks[0].start == 0.0
+        assert mock_timeline._tracks[0].clips[0].start == 0.0
 
     def test_move_clip_unchanged(self, mock_timeline):
         from core.commands import MoveClipCommand
-        cmd = MoveClipCommand(0, 0.0, 0.0, 5.0, 5.0)
+        cmd = MoveClipCommand(0, 0, 0.0, 0.0, 5.0, 5.0)
         cmd.execute(mock_timeline)
 
     def test_delete_clip_command(self, mock_timeline):
         from core.commands import DeleteClipCommand
-        cmd = DeleteClipCommand(track_index=0)
+        cmd = DeleteClipCommand(track_index=0, clip_index=0)
         cmd.execute(mock_timeline)
-        assert len(mock_timeline._tracks) == 1
+        assert len(mock_timeline._tracks[0].clips) == 0
         cmd.undo(mock_timeline)
-        assert len(mock_timeline._tracks) == 2
+        assert len(mock_timeline._tracks[0].clips) == 1
 
     def test_split_clip_command(self, mock_timeline):
         from core.commands import SplitClipCommand
-        cmd = SplitClipCommand(track_index=0, split_time=2.5)
+        cmd = SplitClipCommand(track_index=0, clip_index=0, split_time=2.5)
         cmd.execute(mock_timeline)
-        assert mock_timeline._tracks[0].end == pytest.approx(2.5)
-        assert len(mock_timeline._tracks) == 3
+        assert mock_timeline._tracks[0].clips[0].end == pytest.approx(2.5)
+        assert len(mock_timeline._tracks[0].clips) == 2
         cmd.undo(mock_timeline)
-        assert len(mock_timeline._tracks) == 2
+        assert len(mock_timeline._tracks[0].clips) == 1
 
 
 class TestTimelineData:
@@ -64,12 +68,12 @@ class TestTimelineData:
             t = Track(type=type_)
             assert t.type == type_
 
-    def test_track_with_content(self):
-        from core.project import Track
-        t = Track(type="text", content="Hello", start=0.0, end=5.0)
-        assert t.content == "Hello"
-        assert t.start == 0.0
-        assert t.end == 5.0
+    def test_clip_with_content(self):
+        from core.project import Clip
+        c = Clip(type="text", content="Hello", start=0.0, end=5.0)
+        assert c.content == "Hello"
+        assert c.start == 0.0
+        assert c.end == 5.0
 
 
 class TestTimelineGui:
@@ -86,11 +90,13 @@ class TestTimelineGui:
     def test_set_tracks(self):
         pytest.importorskip("PyQt5.QtWidgets")
         from ui.timeline import TimelineWidget
-        from core.project import Track
+        from core.project import Track, Clip
         from PyQt5.QtWidgets import QApplication
         app = QApplication.instance() or QApplication([])
         w = TimelineWidget()
-        tracks = [Track(type="video", start=0, end=5)]
+        tracks = [Track(type="video", clips=[
+            Clip(type="video", start=0, end=5),
+        ])]
         w.set_tracks(tracks)
         assert len(w.tracks) == 1
 
