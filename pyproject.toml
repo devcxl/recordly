@@ -1,4 +1,4 @@
-"""Recordly — pytest 配置"""
+# Recordly — pytest 配置
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
