@@ -18,8 +18,6 @@ pkgbase = recordly
 	depends = python-mss
 	depends = ffmpeg
 	depends = portaudio
-	optdepends = python-pynput: 鼠标轨迹记录
-	optdepends = python-sounddevice: 音频录制
 	source = recordly-1.0.0.tar.gz::https://github.com/devcxl/recordly/archive/v1.0.0.tar.gz
 	sha256sums = SKIP
 

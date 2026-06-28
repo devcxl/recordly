@@ -24,10 +24,6 @@ makedepends=(
     'python-setuptools'
     'python-pip'
 )
-optdepends=(
-    'python-pynput: 鼠标轨迹记录'
-    'python-sounddevice: 音频录制'
-)
 source=("$pkgname-$pkgver.tar.gz::https://github.com/devcxl/recordly/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 validpgpkeys=('SKIP')
@@ -40,6 +36,9 @@ build() {
 package() {
     cd "$srcdir/$pkgname-$pkgver"
     python -m installer --destdir="$pkgdir" dist/*.whl
+
+    # pip 安装 AUR-only 的纯 Python 依赖（pynput, sounddevice 不在 Arch 官方源）
+    pip install --root="$pkgdir" --prefix=/usr --no-deps --no-compile pynput sounddevice
 
     # 安装 .desktop 入口
     install -Dm644 debian/recordly.desktop \
