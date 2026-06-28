@@ -1,23 +1,29 @@
-"""Recordly 主窗口"""
+"""Recordly 主窗口 — Fluent Design 重构"""
 
 from PyQt5.QtWidgets import (
-    QMainWindow, QToolBar, QAction, QMenuBar,
-    QStatusBar, QLabel, QVBoxLayout, QWidget,
-    QDockWidget, QListWidget, QApplication, QFileDialog,
-    QMessageBox, QProgressDialog, QSystemTrayIcon, QMenu,
+    QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
+    QFileDialog, QApplication, QListWidget, QMessageBox,
+    QLabel, QProgressDialog,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QKeySequence, QPixmap, QIcon, QPainter, QColor
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
+from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
+
+from qfluentwidgets import (
+    FluentWindow, FluentIcon, NavigationItemPosition,
+    PrimaryPushButton, PushButton, ToolButton,
+    InfoBar, InfoBarPosition,
+    Action, CaptionLabel,
+)
 
 from app.config import AppConfig
-from app.constants import DEFAULT_FPS
 from core.recorder import Recorder
 from core.compositor import Compositor
-from core.exporter import Exporter, ExportSettings
+from core.exporter import ExportWorker, ExportSettings
 from ui.preview_widget import PreviewWidget
+from ui.timeline import TimelineWidget
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FluentWindow):
     """主窗口，管理录制/预览/导出的生命周期"""
 
     recording_started = pyqtSignal()
@@ -30,31 +36,49 @@ class MainWindow(QMainWindow):
         self._is_recording = False
         self._recorder = Recorder()
         self._compositor = Compositor(1920, 1080, config.default_fps)
-        self._exporter = Exporter(self)
         self._recorded_data = None
+        self._export_thread = None
+        self._export_worker = None
+        self._playback = None
         self._setup_window()
-        self._setup_menus()
-        self._setup_toolbar()
-        self._setup_central()
-        self._setup_docks()
-        self._setup_statusbar()
-        self._setup_signals()
+        self._setup_interfaces()
+        self._setup_navigation()
         self._setup_tray()
         self._check_deps()
         self._update_ui_state()
+
+        # 信号连接
+        self.recording_started.connect(self._on_recording_started)
+        self.recording_stopped.connect(self._on_recording_stopped)
 
     # ── 窗口 ──────────────────────────────────────────────
 
     def _setup_window(self):
         self.setWindowTitle("Recordly v1.0")
         self.resize(1280, 800)
-        self._center()
-
-    def _center(self):
         screen = QApplication.primaryScreen().geometry()
         self.move(
             (screen.width() - self.width()) // 2,
             (screen.height() - self.height()) // 2,
+        )
+        self.setStyleSheet("""
+            #editorToolbar {
+                background: #1e1e1e;
+                border-bottom: 1px solid #323232;
+            }
+            #editorStatusBar {
+                background: #1e1e1e;
+                border-top: 1px solid #323232;
+            }
+        """)
+
+    def closeEvent(self, event):
+        """点击关闭 → 隐藏到托盘，不退出"""
+        event.ignore()
+        self.hide()
+        self._tray.showMessage(
+            "Recordly", "应用已最小化到系统托盘",
+            self._tray.icon(), 2000,
         )
 
     DEPENDENCIES: list[dict] = [
@@ -62,7 +86,6 @@ class MainWindow(QMainWindow):
     ]
 
     def _check_deps(self):
-        """启动时检查系统依赖"""
         import shutil
         missing = [d for d in self.DEPENDENCIES if not shutil.which(d["cmd"])]
         if not missing:
@@ -71,124 +94,158 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "缺少系统依赖",
                             f"以下依赖未安装，部分功能不可用:\n\n{msgs}")
 
-    # ── 菜单 ──────────────────────────────────────────────
+    # ── 界面 ──────────────────────────────────────────────
 
-    def _setup_menus(self):
-        mb = self.menuBar()
+    def _setup_interfaces(self):
+        self._setup_editor_interface()
+        self._setup_project_interface()
 
-        # 文件
-        fm = mb.addMenu("文件(&F)")
-        def _act(t, s, cb):
-            a = QAction(t, self)
-            if s:
-                a.setShortcut(s)
-            a.triggered.connect(cb)
-            return a
-        fm.addAction(_act("新建项目", QKeySequence.New, self._on_new_project))
-        fm.addAction(_act("打开项目", QKeySequence.Open, self._on_open_project))
-        fm.addAction(_act("保存项目", QKeySequence.Save, self._on_save_project))
-        fm.addSeparator()
-        fm.addAction(_act("退出", QKeySequence.Quit, self.close))
+    def _setup_editor_interface(self):
+        self._editor_interface = QWidget()
+        self._editor_interface.setObjectName("editorInterface")
+        layout = QVBoxLayout(self._editor_interface)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # 录制
-        rm = mb.addMenu("录制(&R)")
-        self._act_record = _act("开始录制", "Ctrl+R", self._toggle_record)
-        self._act_stop = _act("停止录制", "Ctrl+Shift+R", self._toggle_record)
-        self._act_stop.setEnabled(False)
-        rm.addActions([self._act_record, self._act_stop])
+        self._setup_editor_toolbar(layout)
+        self._setup_editor_central(layout)
+        self._setup_editor_statusbar(layout)
 
-        # 编辑
-        em = mb.addMenu("编辑(&E)")
-        self._act_undo = _act("撤销", QKeySequence.Undo, self._on_undo)
-        self._act_redo = _act("重做", QKeySequence.Redo, self._on_redo)
-        em.addActions([self._act_undo, self._act_redo])
+        self._timeline.setFocusPolicy(Qt.StrongFocus)
 
-        # 轨道
-        tm = mb.addMenu("轨道(&T)")
-        tm.addAction(_act("添加文字标注", None, self._on_add_text_track))
-        tm.addAction(_act("添加画中画", None, self._on_add_camera_track))
-        tm.addSeparator()
-        tm.addAction(_act("删除选中轨道", "Delete", self._on_delete_selected_track))
+    def _setup_editor_toolbar(self, layout):
+        tb = QWidget()
+        tb.setObjectName("editorToolbar")
+        tb.setFixedHeight(52)
+        hbox = QHBoxLayout(tb)
+        hbox.setContentsMargins(16, 8, 16, 8)
+        hbox.setSpacing(8)
 
-        # 视图
-        vm = mb.addMenu("视图(&V)")
-        vm.addAction(_act("全屏切换", "F11", self._toggle_fullscreen))
+        # 录制控制
+        self._btn_record = PrimaryPushButton(FluentIcon.VIDEO, "录制")
+        self._btn_stop_rec = PushButton(FluentIcon.CANCEL_MEDIUM, "停止")
+        self._btn_record.clicked.connect(self._toggle_record)
+        self._btn_stop_rec.clicked.connect(self._toggle_record)
+        self._btn_stop_rec.setEnabled(False)
+        hbox.addWidget(self._btn_record)
+        hbox.addWidget(self._btn_stop_rec)
+        hbox.addSpacing(16)
 
-        # 帮助
-        hm = mb.addMenu("帮助(&H)")
-        hm.addAction(_act("关于 Recordly", None, self._on_about))
+        # 播放控制
+        self._btn_rewind = ToolButton(FluentIcon.SKIP_BACK)
+        self._btn_rewind.setToolTip("后退 10 帧")
+        self._btn_step_back = ToolButton(FluentIcon.CARE_LEFT_SOLID)
+        self._btn_step_back.setToolTip("上一帧")
+        self._btn_play = ToolButton(FluentIcon.PLAY)
+        self._btn_play.setToolTip("播放")
+        self._btn_step_fwd = ToolButton(FluentIcon.CARE_RIGHT_SOLID)
+        self._btn_step_fwd.setToolTip("下一帧")
+        self._btn_ff = ToolButton(FluentIcon.SKIP_FORWARD)
+        self._btn_ff.setToolTip("快进")
 
-    def _on_new_project(self):
-        self.update_status("新建项目...")
+        self._btn_rewind.clicked.connect(self._on_rewind)
+        self._btn_step_back.clicked.connect(self._on_step_back)
+        self._btn_play.clicked.connect(self._on_play_toggle)
+        self._btn_step_fwd.clicked.connect(self._on_step_fwd)
+        self._btn_ff.clicked.connect(self._on_fast_forward)
 
-    def _on_open_project(self):
-        self.update_status("打开项目...")
+        self._btn_rewind.setEnabled(False)
+        self._btn_step_back.setEnabled(False)
+        self._btn_play.setEnabled(False)
+        self._btn_step_fwd.setEnabled(False)
+        self._btn_ff.setEnabled(False)
 
-    def _on_save_project(self):
-        self.update_status("保存项目...")
+        hbox.addWidget(self._btn_rewind)
+        hbox.addWidget(self._btn_step_back)
+        hbox.addWidget(self._btn_play)
+        hbox.addWidget(self._btn_step_fwd)
+        hbox.addWidget(self._btn_ff)
+        hbox.addSpacing(8)
 
-    def _toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
+        # 帧计数器
+        self._frame_label = QLabel("0 / 0")
+        self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
+        hbox.addWidget(self._frame_label)
+        hbox.addSpacing(16)
 
-    def _on_about(self):
-        from PyQt5.QtWidgets import QMessageBox
-        QMessageBox.about(self, "关于 Recordly",
-            "Recordly v1.0\n\n开源演示视频录制与编辑工具\n\n基于 PyQt5 + FFmpeg")
+        # 导出
+        self._btn_export = ToolButton(FluentIcon.SHARE)
+        self._btn_export.setToolTip("导出")
+        self._btn_export.clicked.connect(self._on_export)
+        self._btn_export.setEnabled(False)
+        hbox.addWidget(self._btn_export)
+        hbox.addStretch()
 
-    def _on_undo(self):
-        if hasattr(self, '_timeline'):
-            self._timeline.undo()
+        layout.addWidget(tb)
 
-    def _on_redo(self):
-        if hasattr(self, '_timeline'):
-            self._timeline.redo()
+    def _setup_editor_central(self, layout):
+        splitter = QSplitter(Qt.Vertical)
+        self._preview = PreviewWidget()
+        self._preview.setMinimumSize(640, 480)
 
-    # ── 轨道操作 ─────────────────────────────────────────
+        self._timeline = TimelineWidget()
 
-    def _on_add_text_track(self):
-        """添加文字标注轨道"""
-        from PyQt5.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(self, "添加文字标注", "输入标注内容:")
-        if not ok or not text:
-            return
-        track = self._make_track("text", text)
-        self._timeline.tracks.append(track)
-        self._timeline.update()
+        splitter.addWidget(self._preview)
+        splitter.addWidget(self._timeline)
+        splitter.setSizes([480, 200])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
-    def _on_add_camera_track(self):
-        """添加画中画轨道"""
-        from PyQt5.QtWidgets import QInputDialog
-        device, ok = QInputDialog.getText(self, "添加画中画", "摄像头设备号 (默认 0):", text="0")
-        if not ok:
-            return
-        track = self._make_track("camera", device or "0")
-        self._timeline.tracks.append(track)
-        self._timeline.update()
+        layout.addWidget(splitter, 1)
 
-    def _on_delete_selected_track(self):
-        """删除时间线选中的轨道"""
-        idx = self._timeline.selected_index
-        if idx >= 0:
-            self._timeline.delete_track(idx)
+    def _setup_editor_statusbar(self, layout):
+        sb = QWidget()
+        sb.setObjectName("editorStatusBar")
+        sb.setFixedHeight(28)
+        hbox = QHBoxLayout(sb)
+        hbox.setContentsMargins(16, 0, 16, 0)
+        self._status_label = CaptionLabel("● 准备就绪")
+        hbox.addWidget(self._status_label)
+        hbox.addStretch()
+        layout.addWidget(sb)
 
-    def _make_track(self, type_: str, content: str):
-        """创建一个默认时间范围的轨道"""
-        from core.project import Track
-        return Track(type=type_, content=content, start=0.0, end=self._timeline.duration)
+    def _setup_project_interface(self):
+        self._project_interface = QWidget()
+        self._project_interface.setObjectName("projectInterface")
+        layout = QVBoxLayout(self._project_interface)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._file_list = QListWidget()
+        self._file_list.setStyleSheet("""
+            QListWidget {
+                background: transparent; border: none;
+                color: white; font-size: 13px;
+            }
+            QListWidget::item { padding: 8px 20px; }
+            QListWidget::item:hover {
+                background: rgba(255,255,255,0.08);
+            }
+            QListWidget::item:selected {
+                background: rgba(255,255,255,0.12);
+            }
+        """)
+        layout.addWidget(self._file_list)
 
-    @property
-    def timeline_tracks(self) -> list:
-        """导出用的活动轨道列表"""
-        return getattr(self, '_timeline', None) and self._timeline.tracks or []
+    # ── 导航 ──────────────────────────────────────────────
+
+    def _setup_navigation(self):
+        self.addSubInterface(
+            self._editor_interface, FluentIcon.EDIT, "编辑")
+        self.addSubInterface(
+            self._project_interface, FluentIcon.FOLDER, "项目文件")
+        self.navigationInterface.addItem(
+            routeKey="about",
+            icon=FluentIcon.INFO,
+            text="关于",
+            onClick=self._on_about,
+            selectable=False,
+            position=NavigationItemPosition.BOTTOM,
+        )
 
     # ── 系统托盘 ──────────────────────────────────────────
 
     def _setup_tray(self):
-        """初始化系统托盘图标"""
-        # 程序化生成简单图标（无需外部文件）
+        from PyQt5.QtWidgets import QSystemTrayIcon, QMenu
+
         px = QPixmap(32, 32)
         px.fill(Qt.transparent)
         with QPainter(px) as p:
@@ -203,6 +260,10 @@ class MainWindow(QMainWindow):
         self._tray.setToolTip("Recordly")
 
         menu = QMenu()
+        self._tray_record_act = menu.addAction("⬤ 开始录制", self._toggle_record)
+        self._tray_stop_act = menu.addAction("■ 停止录制", self._toggle_record)
+        self._tray_stop_act.setEnabled(False)
+        menu.addSeparator()
         menu.addAction("显示窗口", self.showNormal)
         menu.addAction("退出", QApplication.quit)
         self._tray.setContextMenu(menu)
@@ -210,34 +271,12 @@ class MainWindow(QMainWindow):
         self._tray.show()
 
     def _on_tray_activated(self, reason):
+        from PyQt5.QtWidgets import QSystemTrayIcon
         if reason == QSystemTrayIcon.DoubleClick:
             self.showNormal()
             self.raise_()
 
-    # ── 工具栏 ────────────────────────────────────────────
-
-    def _setup_toolbar(self):
-        tb = QToolBar("主工具栏")
-        tb.setMovable(False)
-        self.addToolBar(tb)
-
-        self._btn_record = QAction("⬤ 录制", self)
-        self._btn_stop = QAction("■ 停止", self)
-        self._btn_preview = QAction("▶ 预览", self)
-        self._btn_export = QAction("⏏ 导出", self)
-
-        self._btn_record.triggered.connect(self._toggle_record)
-        self._btn_stop.triggered.connect(self._toggle_record)
-        self._btn_export.triggered.connect(self._on_export)
-
-        self._btn_stop.setEnabled(False)
-        self._btn_preview.setEnabled(False)
-        self._btn_export.setEnabled(False)
-
-        tb.addActions([
-            self._btn_record, self._btn_stop,
-            self._btn_preview, self._btn_export,
-        ])
+    # ── 录制 ──────────────────────────────────────────────
 
     def _toggle_record(self):
         if self._is_recording:
@@ -250,100 +289,104 @@ class MainWindow(QMainWindow):
 
     def _on_recording_started(self):
         self._recorder.start_recording()
-        self.update_status("⬤ 录制中...")
+        self.update_status("● 录制中...")
 
     def _on_recording_stopped(self):
         self._recorded_data = self._recorder.stop_recording()
         if self._recorded_data and self._recorded_data.get("frames"):
             self._compositor.load_frames(self._recorded_data["frames"])
-            self._btn_preview.setEnabled(True)
+            self._compositor.load_cursor_events(
+                self._recorded_data.get("cursor_events", []),
+                self._recorded_data.get("clicks", []),
+            )
+            from core.cursor_effects import CursorEffect
+            self._compositor.register_effect("cursor", CursorEffect())
             self._btn_export.setEnabled(True)
-        self.update_status("⬤ 录制完成")
+            self._enable_playback_controls(True)
+            total = len(self._compositor._frames)
+            self._frame_label.setText(f"1 / {total}")
+            from ui.preview_widget import PlaybackController
+            self._playback = PlaybackController(self._preview, self._compositor)
+            self._playback.set_on_frame_changed(self._update_frame_counter)
+            self._playback.seek(0)
+            self._populate_timeline()
+            self._timeline.playhead_changed.connect(self._on_timeline_seek)
+        self.update_status("● 录制完成")
 
-    def _on_export(self):
-        path, fmt = QFileDialog.getSaveFileName(
-            self, "导出视频", self.config.recordings_dir,
-            "MP4 (*.mp4);;GIF (*.gif)")
-        if not path:
+    def _populate_timeline(self):
+        """录制结束后在时间线中创建视频、音频、缩放轨道"""
+        frames = self._compositor._frames
+        if not frames:
             return
-        is_gif = path.lower().endswith(".gif")
-        settings = ExportSettings(
-            output_path=path,
-            format="gif" if is_gif else "mp4",
-            fps=self.config.default_fps,
-            bitrate=self.config.default_bitrate,
-        )
-        self.update_status("⏏ 正在导出...")
-        self._btn_export.setEnabled(False)
+        duration = len(frames) / self._compositor.fps
+        from core.project import Track
 
-        audio = self._recorded_data.get("audio")
-        audio_data = audio.data if audio else None
+        tracks = []
 
-        if is_gif:
-            self._exporter.export_gif(self._compositor, settings)
-        else:
-            self._exporter.export_mp4(self._compositor, audio_data, settings)
+        # 视频轨道（全时长）
+        tracks.append(Track(
+            type="video", start=0, end=duration,
+            content=f"屏幕录制 {self._compositor.width}x{self._compositor.height}",
+        ))
 
-    def _on_export_finished(self, result):
-        self._btn_export.setEnabled(True)
-        if result.success:
-            self.update_status(f"✅ 导出完成: {result.path} "
-                               f"({result.size_bytes/1024/1024:.1f}MB)")
-            QMessageBox.information(self, "导出完成",
-                f"视频已保存到:\n{result.path}")
-        else:
-            self.update_status(f"❌ 导出失败: {result.error}")
-            QMessageBox.warning(self, "导出失败", result.error or "未知错误")
+        # 音频轨道（全时长）
+        tracks.append(Track(
+            type="audio", start=0, end=duration, content="麦克风",
+        ))
 
-    # ── 中央区域 ──────────────────────────────────────────
+        # 智能镜头系统：语义目标识别 + Comfort Zone + Minimum-Jerk
+        clicks = self._recorded_data.get("clicks", [])
+        cursor_events = self._recorded_data.get("cursor_events", [])
+        base_time = frames[0].timestamp
+        from core.camera import build_camera
+        camera = build_camera(clicks, self._compositor.fps,
+                              self._compositor.width,
+                              self._compositor.height, duration,
+                              cursor_events, base_time)
+        self._compositor.load_camera(camera)
 
-    def _setup_central(self):
-        from PyQt5.QtWidgets import QVBoxLayout, QSplitter
-        from ui.timeline import TimelineWidget
+        # 时间线显示单个缩放轨道 + 多段视觉块（按实际缩放范围）
+        tracks.append(Track(
+            type="zoom", start=0, end=duration, content="镜头缩放",
+        ))
+        zoom_segs = []
+        if camera.targets:
+            # 按 SESSION_GAP 分组
+            groups = []
+            cur = [camera.targets[0]]
+            for t in camera.targets[1:]:
+                if t.time - cur[-1].time < 2.5:
+                    cur.append(t)
+                else:
+                    groups.append(cur)
+                    cur = [t]
+            groups.append(cur)
+            # 每组按实际缩放范围生成段，合并相邻重叠段
+            raw_ranges = []
+            for g in groups:
+                start = max(0, g[0].time - 0.5)
+                end = min(duration, g[-1].time + 2.5 + 0.5)
+                raw_ranges.append((start, end))
+            zoom_segs = [raw_ranges[0]]
+            for s, e in raw_ranges[1:]:
+                if s <= zoom_segs[-1][1]:
+                    zoom_segs[-1] = (zoom_segs[-1][0], max(zoom_segs[-1][1], e))
+                else:
+                    zoom_segs.append((s, e))
+        self._timeline.set_zoom_segments(zoom_segs)
 
-        self._preview = PreviewWidget()
-        self._preview.setMinimumSize(640, 480)
-        self._timeline = TimelineWidget()
-
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(self._preview)
-        splitter.addWidget(self._timeline)
-        splitter.setSizes([480, 200])
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
-        self.setCentralWidget(splitter)
-
-        # 确保时间线可接收键盘事件
-        self._timeline.setFocusPolicy(Qt.StrongFocus)
-
-    # ── 侧面板 ────────────────────────────────────────────
-
-    def _setup_docks(self):
-        dock = QDockWidget("项目文件", self)
-        dock.setWidget(QListWidget())
-        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
-
-    # ── 状态栏 ────────────────────────────────────────────
-
-    def _setup_statusbar(self):
-        self._status_label = QLabel("⬤ 准备就绪")
-        self.statusBar().addWidget(self._status_label)
-
-    def _setup_signals(self):
-        self.recording_started.connect(self._on_recording_started)
-        self.recording_stopped.connect(self._on_recording_stopped)
-        self._exporter.finished.connect(self._on_export_finished)
+        self._timeline.set_tracks(tracks)
+        self._timeline.duration = duration
 
     # ── 状态更新 ──────────────────────────────────────────
 
     def _update_ui_state(self):
         rec = self._is_recording
         self._btn_record.setEnabled(not rec)
-        self._btn_stop.setEnabled(rec)
-        self._btn_preview.setEnabled(False)
+        self._btn_stop_rec.setEnabled(rec)
         self._btn_export.setEnabled(not rec)
-        self._act_record.setEnabled(not rec)
-        self._act_stop.setEnabled(rec)
+        self._tray_record_act.setEnabled(not rec)
+        self._tray_stop_act.setEnabled(rec)
         self.update_status("● 录制中..." if rec else "● 准备就绪")
 
     def set_recording_state(self, recording: bool):
@@ -354,5 +397,224 @@ class MainWindow(QMainWindow):
         self._status_label.setText(text)
 
     def show_preview(self, pixmap: QPixmap):
-        self.preview_label.setPixmap(pixmap)
-        self.preview_label.setText("")
+        self._preview.show_frame(pixmap)
+
+    def _on_play_toggle(self):
+        if not self._recorded_data:
+            return
+        if not self._playback:
+            from ui.preview_widget import PlaybackController
+            self._playback = PlaybackController(self._preview, self._compositor)
+            self._seek_slider.setRange(0, self._playback.total_frames - 1)
+            self._playback.set_on_frame_changed(self._update_frame_counter)
+            self._playback.play()
+            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setToolTip("暂停")
+        elif not self._playback._playing:
+            self._playback.play(0)
+            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setToolTip("暂停")
+        elif self._playback.is_paused:
+            self._playback.pause()
+            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setToolTip("暂停")
+        else:
+            self._playback.pause()
+            self._btn_play.setIcon(FluentIcon.PLAY)
+            self._btn_play.setToolTip("继续播放")
+
+    def _on_rewind(self):
+        if self._playback:
+            self._playback.rewind()
+            self._update_frame_counter(self._playback.current_frame)
+
+    def _on_step_back(self):
+        if self._playback:
+            self._playback.step_backward()
+            self._update_frame_counter(self._playback.current_frame)
+
+    def _on_step_fwd(self):
+        if self._playback:
+            self._playback.step_forward()
+            self._update_frame_counter(self._playback.current_frame)
+
+    def _on_fast_forward(self):
+        if not self._playback:
+            return
+        self._playback.fast_forward()
+        if not self._playback.is_paused:
+            self._btn_play.setIcon(FluentIcon.CANCEL)
+
+    def _update_frame_counter(self, idx: int):
+        total = self._playback.total_frames
+        self._frame_label.setText(f"{idx + 1} / {total}")
+        # 同步时间线播放头
+        sec = idx / self._compositor.fps
+        self._timeline.playhead = sec
+
+    def _on_timeline_seek(self, sec: float):
+        if not self._playback:
+            return
+        idx = int(sec * self._compositor.fps)
+        self._playback.seek(idx)
+        self._update_frame_counter(idx)
+
+    def _enable_playback_controls(self, enabled: bool):
+        self._btn_rewind.setEnabled(enabled)
+        self._btn_step_back.setEnabled(enabled)
+        self._btn_play.setEnabled(enabled)
+        self._btn_step_fwd.setEnabled(enabled)
+        self._btn_ff.setEnabled(enabled)
+
+    # ── 导出 ──────────────────────────────────────────────
+
+    def _on_export(self):
+        if not self._recorded_data:
+            InfoBar.warning(
+                title="无法导出",
+                content="请先录制一段视频",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            )
+            return
+        path, fmt = QFileDialog.getSaveFileName(
+            self, "导出视频", self.config.recordings_dir,
+            "MP4 (*.mp4);;GIF (*.gif)")
+        if not path:
+            return
+        is_gif = path.lower().endswith(".gif")
+        if not path.lower().endswith((".mp4", ".gif")):
+            QMessageBox.warning(self, "导出失败", "请指定文件名并选择 MP4 或 GIF 格式")
+            return
+        settings = ExportSettings(
+            output_path=path,
+            format="gif" if is_gif else "mp4",
+            fps=self.config.default_fps,
+            bitrate=self.config.default_bitrate,
+        )
+        self._btn_export.setEnabled(False)
+
+        audio = self._recorded_data.get("audio")
+        audio_data = audio.data if audio else None
+
+        # 创建工作线程
+        self._export_worker = ExportWorker(self._compositor, audio_data, settings)
+        self._export_thread = QThread(self)
+        self._export_worker.moveToThread(self._export_thread)
+
+        self._export_thread.started.connect(self._export_worker.run)
+        self._export_worker.finished.connect(self._on_export_finished)
+        self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.finished.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
+
+        # 进度对话框
+        self._progress = QProgressDialog("正在导出视频...", "取消", 0, 100, self)
+        self._progress.setWindowTitle("导出")
+        self._progress.setWindowModality(Qt.WindowModal)
+        self._progress.setAutoClose(True)
+        self._progress.setAutoReset(True)
+        self._progress.setStyleSheet("""
+            QProgressDialog { background: #1e1e1e; color: white; min-width: 360px; }
+            QProgressBar {
+                border: 1px solid #323232; border-radius: 4px;
+                background: #2d2d2d; text-align: center; color: white;
+            }
+            QProgressBar::chunk { background: #0078D4; border-radius: 3px; }
+            QLabel { color: #ccc; font-size: 13px; }
+            QPushButton { color: white; background: #323232; border: none;
+                          padding: 4px 16px; border-radius: 4px; }
+            QPushButton:hover { background: #424242; }
+        """)
+
+        self._export_worker.progress.connect(self._progress.setValue)
+        self._progress.canceled.connect(self._cancel_export)
+
+        self._export_thread.start()
+
+    def _cancel_export(self):
+        if self._export_worker:
+            self._export_worker.cancel()
+
+    def _on_export_finished(self, result):
+        self._progress.close()
+        self._btn_export.setEnabled(True)
+        self._export_thread = None
+        self._export_worker = None
+
+        if result.success:
+            self.update_status("● 导出完成")
+            InfoBar.success(
+                title="导出完成",
+                content=f"视频已保存到:\n{result.path}\n({result.size_bytes/1024/1024:.1f}MB)",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+        else:
+            self.update_status("● 导出失败")
+            InfoBar.error(
+                title="导出失败",
+                content=result.error or "未知错误",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+
+    # ── 菜单操作 ──────────────────────────────────────────
+
+    def _on_new_project(self):
+        self.update_status("● 新建项目...")
+
+    def _on_open_project(self):
+        self.update_status("● 打开项目...")
+
+    def _on_save_project(self):
+        self.update_status("● 保存项目...")
+
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def _on_about(self):
+        QMessageBox.about(self, "关于 Recordly",
+            "Recordly v1.0\n\n开源演示视频录制与编辑工具\n\n基于 PyQt5 + FFmpeg")
+
+    def _on_undo(self):
+        if hasattr(self, '_timeline'):
+            self._timeline.undo()
+
+    def _on_redo(self):
+        if hasattr(self, '_timeline'):
+            self._timeline.redo()
+
+    def _on_add_text_track(self):
+        from PyQt5.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "添加文字标注", "输入标注内容:")
+        if not ok or not text:
+            return
+        track = self._make_track("text", text)
+        self._timeline.tracks.append(track)
+        self._timeline.update()
+
+    def _on_add_camera_track(self):
+        from PyQt5.QtWidgets import QInputDialog
+        device, ok = QInputDialog.getText(self, "添加画中画", "摄像头设备号 (默认 0):", text="0")
+        if not ok:
+            return
+        track = self._make_track("camera", device or "0")
+        self._timeline.tracks.append(track)
+        self._timeline.update()
+
+    def _on_delete_selected_track(self):
+        idx = self._timeline.selected_index
+        if idx >= 0:
+            self._timeline.delete_track(idx)
+
+    def _make_track(self, type_: str, content: str):
+        from core.project import Track
+        return Track(type=type_, content=content, start=0.0, end=self._timeline.duration)
+
+    @property
+    def timeline_tracks(self) -> list:
+        return getattr(self, '_timeline', None) and self._timeline.tracks or []

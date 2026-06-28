@@ -1,10 +1,10 @@
 """时间线组件 — 轨道可视化和交互编辑"""
 
 from PyQt5.QtWidgets import QWidget, QMenu
-from PyQt5.QtCore import Qt, QRectF, QPointF
+from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
-from core.commands import MoveClipCommand, DeleteClipCommand, SplitClipCommand
+from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand
 
 
 # ── 时间线控件 ────────────────────────────────────────────
@@ -25,6 +25,8 @@ PADDING = 20
 class TimelineWidget(QWidget):
     """QPainter 时间线控件，支持拖拽编辑 + 撤销/重做"""
 
+    playhead_changed = pyqtSignal(float)  # 播放头时间变化（秒）
+
     SnapDistance = 5  # 吸附像素距离
 
     def __init__(self, parent=None):
@@ -44,10 +46,17 @@ class TimelineWidget(QWidget):
         self._undo_stack: list[UndoCommand] = []
         self._redo_stack: list[UndoCommand] = []
 
+        # 独立的缩放段列表（单轨道内绘制多条）
+        self._zoom_segments: list[tuple[float, float]] = []
+
         self.setFixedHeight(TIMELINE_HEIGHT + RULER_HEIGHT + 10)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+
+    def set_zoom_segments(self, segments: list[tuple[float, float]]):
+        self._zoom_segments = segments
+        self.update()
 
     # ── 属性 ──────────────────────────────────────────────
 
@@ -165,39 +174,40 @@ class TimelineWidget(QWidget):
             return
         pos = event.localPos()
 
-        # 点击标尺 → 跳转播放头
-        if pos.y() < RULER_HEIGHT:
-            self._playhead_s = self.x_to_time(pos.x())
-            self._drag_state = "playhead"
-            self.update()
-            return
-
-        # 边缘检测
-        edge = self._hit_edge(pos)
-        if edge:
-            self._drag_index, self._drag_state = edge
-            self._drag_start_x = pos.x()
-            t = self._tracks[self._drag_index]
-            self._drag_orig_start = t.start
-            self._drag_orig_end = t.end
-            return
-
-        # 轨道内点击 → 移动或选中
-        idx = self._hit_test(pos)
-        if idx >= 0:
-            self._selected = idx
-            self._drag_index = idx
-            self._drag_state = "move"
-            self._drag_start_x = pos.x()
-            t = self._tracks[idx]
-            self._drag_orig_start = t.start
-            self._drag_orig_end = t.end
-            self.update()
-            return
-
-        # 点击空白 → 取消选中
-        self._selected = -1
+        # 点击任意位置 → 跳转播放头
+        self._playhead_s = self.x_to_time(pos.x())
+        self._drag_state = "playhead"
         self.update()
+        self.playhead_changed.emit(self._playhead_s)
+
+        # 轨道编辑（仅对轨道区域生效）
+        if pos.y() >= RULER_HEIGHT:
+            # 边缘检测
+            edge = self._hit_edge(pos)
+            if edge:
+                self._drag_index, self._drag_state = edge
+                self._drag_start_x = pos.x()
+                t = self._tracks[self._drag_index]
+                self._drag_orig_start = t.start
+                self._drag_orig_end = t.end
+                return
+
+            # 轨道内点击 → 移动或选中
+            idx = self._hit_test(pos)
+            if idx >= 0:
+                self._selected = idx
+                self._drag_index = idx
+                self._drag_state = "move"
+                self._drag_start_x = pos.x()
+                t = self._tracks[idx]
+                self._drag_orig_start = t.start
+                self._drag_orig_end = t.end
+                self.update()
+                return
+
+            # 点击空白 → 取消选中
+            self._selected = -1
+            self.update()
 
     def mouseMoveEvent(self, event):
         if self._drag_state in ("move", "resize_left", "resize_right", "playhead"):
@@ -206,6 +216,7 @@ class TimelineWidget(QWidget):
             if self._drag_state == "playhead":
                 self._playhead_s = self.x_to_time(pos.x())
                 self.update()
+                self.playhead_changed.emit(self._playhead_s)
                 return
 
             t = self._tracks[self._drag_index]
@@ -321,6 +332,9 @@ class TimelineWidget(QWidget):
         for i, track in enumerate(self._tracks):
             self._draw_track(p, track, i)
 
+        # 缩放段（在同一轨道行绘制多条）
+        self._draw_zoom_segments(p)
+
         # 播放头
         self._draw_playhead(p)
 
@@ -354,6 +368,10 @@ class TimelineWidget(QWidget):
         return f"{m}:{s:02d}"
 
     def _draw_track(self, p: QPainter, track, index: int):
+        # zoom 轨道由 _draw_zoom_segments 负责绘制，不重复画
+        if track.type == "zoom" and self._zoom_segments:
+            self._draw_zoom_track_label(p, track, index)
+            return
         rect = self._track_rect(index)
         if rect.width() < 1 or rect.x() + rect.width() < PADDING:
             return
@@ -382,6 +400,40 @@ class TimelineWidget(QWidget):
         if index == self._selected or self._drag_index == index:
             p.fillRect(QRectF(rect.x() - 2, rect.y(), 4, rect.height()), QColor("white"))
             p.fillRect(QRectF(rect.right() - 2, rect.y(), 4, rect.height()), QColor("white"))
+
+    def _draw_zoom_track_label(self, p: QPainter, track, index: int):
+        """仅绘制 zoom 轨道的文字标签，不画背景条"""
+        rect = self._track_rect(index)
+        if rect.width() < 1:
+            return
+        p.setPen(QColor(TRACK_COLORS["zoom"]).lighter(140))
+        p.setFont(QFont("sans-serif", 8))
+        p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
+                   Qt.AlignLeft | Qt.AlignVCenter, "镜头缩放")
+
+    def _draw_zoom_segments(self, p: QPainter):
+        """在 zoom 轨道行内绘制多个缩放段"""
+        if not self._zoom_segments:
+            return
+        # 找到 zoom 轨道的索引和位置
+        zoom_idx = None
+        for i, t in enumerate(self._tracks):
+            if t.type == "zoom":
+                zoom_idx = i
+                break
+        if zoom_idx is None:
+            return
+        y = RULER_HEIGHT + zoom_idx * TRACK_HEIGHT + 2
+        h = TRACK_HEIGHT - 4
+        color = TRACK_COLORS["zoom"]
+        for start_s, end_s in self._zoom_segments:
+            x1 = self.time_to_x(start_s)
+            x2 = self.time_to_x(end_s)
+            if x2 - x1 < 2:
+                continue
+            p.setBrush(QBrush(color))
+            p.setPen(QPen(color.darker(120), 1))
+            p.drawRoundedRect(QRectF(x1, y, x2 - x1, h), 3, 3)
 
     def _draw_playhead(self, p: QPainter):
         x = self.time_to_x(self._playhead_s)
