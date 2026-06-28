@@ -1,13 +1,8 @@
-name: Build Packages
+name: Release
 
 on:
   push:
-    branches: [main, master]
-    paths-ignore:
-      - "README.md"
-      - "**.md"
-      - ".gitignore"
-  workflow_dispatch:
+    tags: ["v*"]
 
 jobs:
   build-deb:
@@ -60,11 +55,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set package version
+      - name: Extract version from tag
         id: version
         shell: bash
         run: |
-          echo "version=1.0.0" >> "$GITHUB_OUTPUT"
+          VER="${GITHUB_REF#refs/tags/v}"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
       - name: Build AUR package
         uses: ./.github/actions/build-aur
@@ -79,3 +75,27 @@ jobs:
           path: .aur/out/*.pkg.tar.zst
           if-no-files-found: warn
           retention-days: 90
+
+  release:
+    runs-on: ubuntu-24.04
+    needs: [build-deb, build-aur]
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: List downloaded files
+        shell: bash
+        run: find . -type f -name "*.deb" -o -name "*.pkg.tar.zst" | sort
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            recordly-deb-ubuntu-24.04/*.deb
+            recordly-aur/*.pkg.tar.zst
+          generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: false
