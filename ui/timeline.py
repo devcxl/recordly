@@ -168,6 +168,10 @@ class TimelineWidget(QWidget):
         ]
 
     @property
+    def selected_index(self) -> int:
+        return self._selected
+
+    @property
     def can_undo(self) -> bool:
         return len(self._undo_stack) > 0
 
@@ -335,7 +339,7 @@ class TimelineWidget(QWidget):
         idx = self._hit_test(pos)
         menu = QMenu(self)
         if idx >= 0:
-            menu.addAction("删除轨道", lambda i=idx: self._delete_track(i))
+            menu.addAction("删除轨道", lambda i=idx: self.delete_track(i))
             menu.addAction("拆分", lambda i=idx: self._split_track(i))
             menu.addSeparator()
             menu.addAction("选中", lambda i=idx: setattr(self, '_selected', i) or self.update())
@@ -343,7 +347,7 @@ class TimelineWidget(QWidget):
         menu.addAction("清除选中", lambda: setattr(self, '_selected', -1) or self.update())
         menu.exec_(self.mapToGlobal(pos))
 
-    def _delete_track(self, index: int):
+    def delete_track(self, index: int):
         cmd = DeleteClipCommand(track_index=index)
         self._push_undo(cmd)
 
@@ -362,7 +366,7 @@ class TimelineWidget(QWidget):
     def keyPressEvent(self, event):
         if event.matches(Qt.Key_Delete) or event.matches(Qt.Key_Backspace):
             if self._selected >= 0:
-                self._delete_track(self._selected)
+                self.delete_track(self._selected)
                 self._selected = -1
             return
         if event.key() == Qt.Key_S and (event.modifiers() & Qt.ControlModifier) == 0:

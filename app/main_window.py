@@ -103,6 +103,13 @@ class MainWindow(QMainWindow):
         self._act_redo = _act("重做", QKeySequence.Redo, self._on_redo)
         em.addActions([self._act_undo, self._act_redo])
 
+        # 轨道
+        tm = mb.addMenu("轨道(&T)")
+        tm.addAction(_act("添加文字标注", None, self._on_add_text_track))
+        tm.addAction(_act("添加画中画", None, self._on_add_camera_track))
+        tm.addSeparator()
+        tm.addAction(_act("删除选中轨道", "Delete", self._on_delete_selected_track))
+
         # 视图
         vm = mb.addMenu("视图(&V)")
         vm.addAction(_act("全屏切换", "F11", self._toggle_fullscreen))
@@ -138,6 +145,44 @@ class MainWindow(QMainWindow):
     def _on_redo(self):
         if hasattr(self, '_timeline'):
             self._timeline.redo()
+
+    # ── 轨道操作 ─────────────────────────────────────────
+
+    def _on_add_text_track(self):
+        """添加文字标注轨道"""
+        from PyQt5.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "添加文字标注", "输入标注内容:")
+        if not ok or not text:
+            return
+        track = self._make_track("text", text)
+        self._timeline.tracks.append(track)
+        self._timeline.update()
+
+    def _on_add_camera_track(self):
+        """添加画中画轨道"""
+        from PyQt5.QtWidgets import QInputDialog
+        device, ok = QInputDialog.getText(self, "添加画中画", "摄像头设备号 (默认 0):", text="0")
+        if not ok:
+            return
+        track = self._make_track("camera", device or "0")
+        self._timeline.tracks.append(track)
+        self._timeline.update()
+
+    def _on_delete_selected_track(self):
+        """删除时间线选中的轨道"""
+        idx = self._timeline.selected_index
+        if idx >= 0:
+            self._timeline.delete_track(idx)
+
+    def _make_track(self, type_: str, content: str):
+        """创建一个默认时间范围的轨道"""
+        from core.project import Track
+        return Track(type=type_, content=content, start=0.0, end=self._timeline.duration)
+
+    @property
+    def timeline_tracks(self) -> list:
+        """导出用的活动轨道列表"""
+        return getattr(self, '_timeline', None) and self._timeline.tracks or []
 
     # ── 系统托盘 ──────────────────────────────────────────
 
