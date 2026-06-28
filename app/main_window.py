@@ -4,10 +4,10 @@ from PyQt5.QtWidgets import (
     QMainWindow, QToolBar, QAction, QMenuBar,
     QStatusBar, QLabel, QVBoxLayout, QWidget,
     QDockWidget, QListWidget, QApplication, QFileDialog,
-    QMessageBox, QProgressDialog,
+    QMessageBox, QProgressDialog, QSystemTrayIcon, QMenu,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QKeySequence, QPixmap
+from PyQt5.QtGui import QKeySequence, QPixmap, QIcon, QPainter, QColor
 
 from app.config import AppConfig
 from app.constants import DEFAULT_FPS
@@ -39,6 +39,8 @@ class MainWindow(QMainWindow):
         self._setup_docks()
         self._setup_statusbar()
         self._setup_signals()
+        self._setup_tray()
+        self._check_deps()
         self._update_ui_state()
 
     # ── 窗口 ──────────────────────────────────────────────
@@ -54,6 +56,20 @@ class MainWindow(QMainWindow):
             (screen.width() - self.width()) // 2,
             (screen.height() - self.height()) // 2,
         )
+
+    DEPENDENCIES: list[dict] = [
+        {"name": "FFmpeg", "cmd": "ffmpeg", "hint": "请安装 FFmpeg: https://ffmpeg.org/download.html"},
+    ]
+
+    def _check_deps(self):
+        """启动时检查系统依赖"""
+        import shutil
+        missing = [d for d in self.DEPENDENCIES if not shutil.which(d["cmd"])]
+        if not missing:
+            return
+        msgs = "\n".join(f"  • {d['name']}: {d['hint']}" for d in missing)
+        QMessageBox.warning(self, "缺少系统依赖",
+                            f"以下依赖未安装，部分功能不可用:\n\n{msgs}")
 
     # ── 菜单 ──────────────────────────────────────────────
 
@@ -83,8 +99,9 @@ class MainWindow(QMainWindow):
 
         # 编辑
         em = mb.addMenu("编辑(&E)")
-        em.addAction(_act("撤销", QKeySequence.Undo, lambda: None))
-        em.addAction(_act("重做", QKeySequence.Redo, lambda: None))
+        self._act_undo = _act("撤销", QKeySequence.Undo, self._on_undo)
+        self._act_redo = _act("重做", QKeySequence.Redo, self._on_redo)
+        em.addActions([self._act_undo, self._act_redo])
 
         # 视图
         vm = mb.addMenu("视图(&V)")
@@ -113,6 +130,44 @@ class MainWindow(QMainWindow):
         from PyQt5.QtWidgets import QMessageBox
         QMessageBox.about(self, "关于 Recordly",
             "Recordly v1.0\n\n开源演示视频录制与编辑工具\n\n基于 PyQt5 + FFmpeg")
+
+    def _on_undo(self):
+        if hasattr(self, '_timeline'):
+            self._timeline.undo()
+
+    def _on_redo(self):
+        if hasattr(self, '_timeline'):
+            self._timeline.redo()
+
+    # ── 系统托盘 ──────────────────────────────────────────
+
+    def _setup_tray(self):
+        """初始化系统托盘图标"""
+        # 程序化生成简单图标（无需外部文件）
+        px = QPixmap(32, 32)
+        px.fill(Qt.transparent)
+        with QPainter(px) as p:
+            p.setBrush(QColor("#0078D4"))
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(4, 4, 24, 24, 4, 4)
+            p.setPen(QColor("white"))
+            p.setFont(self.font())
+            p.drawText(px.rect(), Qt.AlignCenter, "R")
+        icon = QIcon(px)
+        self._tray = QSystemTrayIcon(icon, self)
+        self._tray.setToolTip("Recordly")
+
+        menu = QMenu()
+        menu.addAction("显示窗口", self.showNormal)
+        menu.addAction("退出", QApplication.quit)
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.showNormal()
+            self.raise_()
 
     # ── 工具栏 ────────────────────────────────────────────
 
@@ -198,9 +253,23 @@ class MainWindow(QMainWindow):
     # ── 中央区域 ──────────────────────────────────────────
 
     def _setup_central(self):
+        from PyQt5.QtWidgets import QVBoxLayout, QSplitter
+        from ui.timeline import TimelineWidget
+
         self._preview = PreviewWidget()
         self._preview.setMinimumSize(640, 480)
-        self.setCentralWidget(self._preview)
+        self._timeline = TimelineWidget()
+
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self._preview)
+        splitter.addWidget(self._timeline)
+        splitter.setSizes([480, 200])
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        self.setCentralWidget(splitter)
+
+        # 确保时间线可接收键盘事件
+        self._timeline.setFocusPolicy(Qt.StrongFocus)
 
     # ── 侧面板 ────────────────────────────────────────────
 

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
 
+from core.frame_style import FrameStyle
+
 
 @dataclass
 class Track:
@@ -31,13 +33,8 @@ class CursorSettings:
     style: str = "macos-dark"
 
 
-@dataclass
-class FrameStyle:
-    background: str = "solid"      # solid / gradient / wallpaper
-    bg_color: tuple = (26, 26, 26)
-    padding: int = 40
-    corner_radius: int = 16
-    shadow: bool = True
+# FrameStyle 定义统一在 core/frame_style.py (commit 1: dedup) ✅
+# 迁移说明：旧版 FrameStyle.bg_color 为 tuple (R,G,B)，新版为 str "#RRGGBB"
 
 
 @dataclass
@@ -90,6 +87,14 @@ class Project:
             proj.source = SourceInfo(**data["source"])
         proj.timeline = [Track(**t) for t in data.get("timeline", [])]
         proj.cursor = CursorSettings(**data.get("cursor", {}))
-        proj.frame_style = FrameStyle(**data.get("frame_style", {}))
+        proj.frame_style = _load_frame_style(data.get("frame_style", {}))
         proj.filepath = path
         return proj
+
+
+def _load_frame_style(data: dict) -> FrameStyle:
+    """兼容旧版 FrameStyle，处理 bg_color 从 tuple 到 str 的迁移"""
+    bg_color = data.get("bg_color")
+    if isinstance(bg_color, (list, tuple)) and len(bg_color) == 3:
+        data["bg_color"] = f"#{bg_color[0]:02x}{bg_color[1]:02x}{bg_color[2]:02x}"
+    return FrameStyle(**data)
