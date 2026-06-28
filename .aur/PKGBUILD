@@ -14,8 +14,6 @@ depends=(
     'python-pillow'
     'python-numpy'
     'python-mss'
-    'python-pynput'
-    'python-sounddevice'
     'ffmpeg'
     'portaudio'
 )
@@ -24,6 +22,11 @@ makedepends=(
     'python-installer'
     'python-wheel'
     'python-setuptools'
+    'python-pip'
+)
+optdepends=(
+    'python-pynput: 鼠标轨迹记录'
+    'python-sounddevice: 音频录制'
 )
 source=("$pkgname-$pkgver.tar.gz::https://github.com/devcxl/recordly/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
