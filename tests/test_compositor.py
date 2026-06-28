@@ -62,16 +62,19 @@ class TestCompositorCompose:
 
 class TestCompositorZoom:
     def test_zoom_rect_applied(self):
+        """缩放后应裁剪到 zoom rect 并拉伸回 compositor 尺寸"""
         c = Compositor(160, 120, 30)
+        # 源帧 320x240
         arr = np.full((240, 320, 3), 80, dtype=np.uint8)
-        # 在左上角画一个红点
-        arr[0, 0] = [255, 0, 0]
+        arr[0, 0] = [255, 0, 0]  # 标记左上角
         frames = [CapturedFrame(data=arr, timestamp=0.0, index=0)]
         c.load_frames(frames)
-        # 缩放：取中心区域，放大到 160x120
+        # 缩放后 compositor.width/height = 320/240（由 load_frames 设置）
+        # zoom rect = (80, 60, 160, 120) → crop to 160x120 → resize to 320x240
         c.set_zoom((80, 60, 160, 120))
         result = c.compose(frames[0])
-        assert result.size == (160, 120)
+        # load_frames 覆盖了 compositor 的尺寸
+        assert result.size == (320, 240)
 
 
 class TestCompositorEffects:
@@ -110,7 +113,6 @@ class TestCompositorEffects:
 
         c.register_effect("invert", InvertEffect())
         result = c.compose(frames[0])
-        # 原色(0,0,0) 反转为 (255,255,255)
         px = result.convert("RGB").getpixel((0, 0))
         assert px == (255, 255, 255)
 

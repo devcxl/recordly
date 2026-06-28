@@ -1,6 +1,5 @@
 """测试文字标注 — core/effects.py"""
 
-import pytest
 from PIL import Image
 from core.compositor import CompositorContext
 from core.effects import TextAnnotationEffect, Annotation
@@ -34,11 +33,14 @@ class TestTextAnnotationEffect:
         ctx = self._make_context(ts=2.0)
         result = effect.apply(bg, ctx)
 
-        # 标注区域内应有非透明像素
         px = result.getpixel((10, 10))
-        assert px[3] > 0
+        # 标注区域应渲染了文字（不是纯透明/纯黑）
+        r, g, b, a = px
+        # 文字默认白色 (255,255,255) 在半透明背景上
+        assert not (r == 0 and g == 0 and b == 0)
 
     def test_annotation_not_applied_outside_range(self):
+        """超出时间范围应返回原始帧"""
         effect = TextAnnotationEffect()
         ann = Annotation(text="Hello", x=10, y=10, start=0, end=5)
         effect.add(ann)
@@ -47,9 +49,9 @@ class TestTextAnnotationEffect:
         ctx = self._make_context(ts=10.0)
         result = effect.apply(bg, ctx)
 
-        # 超出时间段，不应有标注像素
+        # 原始帧是全黑 (0,0,0,255)
         px = result.getpixel((10, 10))
-        assert px[3] == 0
+        assert px == (0, 0, 0, 255)
 
     def test_remove_annotation(self):
         effect = TextAnnotationEffect()

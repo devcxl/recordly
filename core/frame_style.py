@@ -1,5 +1,6 @@
 """视频帧样式效果 — Compositor 效果插件"""
 
+import os
 from PIL import Image, ImageDraw, ImageFilter
 from dataclasses import dataclass
 from core.compositor import Effect, CompositorContext
