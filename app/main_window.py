@@ -20,6 +20,7 @@ from app.config import AppConfig
 from core.recorder import Recorder
 from core.compositor import Compositor
 from core.exporter import ExportWorker, ExportSettings
+from core.project import Clip, Track
 from ui.preview_widget import PreviewWidget
 from ui.timeline import TimelineWidget
 
@@ -338,10 +339,7 @@ class MainWindow(FluentWindow):
         if not frames:
             return
         duration = len(frames) / self._compositor.fps
-        from core.project import Clip, Track
-
         tracks = []
-
         tracks.append(Track(type="video", name="视频", clips=[
             Clip(type="video", start=0, end=duration,
                  content=f"屏幕录制 {self._compositor.width}x{self._compositor.height}"),
@@ -451,8 +449,6 @@ class MainWindow(FluentWindow):
         self._update_frame_counter(idx)
 
     def _on_zoom_double_clicked(self, time_s: float):
-        """双击 zoom 轨道 → 添加手动缩放 clip"""
-        from core.project import Clip
         ratio = self.config.zoom_rect_ratio
         w = int(self._compositor.width * ratio)
         h = int(self._compositor.height * ratio)
@@ -467,8 +463,23 @@ class MainWindow(FluentWindow):
         self._compositor.load_manual_zoom_clips(
             [c for t in self._timeline.tracks if t.type == "zoom"
              for c in t.clips if c.rect])
-        self._preview.show_zoom_rect(clip.rect)
+        self._preview.show_zoom_rect(clip.rect,
+                                     self._compositor.width, self._compositor.height)
+        try:
+            self._preview.overlay.rect_changed.disconnect()
+        except TypeError:
+            pass
+        self._preview.overlay.rect_changed.connect(self._on_zoom_rect_changed)
         self._timeline.update()
+
+    def _on_zoom_rect_changed(self, x, y, w, h):
+        """预览框被拖拽后，更新当前 zoom clip 的 rect"""
+        for track in self._timeline.tracks:
+            if track.type == "zoom" and track.clips:
+                track.clips[-1].rect = [x, y, w, h]
+        self._compositor.load_manual_zoom_clips(
+            [c for t in self._timeline.tracks if t.type == "zoom"
+             for c in t.clips if c.rect])
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)

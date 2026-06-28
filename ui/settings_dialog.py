@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from app.config import AppConfig
+from core.project import Project
 
 
 _STYLE = """
@@ -187,7 +188,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("Recordly v1.0"))
+        layout.addWidget(QLabel(f"Recordly v{Project.VERSION}"))
         layout.addWidget(QLabel("开源演示视频录制与编辑工具"))
         layout.addSpacing(12)
         layout.addWidget(QLabel("基于 PyQt5 + FFmpeg"))

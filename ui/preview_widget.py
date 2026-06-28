@@ -12,7 +12,12 @@ except ImportError:
     class QVBoxLayout: pass
     class QSlider: pass
     class QHBoxLayout: pass
-    class Qt: AlignCenter = 4
+    class Qt:
+        AlignCenter = 4
+        KeepAspectRatio = 128
+        SmoothTransformation = 256
+        WA_TransparentForMouseEvents = 256
+        LeftButton = 1
     class QTimer: pass
     class QPixmap: pass
     class QImage: pass
@@ -28,97 +33,133 @@ from app.constants import DEFAULT_FPS
 
 
 class ZoomOverlay(QWidget):
-    """预览区域上的缩放框叠加层"""
+    """预览区域上的缩放框叠加层（坐标 = 合成器分辨率）"""
 
-    rect_changed = pyqtSignal(int, int, int, int)  # x, y, w, h
+    rect_changed = pyqtSignal(int, int, int, int)
+
+    HANDLE_MARGIN = 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rect = None
+        self._comp_size = (1920, 1080)
         self._dragging = False
+        self._resizing = False
         self._drag_start = (0, 0)
         self._drag_orig = (0, 0, 0, 0)
-        self._resize_edge = None
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
-        self.setMouseTracking(True)
         self.hide()
 
-    def set_rect(self, x, y, w, h):
+    def set_rect(self, x, y, w, h, comp_w=1920, comp_h=1080):
         self._rect = (x, y, w, h)
+        self._comp_size = (comp_w, comp_h)
+        self.show()
         self.update()
 
     def clear_rect(self):
         self._rect = None
         self.hide()
 
+    def _label_rect(self):
+        """返回 label 内 pixmap 的显示矩形（像素坐标）"""
+        p = self.parent().pixmap() if self.parent() else None
+        if not p or p.isNull():
+            return (0, 0, self.width(), self.height())
+        pw, ph = p.width(), p.height()
+        lw, lh = self.width(), self.height()
+        ox = max(0, (lw - pw) // 2)
+        oy = max(0, (lh - ph) // 2)
+        return (ox, oy, pw, ph)
+
+    def _comp_to_widget(self, cx, cy):
+        """合成坐标 → widget 坐标"""
+        ox, oy, dw, dh = self._label_rect()
+        cw, ch = self._comp_size
+        if cw <= 0 or ch <= 0:
+            return (cx, cy)
+        return (int(ox + cx * dw / cw), int(oy + cy * dh / ch))
+
+    def _widget_to_comp(self, wx, wy):
+        """widget 坐标 → 合成坐标"""
+        ox, oy, dw, dh = self._label_rect()
+        cw, ch = self._comp_size
+        if dw <= 0 or dh <= 0:
+            return (wx, wy)
+        return (int((wx - ox) * cw / dw), int((wy - oy) * ch / dh))
+
     def paintEvent(self, event):
         if not self._rect:
             return
         p = QPainter(self)
-        x, y, w, h = self._rect
-        ow, oh = self.width(), self.height()
-        # 缩放框坐标按 widget 尺寸映射
+        x1, y1 = self._comp_to_widget(self._rect[0], self._rect[1])
+        x2, y2 = self._comp_to_widget(self._rect[0] + self._rect[2],
+                                       self._rect[1] + self._rect[3])
         p.setPen(QPen(QColor("#00ccff"), 2))
         p.setBrush(QBrush(QColor(0, 204, 255, 30)))
-        p.drawRect(int(x), int(y), int(w), int(h))
+        p.drawRect(x1, y1, x2 - x1, y2 - y1)
         p.setPen(QColor("#00ccff"))
-        p.drawText(int(x) + 4, int(y) + 14, "缩放区域")
+        p.drawText(x1 + 4, y1 + 14, "缩放区域")
+
+    def _hit_test(self, wx, wy):
+        """检测点击位置：返回 'move', 'resize', 或 None"""
+        if not self._rect:
+            return None
+        cx, cy = self._widget_to_comp(wx, wy)
+        x, y, w, h = self._rect
+        left = abs(cx - x) < self.HANDLE_MARGIN
+        right = abs(cx - (x + w)) < self.HANDLE_MARGIN
+        top = abs(cy - y) < self.HANDLE_MARGIN
+        bottom = abs(cy - (y + h)) < self.HANDLE_MARGIN
+        if left or right or top or bottom:
+            return "resize"
+        if x <= cx <= x + w and y <= cy <= y + h:
+            return "move"
+        return None
 
     def mousePressEvent(self, event):
         if not self._rect or event.button() != Qt.LeftButton:
             return
-        x, y, w, h = self._rect
-        margin = 8
-        edges = []
-        if abs(event.x() - x) < margin:
-            edges.append("left")
-        if abs(event.x() - (x + w)) < margin:
-            edges.append("right")
-        if abs(event.y() - y) < margin:
-            edges.append("top")
-        if abs(event.y() - (y + h)) < margin:
-            edges.append("bottom")
-
-        if edges:
-            self._resize_edge = edges
-            self._drag_start = (event.x(), event.y())
-            self._drag_orig = self._rect
-        elif x <= event.x() <= x + w and y <= event.y() <= y + h:
-            self._dragging = True
-            self._drag_start = (event.x(), event.y())
+        hit = self._hit_test(event.x(), event.y())
+        if hit:
+            self._dragging = hit == "move"
+            self._resizing = hit == "resize"
+            self._drag_start = self._widget_to_comp(event.x(), event.y())
             self._drag_orig = self._rect
 
     def mouseMoveEvent(self, event):
-        if self._dragging and self._rect:
-            dx = event.x() - self._drag_start[0]
-            dy = event.y() - self._drag_start[1]
-            x, y, w, h = self._drag_orig
-            self._rect = (x + dx, y + dy, w, h)
+        if not self._rect:
+            return
+        cw, ch = self._comp_size
+        comp = self._widget_to_comp(event.x(), event.y())
+        dx = comp[0] - self._drag_start[0]
+        dy = comp[1] - self._drag_start[1]
+        x, y, w, h = self._drag_orig
+
+        if self._dragging:
+            new_x = max(0, min(x + dx, cw - w))
+            new_y = max(0, min(y + dy, ch - h))
+            self._rect = (new_x, new_y, w, h)
             self.update()
-        elif self._resize_edge and self._rect:
-            dx = event.x() - self._drag_start[0]
-            dy = event.y() - self._drag_start[1]
-            x, y, w, h = self._drag_orig
-            edges = self._resize_edge
-            if "left" in edges:
-                x += dx
-                w -= dx
-            if "right" in edges:
-                w += dx
-            if "top" in edges:
-                y += dy
-                h -= dy
-            if "bottom" in edges:
-                h += dy
-            self._rect = (max(0, x), max(0, y), max(20, w), max(20, h))
+        elif self._resizing:
+            new_x, new_y, new_w, new_h = x, y, w, h
+            if dx < 0:
+                new_x = max(0, x + dx)
+                new_w = x + w - new_x
+            else:
+                new_w = min(cw - new_x, max(20, w + dx))
+            if dy < 0:
+                new_y = max(0, y + dy)
+                new_h = y + h - new_y
+            else:
+                new_h = min(ch - new_y, max(20, h + dy))
+            self._rect = (new_x, new_y, new_w, new_h)
             self.update()
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        if self._dragging or self._resize_edge:
+        if self._dragging or self._resizing:
             self._dragging = False
-            self._resize_edge = None
+            self._resizing = False
             if self._rect:
                 self.rect_changed.emit(*self._rect)
 
@@ -138,7 +179,6 @@ class PreviewWidget(QWidget):
         self.setLayout(layout)
 
         self._overlay = ZoomOverlay(self._label)
-        self._overlay.hide()
 
         self._timer = QTimer()
         self._timer.setInterval(1000 // DEFAULT_FPS)
@@ -146,17 +186,14 @@ class PreviewWidget(QWidget):
         self._frame_generator = None
         self._fps = DEFAULT_FPS
 
-    def show_zoom_rect(self, rect):
-        if rect:
-            ow, oh = self._overlay.width(), self._overlay.height()
-            scale_x = ow / max(self._label.width(), 1)
-            scale_y = oh / max(self._label.height(), 1)
-            scaled = (int(rect[0] * scale_x), int(rect[1] * scale_y),
-                      int(rect[2] * scale_x), int(rect[3] * scale_y))
-            self._overlay.set_rect(*scaled)
-            self._overlay.show()
-        else:
-            self._overlay.clear_rect()
+    def show_zoom_rect(self, rect, comp_w=1920, comp_h=1080):
+        if rect and self._overlay.isVisible():
+            self._overlay.set_rect(*rect, comp_w, comp_h)
+        elif rect:
+            self._overlay.set_rect(*rect, comp_w, comp_h)
+
+    def hide_zoom_rect(self):
+        self._overlay.clear_rect()
 
     @property
     def overlay(self):
@@ -176,6 +213,8 @@ class PreviewWidget(QWidget):
         )
         self._label.setPixmap(scaled)
         self._overlay.resize(self._label.width(), self._label.height())
+        if self._overlay.isVisible():
+            self._overlay.update()
 
     def start_playback(self, frame_generator):
         self._frame_generator = frame_generator
@@ -200,106 +239,3 @@ class PreviewWidget(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._overlay.resize(self._label.width(), self._label.height())
-
-
-class PlaybackController:
-    """预览播放控制器，管理播放状态与帧索引"""
-
-    def __init__(self, widget: PreviewWidget, compositor):
-        self.widget = widget
-        self.compositor = compositor
-        self._playing = False
-        self._paused = False
-        self._current_frame = 0
-        self._total_frames = 0
-        self._step = 1
-        self._on_frame_changed = None
-
-    @property
-    def total_frames(self) -> int:
-        return self._total_frames
-
-    @property
-    def current_frame(self) -> int:
-        return self._current_frame
-
-    def set_on_frame_changed(self, callback):
-        self._on_frame_changed = callback
-
-    def play(self, start: int = 0):
-        self._total_frames = len(self.compositor._frames)
-        self._current_frame = start
-        self._playing = True
-        self._paused = False
-        self._step = 1
-        self._start_generator()
-
-    def _start_generator(self):
-        def gen():
-            idx = self._current_frame
-            while idx < self._total_frames:
-                if self._paused:
-                    return
-                if not self._playing:
-                    return
-                frame = self.compositor.compose_index(idx)
-                self._current_frame = idx
-                if self._on_frame_changed:
-                    self._on_frame_changed(idx)
-                idx += self._step
-                yield frame
-            self._playing = False
-        self.widget.start_playback(gen())
-
-    def pause(self):
-        if not self._playing:
-            return
-        self._paused = not self._paused
-        if self._paused:
-            self.widget.stop_playback()
-        else:
-            self._start_generator()
-
-    @property
-    def is_paused(self) -> bool:
-        return self._paused
-
-    def stop(self):
-        self._playing = False
-        self._paused = False
-        self._current_frame = 0
-        self._step = 1
-        self.widget.stop_playback()
-        frame = self.compositor.compose_index(0)
-        if frame:
-            self.widget.show_frame(frame)
-        if self._on_frame_changed:
-            self._on_frame_changed(0)
-
-    def seek(self, index: int):
-        index = max(0, min(index, self._total_frames - 1))
-        self._current_frame = index
-        frame = self.compositor.compose_index(index)
-        if frame:
-            self.widget.show_frame(frame)
-        if self._on_frame_changed:
-            self._on_frame_changed(index)
-
-    def step_forward(self):
-        self.seek(self._current_frame + 1)
-
-    def step_backward(self):
-        self.seek(self._current_frame - 1)
-
-    def fast_forward(self):
-        self._step = min(self._step * 2, 16)
-        if not self._paused and self._playing:
-            self.widget.stop_playback()
-            self._start_generator()
-
-    def rewind(self):
-        self._step = 1
-        self.seek(self._current_frame - 10)
-
-    def reset_speed(self):
-        self._step = 1

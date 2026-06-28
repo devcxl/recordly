@@ -1,5 +1,6 @@
 """帧合成器 — 统一合成管线"""
 
+import bisect
 from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -80,8 +81,8 @@ class Compositor:
         self._camera = camera
 
     def load_manual_zoom_clips(self, clips: list):
-        """加载手动添加的缩放 clip，优先级高于 auto camera"""
-        self._manual_zoom_clips = clips or []
+        self._manual_zoom_clips = sorted(clips or [],
+                                         key=lambda c: c.start)
 
     def register_effect(self, name: str, effect: Effect):
         self._effects[name] = effect
@@ -130,10 +131,13 @@ class Compositor:
         return events[-1].x, events[-1].y
 
     def _get_zoom_at(self, ts: float) -> tuple | None:
-        """检查手动缩放 clip → 回退到 CameraSynthesizer"""
-        for clip in self._manual_zoom_clips:
-            if clip.start <= ts <= clip.end and clip.rect:
-                return tuple(clip.rect)
+        if self._manual_zoom_clips:
+            starts = [c.start for c in self._manual_zoom_clips]
+            i = bisect.bisect_right(starts, ts) - 1
+            if i >= 0:
+                c = self._manual_zoom_clips[i]
+                if ts <= c.end and c.rect:
+                    return tuple(c.rect)
         if not self._camera:
             return None
         w, h = self.width, self.height
