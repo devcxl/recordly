@@ -95,16 +95,15 @@ class CursorEffect(Effect):
                       current_time: float):
         for cx, cy, click_ts in clicks:
             elapsed = current_time - click_ts
-            if elapsed > self.ripple_duration:
+            if elapsed < 0 or elapsed > self.ripple_duration:
                 continue
             progress = elapsed / self.ripple_duration
             radius = int(10 + self.ripple_max_radius * progress)
-            alpha = int(255 * (1 - progress))
-            draw.ellipse(
-                [cx - radius, cy - radius, cx + radius, cy + radius],
-                outline=(255, 255, 255, alpha),
-                width=2,
-            )
+            alpha = int(180 * (1 - progress))
+            bbox = [cx - radius, cy - radius, cx + radius, cy + radius]
+            draw.ellipse(bbox, outline=(255, 255, 255), width=2)
+            draw.ellipse(bbox, outline=None,
+                         fill=(255, 255, 255, alpha))
 
     def _draw_cursor(self, img: Image.Image, cx: int, cy: int):
         """绘制光标图形"""

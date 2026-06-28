@@ -8,22 +8,9 @@ from dataclasses import dataclass
 from PIL import Image
 import ffmpeg
 
-from core.compositor import Compositor
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-# PyQt5 信号可选 — 无 Qt 环境时用普通 object 代替
-try:
-    from PyQt5.QtCore import QObject, pyqtSignal as pyqtSignal
-    _HAS_SIGNAL = True
-except ImportError:
-    _HAS_SIGNAL = False
-    # 降级：无 Qt 时 signal 为普通属性
-    class QObjectFallback:
-        """替代 QObject，super().__init__() 兼容"""
-        def __init__(self, *args, **kwargs):
-            pass
-    QObject = QObjectFallback
-    def pyqtSignal(*args, **kwargs):
-        return None
+from core.compositor import Compositor
 
 
 @dataclass
@@ -46,14 +33,19 @@ class ExportResult:
     error: str | None = None
 
 
-class Exporter(QObject):
-    """FFmpeg 导出引擎，支持 MP4 和 GIF"""
+class ExportWorker(QObject):
+    """在工作线程中执行导出，不阻塞 UI"""
 
-    progress = pyqtSignal(int)          # 0–100
+    progress = pyqtSignal(int)
     finished = pyqtSignal(ExportResult)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, compositor: Compositor,
+                 audio_data: np.ndarray | None,
+                 settings: ExportSettings):
+        super().__init__()
+        self._compositor = compositor
+        self._audio_data = audio_data
+        self._settings = settings
         self._cancelled = False
         self._process = None
 
@@ -65,64 +57,73 @@ class Exporter(QObject):
             except Exception:
                 pass
 
-    def export_mp4(self, compositor: Compositor,
-                   audio_data: np.ndarray | None,
-                   settings: ExportSettings):
-        """导出 MP4 视频"""
-        self._cancelled = False
-        w = settings.width or compositor.width
-        h = settings.height or compositor.height
-        total = len(compositor._frames)
+    def run(self):
+        if self._settings.format == "gif":
+            self._export_gif()
+        else:
+            self._export_mp4()
+
+    # ── MP4 ────────────────────────────────────────────
+
+    def _export_mp4(self):
+        s = self._settings
+        c = self._compositor
+        w = s.width or c.width
+        h = s.height or c.height
+        total = len(c._frames)
         if total == 0:
-            self.finished.emit(ExportResult(False, settings.output_path,
+            self.finished.emit(ExportResult(False, s.output_path,
                                             error="没有帧可以导出"))
             return
 
-        # 构建 ffmpeg 命令
         video = ffmpeg.input("pipe:", format="rawvideo",
-                             pix_fmt="rgba", s=f"{w}x{h}",
-                             r=settings.fps)
+                             pix_fmt="rgba", s=f"{w}x{h}", r=s.fps)
 
-        # 音频处理
+        audio_data = self._audio_data
         if audio_data is not None and len(audio_data) > 0:
-            audio_path = self._save_temp_wav(audio_data, settings.samplerate)
+            audio_path = self._save_temp_wav(audio_data, s.samplerate)
             audio_input = ffmpeg.input(audio_path)
             output = ffmpeg.output(
-                video, audio_input, settings.output_path,
+                video, audio_input, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=settings.bitrate,
+                video_bitrate=s.bitrate,
                 acodec="aac", audio_bitrate="192k",
             )
         else:
             output = ffmpeg.output(
-                video, settings.output_path,
+                video, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=settings.bitrate,
+                video_bitrate=s.bitrate,
             )
 
         output = output.overwrite_output()
         self._process = output.run_async(pipe_stdin=True, pipe_stderr=True)
 
-        for i, frame in enumerate(compositor.render_all()):
+        for i, frame in enumerate(c.render_all()):
             if self._cancelled:
                 self._process.terminate()
-                self.finished.emit(ExportResult(False, settings.output_path,
+                self.finished.emit(ExportResult(False, s.output_path,
                                                 error="已取消"))
                 return
-            # 调整分辨率
-            if settings.width and settings.height:
+            if s.width and s.height:
                 frame = frame.resize((w, h), Image.LANCZOS)
-            # 确保是 RGBA
             if frame.mode != "RGBA":
                 frame = frame.convert("RGBA")
-            self._process.stdin.write(frame.tobytes())
+            try:
+                self._process.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+                self._process.wait()
+                self._process = None
+                self.finished.emit(ExportResult(False, s.output_path,
+                                                error=f"FFmpeg 管道断开: {stderr.strip()}"))
+                return
             self.progress.emit(int((i + 1) / total * 100))
 
         self._process.stdin.close()
         self._process.wait()
         self._process = None
 
-        # 清理临时音频文件
         if audio_data is not None and len(audio_data) > 0:
             try:
                 os.remove(audio_path)
@@ -130,65 +131,74 @@ class Exporter(QObject):
                 pass
 
         result = ExportResult(
-            success=True,
-            path=settings.output_path,
-            size_bytes=os.path.getsize(settings.output_path),
-            duration=total / settings.fps,
+            success=True, path=s.output_path,
+            size_bytes=os.path.getsize(s.output_path),
+            duration=total / s.fps,
         )
         self.finished.emit(result)
 
-    def export_gif(self, compositor: Compositor, settings: ExportSettings):
-        """导出 GIF（双 pass: palettegen + paletteuse）"""
-        self._cancelled = False
-        w = settings.width or compositor.width
-        h = settings.height or compositor.height
-        total = len(compositor._frames)
+    # ── GIF ────────────────────────────────────────────
+
+    def _export_gif(self):
+        s = self._settings
+        c = self._compositor
+        w = s.width or c.width
+        h = s.height or c.height
+        total = len(c._frames)
         if total == 0:
-            self.finished.emit(ExportResult(False, settings.output_path,
+            self.finished.emit(ExportResult(False, s.output_path,
                                             error="没有帧可以导出"))
             return
 
         palette_file = tempfile.mktemp(suffix=".png")
 
-        # Pass 1: palettegen
         pass1 = (
             ffmpeg.input("pipe:", format="rawvideo",
-                         pix_fmt="rgba", s=f"{w}x{h}",
-                         r=settings.fps)
-            .output(palette_file, vf="palettegen", r=settings.fps)
+                         pix_fmt="rgba", s=f"{w}x{h}", r=s.fps)
+            .output(palette_file, vf="palettegen", r=s.fps)
             .overwrite_output()
             .run_async(pipe_stdin=True)
         )
-        for i, frame in enumerate(compositor.render_all()):
+        for i, frame in enumerate(c.render_all()):
             if self._cancelled:
                 pass1.terminate()
                 os.remove(palette_file)
-                self.finished.emit(ExportResult(False, settings.output_path,
+                self.finished.emit(ExportResult(False, s.output_path,
                                                 error="已取消"))
                 return
-            pass1.stdin.write(frame.tobytes())
+            try:
+                pass1.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                pass1.wait()
+                self.finished.emit(ExportResult(False, s.output_path,
+                                                error="FFmpeg palettegen 管道断开"))
+                return
         pass1.stdin.close()
         pass1.wait()
 
-        # Pass 2: paletteuse
         pass2 = (
             ffmpeg.input("pipe:", format="rawvideo",
-                         pix_fmt="rgba", s=f"{w}x{h}",
-                         r=settings.fps)
-            .output(settings.output_path,
-                    vf=f"paletteuse=dither=bayer:bayer_scale=5",
-                    r=settings.fps)
+                         pix_fmt="rgba", s=f"{w}x{h}", r=s.fps)
+            .output(s.output_path,
+                    vf="paletteuse=dither=bayer:bayer_scale=5",
+                    r=s.fps)
             .overwrite_output()
             .run_async(pipe_stdin=True)
         )
-        for i, frame in enumerate(compositor.render_all()):
+        for i, frame in enumerate(c.render_all()):
             if self._cancelled:
                 pass2.terminate()
                 os.remove(palette_file)
-                self.finished.emit(ExportResult(False, settings.output_path,
+                self.finished.emit(ExportResult(False, s.output_path,
                                                 error="已取消"))
                 return
-            pass2.stdin.write(frame.tobytes())
+            try:
+                pass2.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                pass2.wait()
+                self.finished.emit(ExportResult(False, s.output_path,
+                                                error="FFmpeg paletteuse 管道断开"))
+                return
             self.progress.emit(int((i + 1) / total * 100))
         pass2.stdin.close()
         pass2.wait()
@@ -199,12 +209,13 @@ class Exporter(QObject):
             pass
 
         result = ExportResult(
-            success=True,
-            path=settings.output_path,
-            size_bytes=os.path.getsize(settings.output_path),
-            duration=total / settings.fps,
+            success=True, path=s.output_path,
+            size_bytes=os.path.getsize(s.output_path),
+            duration=total / s.fps,
         )
         self.finished.emit(result)
+
+    # ── 工具 ────────────────────────────────────────────
 
     @staticmethod
     def _save_temp_wav(audio: np.ndarray, samplerate: int) -> str:
@@ -213,7 +224,6 @@ class Exporter(QObject):
             wf.setnchannels(2)
             wf.setsampwidth(2)
             wf.setframerate(samplerate)
-            # float32 → int16
             int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)
             wf.writeframes(int16.tobytes())
         return path

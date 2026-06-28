@@ -1,36 +1,28 @@
-"""预览组件 — 显示合成后的帧"""
-
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+"""预览组件 — 显示合成后的帧，支持播放控制"""
 
 try:
-    from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
+    from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QSlider, QHBoxLayout
     from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QPixmap
+    from PyQt5.QtGui import QPixmap, QImage
     _HAS_QT = True
 except ImportError:
     _HAS_QT = False
-    # 降级：无 PyQt5 时用普通 object
-    class QWidget:
-        pass
-    class QLabel:
-        pass
-    class QVBoxLayout:
-        pass
-    class Qt:
-        AlignCenter = 4
-    class QTimer:
-        pass
-    class QPixmap:
-        pass
+    class QWidget: pass
+    class QLabel: pass
+    class QVBoxLayout: pass
+    class QSlider: pass
+    class QHBoxLayout: pass
+    class Qt: AlignCenter = 4
+    class QTimer: pass
+    class QPixmap: pass
+    class QImage: pass
 
 from PIL import Image
-from PIL.ImageQt import toqpixmap
 from app.constants import DEFAULT_FPS
 
 
 class PreviewWidget(QWidget):
-    """实时预览组件，渲染 Compositor 输出的 Pillow Image"""
+    """实时预览组件，显示 Compositor 输出的帧"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -50,12 +42,12 @@ class PreviewWidget(QWidget):
         self._fps = DEFAULT_FPS
 
     def show_frame(self, pil_image: Image.Image | None):
-        """设置当前显示帧"""
         if pil_image is None:
             self._label.setText("无预览")
             return
-        # PIL → QPixmap
-        qimage = ImageQt(pil_image.convert("RGBA"))
+        rgba = pil_image.convert("RGBA")
+        qimage = QImage(rgba.tobytes(), rgba.width, rgba.height,
+                        QImage.Format_RGBA8888)
         pixmap = QPixmap.fromImage(qimage)
         scaled = pixmap.scaled(
             self._label.width(), self._label.height(),
@@ -64,7 +56,6 @@ class PreviewWidget(QWidget):
         self._label.setPixmap(scaled)
 
     def start_playback(self, frame_generator):
-        """开始播放帧序列"""
         self._frame_generator = frame_generator
         self._timer.start()
 
@@ -86,28 +77,106 @@ class PreviewWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        # 窗口缩放时重绘当前帧
 
 
-class PreviewController:
-    """预览控制器，连接 Compositor → PreviewWidget"""
+class PlaybackController:
+    """预览播放控制器，管理播放状态与帧索引"""
 
     def __init__(self, widget: PreviewWidget, compositor):
         self.widget = widget
         self.compositor = compositor
         self._playing = False
+        self._paused = False
+        self._current_frame = 0
+        self._total_frames = 0
+        self._step = 1
+        self._on_frame_changed = None
 
-    def play(self, start: int = 0, end: int = None):
-        """以默认帧率播放"""
+    @property
+    def total_frames(self) -> int:
+        return self._total_frames
+
+    @property
+    def current_frame(self) -> int:
+        return self._current_frame
+
+    def set_on_frame_changed(self, callback):
+        self._on_frame_changed = callback
+
+    def play(self, start: int = 0):
+        self._total_frames = len(self.compositor._frames)
+        self._current_frame = start
         self._playing = True
-        gen = self.compositor.render_all(start=start, end=end)
-        self.widget.start_playback(gen)
+        self._paused = False
+        self._step = 1
+        self._start_generator()
+
+    def _start_generator(self):
+        def gen():
+            idx = self._current_frame
+            while idx < self._total_frames:
+                if self._paused:
+                    return
+                if not self._playing:
+                    return
+                frame = self.compositor.compose_index(idx)
+                self._current_frame = idx
+                if self._on_frame_changed:
+                    self._on_frame_changed(idx)
+                idx += self._step
+                yield frame
+            self._playing = False
+        self.widget.start_playback(gen())
+
+    def pause(self):
+        if not self._playing:
+            return
+        self._paused = not self._paused
+        if self._paused:
+            self.widget.stop_playback()
+        else:
+            self._start_generator()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
 
     def stop(self):
         self._playing = False
+        self._paused = False
+        self._current_frame = 0
+        self._step = 1
         self.widget.stop_playback()
+        frame = self.compositor.compose_index(0)
+        if frame:
+            self.widget.show_frame(frame)
+        if self._on_frame_changed:
+            self._on_frame_changed(0)
 
-    def show_frame_at(self, index: int):
-        """跳转到指定帧"""
+    def seek(self, index: int):
+        index = max(0, min(index, self._total_frames - 1))
+        self._current_frame = index
         frame = self.compositor.compose_index(index)
-        self.widget.show_frame(frame)
+        if frame:
+            self.widget.show_frame(frame)
+        if self._on_frame_changed:
+            self._on_frame_changed(index)
+
+    def step_forward(self):
+        self.seek(self._current_frame + 1)
+
+    def step_backward(self):
+        self.seek(self._current_frame - 1)
+
+    def fast_forward(self):
+        self._step = min(self._step * 2, 16)
+        if not self._paused and self._playing:
+            self.widget.stop_playback()
+            self._start_generator()
+
+    def rewind(self):
+        self._step = 1
+        self.seek(self._current_frame - 10)
+
+    def reset_speed(self):
+        self._step = 1
