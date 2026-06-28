@@ -12,6 +12,7 @@ setup(
     url="https://github.com/devcxl/recordly",
     license="MIT",
     packages=find_packages(),
+    py_modules=["main"],
     package_data={
         "resources": ["icons/*"],
     },

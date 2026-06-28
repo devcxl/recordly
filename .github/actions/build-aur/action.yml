@@ -1,0 +1,117 @@
+name: Build AUR Package
+description: 构建 Arch Linux AUR 包 (.pkg.tar.zst)
+
+inputs:
+  pkgver:
+    description: "Package version (e.g. 1.0.0)"
+    required: true
+    default: "1.0.0"
+  pkgrel:
+    description: "Package release number"
+    required: false
+    default: "1"
+
+outputs:
+  artifact:
+    description: "Path to the built .pkg.tar.zst artifact"
+    value: ${{ steps.collect.outputs.artifact }}
+
+runs:
+  using: composite
+
+  steps:
+    - name: Check prerequisites
+      shell: bash
+      run: |
+        if [ ! -f "${GITHUB_WORKSPACE}/.aur/PKGBUILD" ]; then
+          echo "::error::Missing ${GITHUB_WORKSPACE}/.aur/PKGBUILD"
+          exit 1
+        fi
+        echo "Building recordly ${{ inputs.pkgver }}-${{ inputs.pkgrel }}"
+
+    - name: Build AUR package inside Arch Linux container
+      shell: bash
+      env:
+        PKGVER: ${{ inputs.pkgver }}
+        PKGREL: ${{ inputs.pkgrel }}
+        WORKSPACE: ${{ github.workspace }}
+      run: |
+        set -euxo pipefail
+
+        BUILD_DIR="/tmp/aur-build"
+        rm -rf "$BUILD_DIR"
+        mkdir -p "$BUILD_DIR"
+
+        # 生成源码 tar 包（替代从 GitHub 下载）
+        cd "${WORKSPACE}"
+        git archive --format=tar.gz \
+          --prefix="recordly-${PKGVER}/" \
+          -o "${BUILD_DIR}/recordly-${PKGVER}.tar.gz" \
+          HEAD
+
+        # 复制 PKGBUILD 并更新版本
+        cp "${WORKSPACE}/.aur/PKGBUILD" "${BUILD_DIR}/PKGBUILD"
+        sed -i "s/pkgver=.*/pkgver=${PKGVER}/" "${BUILD_DIR}/PKGBUILD"
+        sed -i "s/pkgrel=.*/pkgrel=${PKGREL}/" "${BUILD_DIR}/PKGBUILD"
+
+        # 更新 source 为本地文件
+        sed -i "s|source=.*|source=(\"recordly-${PKGVER}.tar.gz\")|" "${BUILD_DIR}/PKGBUILD"
+        sed -i '/sha256sums/d' "${BUILD_DIR}/PKGBUILD"
+        echo "sha256sums=('SKIP')" >> "${BUILD_DIR}/PKGBUILD"
+
+        # Docker 构建脚本
+        cat > "${BUILD_DIR}/build.sh" << 'DOCKER_EOF'
+        #!/usr/bin/bash -e
+        pacman-key --init
+        pacman-key --populate archlinux
+
+        # 安装构建依赖
+        pacman -Syu --noconfirm \
+          base-devel \
+          python \
+          python-build \
+          python-installer \
+          python-wheel \
+          python-setuptools \
+          python-pyqt5 \
+          python-pillow \
+          python-numpy \
+          python-mss \
+          python-pynput \
+          python-sounddevice \
+          ffmpeg \
+          portaudio
+
+        # 创建非 root 用户
+        useradd -m builder
+        chown -R builder:builder /build
+
+        # 构建
+        cd /build
+        sudo -u builder makepkg -sr --noconfirm --skipchecksums --nodeps
+DOCKER_EOF
+        chmod +x "${BUILD_DIR}/build.sh"
+
+        # 执行 Docker 构建
+        docker run --rm \
+          -v "${BUILD_DIR}:/build:Z" \
+          archlinux:latest \
+          /build/build.sh
+
+        # 复制构建产物回来
+        mkdir -p "${WORKSPACE}/.aur/out"
+        cp "${BUILD_DIR}"/*.pkg.tar.zst "${WORKSPACE}/.aur/out/" 2>/dev/null || true
+        ls -lh "${WORKSPACE}/.aur/out/" || echo "No artifacts found"
+
+    - name: Collect artifact
+      id: collect
+      shell: bash
+      run: |
+        pkgfile=$(find "${GITHUB_WORKSPACE}/.aur/out" -name "*.pkg.tar.zst" 2>/dev/null | head -1)
+        if [ -z "$pkgfile" ]; then
+          echo "::warning::No .pkg.tar.zst artifact found. Check build logs."
+          echo "artifact=" >> "$GITHUB_OUTPUT"
+        else
+          echo "artifact=$pkgfile" >> "$GITHUB_OUTPUT"
+          echo "Found: $(basename "$pkgfile") ($(du -h "$pkgfile" | cut -f1))"
+        fi

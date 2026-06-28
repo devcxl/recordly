@@ -1,8 +1,9 @@
-name: Build Debian Package
+name: Build Packages
 
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
     paths-ignore:
       - "README.md"
       - "**.md"
@@ -45,14 +46,43 @@ jobs:
         env:
           DEB_BUILD_OPTIONS: nocheck
 
-      - name: List build artifacts
-        run: |
-          ls -lh ../*.deb ../*.buildinfo ../*.changes
-
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: recordly-deb-ubuntu-24.04
           path: ../recordly_*.deb
           if-no-files-found: error
+          retention-days: 90
+
+  build-aur:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set package version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VER="${GITHUB_REF#refs/tags/v}"
+          else
+            VER="1.0.0"
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Building AUR package version ${VER}"
+
+      - name: Build AUR package
+        uses: ./.github/actions/build-aur
+        with:
+          pkgver: ${{ steps.version.outputs.version }}
+          pkgrel: "1"
+
+      - name: Upload AUR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recordly-aur
+          path: .aur/out/*.pkg.tar.zst
+          if-no-files-found: warn
           retention-days: 90

@@ -13,3 +13,4 @@ Thumbs.db
 *~
 *.swp
 *.bak
+.aur/out/
