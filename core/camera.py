@@ -1,14 +1,4 @@
-"""智能镜头系统 — 会话式缩放，连续点击不反复 zoom out"""
-
-from dataclasses import dataclass
-
-
-@dataclass
-class CameraTarget:
-    time: float
-    fx: float
-    fy: float
-    scale: float
+"""智能镜头系统 — 速度感知缩放：快速移动缩回全景，停止/点击时放大跟随"""
 
 
 def minimum_jerk(t: float) -> float:
@@ -16,171 +6,174 @@ def minimum_jerk(t: float) -> float:
     return 10 * t ** 3 - 15 * t ** 4 + 6 * t ** 5
 
 
-def _make_targets(clicks: list, cursor_events: list,
-                  base_time: float) -> list[CameraTarget]:
-    targets = []
-    for c in clicks:
-        t = c.timestamp - base_time
-        if t < 0:
-            continue
-        targets.append(CameraTarget(time=t, fx=c.x, fy=c.y, scale=1.8))
-    if not targets and cursor_events:
-        base = cursor_events[0].timestamp - base_time
-        end = cursor_events[-1].timestamp - base_time
-        if end > base:
-            count = max(2, int((end - base) // 3))
-            for i in range(count + 1):
-                t = base + i * (end - base) / count
-                cx, cy = cursor_events[0].x, cursor_events[0].y
-                for e in cursor_events:
-                    if e.timestamp - base_time <= t:
-                        cx, cy = e.x, e.y
-                targets.append(CameraTarget(
-                    time=t, fx=cx, fy=cy, scale=1.6))
-    return targets
-
-
 class CameraSynthesizer:
-    """会话式缩放：连续点击保持缩放，间隔>2.5s才 zoom out"""
+    """速度感知的镜头系统
 
-    SESSION_GAP = 2.5
-    ZOOM_IN_DURATION = 0.5
-    ZOOM_OUT_DURATION = 0.5
+    鼠标大幅快速移动 → 缩回全景（观众看上下文）
+    鼠标停止/点击     → 放大跟随鼠标位置（看细节）
+    """
 
-    def __init__(self, targets: list[CameraTarget],
-                 w: int, h: int, fps: int):
-        self.targets = sorted(targets, key=lambda t: t.time)
-        self.width = w
-        self.height = h
+    FAST_THRESHOLD = 250        # px/s，超过此速度判定为快速移动
+    STOP_THRESHOLD = 40         # px/s，低于此速度判定为停止
+    STOP_DURATION = 0.3         # 秒，停止持续多久后开始 zoom in
+    TRANSITION_DURATION = 0.35  # 秒，过渡动画时长
+    ZOOM_SCALE = 1.8            # zoom in 放大倍数
+    LOOK_AHEAD = 0.12           # 计算速度时的前向窗口
+    LOOK_BEHIND = 0.2           # 计算速度时的后向窗口
+
+    def __init__(self, clicks: list, cursor_events: list,
+                 w: int, h: int, fps: int, duration_s: float):
+        self.clicks = sorted(clicks, key=lambda c: c[0]) if clicks else []
+        self.events = sorted(cursor_events, key=lambda c: c[0]) if cursor_events else []
+        self.w = w
+        self.h = h
         self.fps = fps
+        self.duration_s = duration_s
+
+        self._from_state = (0.5, 0.5, 1.0)
+        self._to_state = (0.5, 0.5, 1.0)
+        self._trans_start = -1.0
+        self._last_fast_ts = -10.0
+        self._last_state = (0.5, 0.5, 1.0)
+
+        self._zoomed_segments = self._compute_zoomed_segments()
+
+    @property
+    def zoomed_segments(self) -> list[tuple[float, float]]:
+        return self._zoomed_segments
+
+    def _interpolate(self, ts: float) -> tuple[float, float]:
+        if not self.events:
+            return (self.w * 0.5, self.h * 0.5)
+        prev = self.events[0]
+        for e in self.events:
+            if e[0] > ts:
+                break
+            prev = e
+        if prev[0] >= ts:
+            return (prev[1], prev[2])
+        nxt = None
+        for e in self.events:
+            if e[0] > ts:
+                nxt = e
+                break
+        if nxt is None:
+            return (prev[1], prev[2])
+        t = (ts - prev[0]) / (nxt[0] - prev[0])
+        return (prev[1] + (nxt[1] - prev[1]) * t,
+                prev[2] + (nxt[2] - prev[2]) * t)
+
+    def _calc_speed(self, ts: float) -> float:
+        if len(self.events) < 2:
+            return 0
+        t0 = ts - self.LOOK_BEHIND
+        t1 = ts + self.LOOK_AHEAD
+        p0 = self._interpolate(t0)
+        p1 = self._interpolate(t1)
+        dt = t1 - t0
+        if dt <= 0:
+            return 0
+        dx = p1[0] - p0[0]
+        dy = p1[1] - p0[1]
+        return (dx * dx + dy * dy) ** 0.5 / dt
+
+    def _has_click(self, ts: float):
+        for c in self.clicks:
+            if abs(c[0] - ts) < 0.05:
+                return c
+        return None
 
     def sample(self, time_ms: float) -> tuple[float, float, float]:
-        ts = time_ms / 1000
-        if not self.targets:
+        ts = time_ms / 1000.0
+        if ts > self.duration_s:
             return (0.5, 0.5, 1.0)
 
-        # 收集所有可能激活的会话
-        all_sessions = []
-        for t in self.targets:
-            s = self._build_session(t)
-            if s is None:
-                continue
-            zoom_in_start = s[0].time - self.ZOOM_IN_DURATION
-            zoom_out_end = s[-1].time + self.SESSION_GAP + self.ZOOM_OUT_DURATION
-            if zoom_in_start <= ts <= zoom_out_end:
-                # 去重：同样的 session 只加一次
-                if not all_sessions or s != all_sessions[-1]:
-                    all_sessions.append(s)
+        target = self._to_state
 
-        if not all_sessions:
-            return (0.5, 0.5, 1.0)
+        click = self._has_click(ts)
+        if click:
+            target = (click[1] / self.w, click[2] / self.h, self.ZOOM_SCALE)
 
-        best_scale = 0
-        best_state = (0.5, 0.5, 1.0)
-        for s in all_sessions:
-            st = self._session_state(s, ts)
-            if st and st[2] > best_scale:
-                best_scale = st[2]
-                best_state = st
-        return best_state
+        speed = self._calc_speed(ts)
 
-    def _build_session(self, start_target: CameraTarget):
-        """从某个 target 构建其所在会话"""
-        try:
-            idx = self.targets.index(start_target)
-        except ValueError:
-            return None
-        session = [start_target]
-        for t in self.targets[idx + 1:]:
-            if t.time - session[-1].time < self.SESSION_GAP:
-                session.append(t)
+        if speed > self.FAST_THRESHOLD:
+            self._last_fast_ts = ts
+            target = (0.5, 0.5, 1.0)
+        elif ts - self._last_fast_ts > self.STOP_DURATION and speed < self.STOP_THRESHOLD:
+            px, py = self._interpolate(ts)
+            target = (px / self.w, py / self.h, self.ZOOM_SCALE)
+
+        if target != self._to_state:
+            self._from_state = self._last_state
+            self._to_state = target
+            self._trans_start = ts
+
+        if self._trans_start >= 0:
+            dt = ts - self._trans_start
+            progress = min(1.0, dt / self.TRANSITION_DURATION)
+            p = minimum_jerk(progress)
+            self._last_state = (
+                self._from_state[0] + (self._to_state[0] - self._from_state[0]) * p,
+                self._from_state[1] + (self._to_state[1] - self._from_state[1]) * p,
+                self._from_state[2] + (self._to_state[2] - self._from_state[2]) * p,
+            )
+            if progress >= 1.0:
+                self._trans_start = -1
+        else:
+            self._last_state = self._to_state
+
+        return self._last_state
+
+    def _compute_zoomed_segments(self) -> list[tuple[float, float]]:
+        if self.duration_s <= 0:
+            return []
+        segments = []
+        in_zoom = False
+        seg_start = 0.0
+        step = 1.0 / self.fps
+        ts = 0.0
+        while ts <= self.duration_s:
+            _, _, scale = self.sample(ts * 1000)
+            if scale > 1.05:
+                if not in_zoom:
+                    seg_start = ts
+                    in_zoom = True
             else:
-                break
-        for t in reversed(self.targets[:idx]):
-            if session[0].time - t.time < self.SESSION_GAP:
-                session.insert(0, t)
+                if in_zoom:
+                    segments.append((seg_start, ts))
+                    in_zoom = False
+            ts += step
+        if in_zoom:
+            segments.append((seg_start, self.duration_s))
+        # 合并间隔小于 0.3s 的相邻段
+        if not segments:
+            return segments
+        merged = [segments[0]]
+        for s, e in segments[1:]:
+            if s - merged[-1][1] < 0.3:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], e))
             else:
-                break
-        return session
-
-    def _session_state(self, session: list[CameraTarget], ts: float):
-        """计算会话在 ts 时刻的镜头状态"""
-        if not session:
-            return None
-        first = session[0]
-        last = session[-1]
-
-        zoom_in_start = first.time - self.ZOOM_IN_DURATION
-        session_end = last.time + self.SESSION_GAP
-        zoom_out_end = session_end + self.ZOOM_OUT_DURATION
-
-        # zoom-in
-        if ts < first.time:
-            if ts < zoom_in_start:
-                return (0.5, 0.5, 1.0)
-            p = minimum_jerk((ts - zoom_in_start) / self.ZOOM_IN_DURATION)
-            return (
-                0.5 + (first.fx - 0.5) * p,
-                0.5 + (first.fy - 0.5) * p,
-                1.0 + (first.scale - 1.0) * p,
-            )
-
-        # zoom-out
-        if ts > session_end:
-            if ts > zoom_out_end:
-                return (0.5, 0.5, 1.0)
-            p = minimum_jerk((ts - session_end) / self.ZOOM_OUT_DURATION)
-            return (
-                last.fx + (0.5 - last.fx) * p,
-                last.fy + (0.5 - last.fy) * p,
-                last.scale + (1.0 - last.scale) * p,
-            )
-
-        # 会话中：多个 target 之间平移
-        if len(session) == 1:
-            return (first.fx, first.fy, first.scale)
-
-        prev_t = session[0]
-        for t in session[1:]:
-            if t.time > ts:
-                break
-            prev_t = t
-
-        if prev_t.time >= ts or prev_t is session[-1]:
-            return (prev_t.fx, prev_t.fy, prev_t.scale)
-
-        nxt = session[session.index(prev_t) + 1]
-        gap = nxt.time - prev_t.time
-        pan = min(0.6, gap * 0.5)
-        elapsed = ts - prev_t.time
-
-        if elapsed < pan:
-            p = minimum_jerk(elapsed / pan)
-            return (
-                prev_t.fx + (nxt.fx - prev_t.fx) * p,
-                prev_t.fy + (nxt.fy - prev_t.fy) * p,
-                prev_t.scale + (nxt.scale - prev_t.scale) * p,
-            )
-        return (nxt.fx, nxt.fy, nxt.scale)
+                merged.append((s, e))
+        return merged
 
 
 def build_camera(clicks: list, fps: int,
                  w: int, h: int, duration_s: float,
                  cursor_events: list = None,
                  base_time: float = 0) -> CameraSynthesizer:
-    raw = _make_targets(clicks, cursor_events, base_time)
-    if not raw:
-        return CameraSynthesizer([], w, h, fps)
+    click_data = []
+    for c in clicks or []:
+        t = c.timestamp - base_time
+        if t >= 0:
+            click_data.append((t, c.x, c.y))
 
-    merged: list[CameraTarget] = []
-    for t in raw:
-        if merged and (t.time - merged[-1].time) < 0.3:
-            merged[-1] = t
-        else:
-            merged.append(t)
+    event_data = []
+    for e in cursor_events or []:
+        t = e.timestamp - base_time
+        if t >= 0:
+            event_data.append((t, e.x, e.y))
 
-    for t in merged:
-        t.fx /= w
-        t.fy /= h
+    if not event_data:
+        return CameraSynthesizer(click_data, [], w, h, fps, duration_s)
 
-    return CameraSynthesizer(merged, w, h, fps)
+    return CameraSynthesizer(click_data, event_data, w, h, fps, duration_s)

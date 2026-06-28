@@ -349,30 +349,7 @@ class MainWindow(FluentWindow):
         tracks.append(Track(
             type="zoom", start=0, end=duration, content="镜头缩放",
         ))
-        zoom_segs = []
-        if camera.targets:
-            # 按 SESSION_GAP 分组
-            groups = []
-            cur = [camera.targets[0]]
-            for t in camera.targets[1:]:
-                if t.time - cur[-1].time < 2.5:
-                    cur.append(t)
-                else:
-                    groups.append(cur)
-                    cur = [t]
-            groups.append(cur)
-            # 每组按实际缩放范围生成段，合并相邻重叠段
-            raw_ranges = []
-            for g in groups:
-                start = max(0, g[0].time - 0.5)
-                end = min(duration, g[-1].time + 2.5 + 0.5)
-                raw_ranges.append((start, end))
-            zoom_segs = [raw_ranges[0]]
-            for s, e in raw_ranges[1:]:
-                if s <= zoom_segs[-1][1]:
-                    zoom_segs[-1] = (zoom_segs[-1][0], max(zoom_segs[-1][1], e))
-                else:
-                    zoom_segs.append((s, e))
+        zoom_segs = camera.zoomed_segments if camera else []
         self._timeline.set_zoom_segments(zoom_segs)
 
         self._timeline.set_tracks(tracks)
