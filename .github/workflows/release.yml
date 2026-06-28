@@ -40,11 +40,18 @@ jobs:
         env:
           DEB_BUILD_OPTIONS: nocheck
 
+      - name: Collect .deb artifact
+        shell: bash
+        run: |
+          mkdir -p pkg-out
+          cp ../recordly_*.deb pkg-out/
+          ls -lh pkg-out/
+
       - name: Upload .deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: recordly-deb-ubuntu-24.04
-          path: ../recordly_*.deb
+          path: pkg-out/*.deb
           if-no-files-found: error
           retention-days: 90
 
