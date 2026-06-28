@@ -407,11 +407,12 @@ class MainWindow(FluentWindow):
             self._playback = PlaybackController(self._preview, self._compositor)
             self._seek_slider.setRange(0, self._playback.total_frames - 1)
             self._playback.set_on_frame_changed(self._update_frame_counter)
-            self._playback.play()
+            start_frame = int(self._timeline.playhead * self._compositor.fps)
+            self._playback.play(start_frame)
             self._btn_play.setIcon(FluentIcon.CANCEL)
             self._btn_play.setToolTip("暂停")
         elif not self._playback._playing:
-            self._playback.play(0)
+            self._playback.play(self._playback._current_frame)
             self._btn_play.setIcon(FluentIcon.CANCEL)
             self._btn_play.setToolTip("暂停")
         elif self._playback.is_paused:
