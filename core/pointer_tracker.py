@@ -12,7 +12,7 @@ class CursorEvent:
     timestamp: float
     x: int = field(compare=False)
     y: int = field(compare=False)
-    event_type: str = field(compare=False)      # "move" / "click" / "scroll"
+    event_type: str = field(compare=False, default="move")      # "move" / "click" / "scroll"
     button: str | None = field(compare=False, default=None)
     pressed: bool | None = field(compare=False, default=None)
 

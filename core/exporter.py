@@ -5,11 +5,25 @@ import tempfile
 import wave
 import numpy as np
 from dataclasses import dataclass
-from PyQt5.QtCore import QObject, pyqtSignal
 from PIL import Image
 import ffmpeg
 
 from core.compositor import Compositor
+
+# PyQt5 信号可选 — 无 Qt 环境时用普通 object 代替
+try:
+    from PyQt5.QtCore import QObject, pyqtSignal as pyqtSignal
+    _HAS_SIGNAL = True
+except ImportError:
+    _HAS_SIGNAL = False
+    # 降级：无 Qt 时 signal 为普通属性
+    class QObjectFallback:
+        """替代 QObject，super().__init__() 兼容"""
+        def __init__(self, *args, **kwargs):
+            pass
+    QObject = QObjectFallback
+    def pyqtSignal(*args, **kwargs):
+        return None
 
 
 @dataclass

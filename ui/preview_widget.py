@@ -1,10 +1,31 @@
 """预览组件 — 显示合成后的帧"""
 
-from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPixmap
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+try:
+    from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
+    from PyQt5.QtCore import Qt, QTimer
+    from PyQt5.QtGui import QPixmap
+    _HAS_QT = True
+except ImportError:
+    _HAS_QT = False
+    # 降级：无 PyQt5 时用普通 object
+    class QWidget:
+        pass
+    class QLabel:
+        pass
+    class QVBoxLayout:
+        pass
+    class Qt:
+        AlignCenter = 4
+    class QTimer:
+        pass
+    class QPixmap:
+        pass
+
 from PIL import Image
-from PIL.ImageQt import ImageQt
+from PIL.ImageQt import toqpixmap
 from app.constants import DEFAULT_FPS
 
 

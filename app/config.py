@@ -2,7 +2,20 @@
 
 import os
 from dataclasses import dataclass, field
-from PyQt5.QtCore import QSettings
+
+try:
+    from PyQt5.QtCore import QSettings
+    HAS_QT = True
+except ImportError:
+    HAS_QT = False
+    # 降级：内存字典模拟 QSettings
+    class QSettings:
+        def __init__(self, *args, **kwargs): self._data = {}
+        def value(self, key, default=None):
+            return self._data.get(key, default)
+        def setValue(self, key, value):
+            self._data[key] = value
+        def sync(self): pass
 
 
 @dataclass

@@ -22,14 +22,14 @@ class ScreenCapture(Thread):
         super().__init__(daemon=True)
         self.monitor_id = monitor_id
         self.interval = 1.0 / target_fps
-        self._stop = Event()
+        self._quit = Event()
         self._buffer: deque[CapturedFrame] = deque(maxlen=600)
         self._frame_index = 0
 
     def run(self):
         with mss.mss() as sct:
             monitor = sct.monitors[self.monitor_id]
-            while not self._stop.is_set():
+            while not self._quit.is_set():
                 t0 = time.perf_counter()
                 raw = sct.grab(monitor)
                 # mss 返回 BGRA, 转 RGB
@@ -47,7 +47,7 @@ class ScreenCapture(Thread):
                     time.sleep(sleep_time)
 
     def stop(self):
-        self._stop.set()
+        self._quit.set()
         self.join(timeout=5)
 
     @property
