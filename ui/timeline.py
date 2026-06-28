@@ -328,12 +328,12 @@ class TimelineWidget(QWidget):
         # 标尺
         self._draw_ruler(p)
 
-        # 轨道
+        # 轨道（只画行分隔线和文本手柄）
         for i, track in enumerate(self._tracks):
             self._draw_track(p, track, i)
 
-        # 缩放段（在同一轨道行绘制多条）
-        self._draw_zoom_segments(p)
+        # 内容段（所有轨道的可视化块）
+        self._draw_content_segments(p)
 
         # 播放头
         self._draw_playhead(p)
@@ -368,25 +368,20 @@ class TimelineWidget(QWidget):
         return f"{m}:{s:02d}"
 
     def _draw_track(self, p: QPainter, track, index: int):
-        # zoom 轨道由 _draw_zoom_segments 负责绘制，不重复画
-        if track.type == "zoom" and self._zoom_segments:
-            self._draw_zoom_track_label(p, track, index)
-            return
+        """画轨道行分隔线和标签（无色背景）"""
+        y = RULER_HEIGHT + index * TRACK_HEIGHT
+
+        # 明暗交替行
+        if index % 2 == 0:
+            p.fillRect(PADDING, y, self.width() - PADDING + 1, TRACK_HEIGHT, QColor("#2a2a2a"))
+
+        # 轨道分隔线
+        p.setPen(QPen(QColor("#3a3a3a"), 1))
+        p.drawLine(int(PADDING), y, int(self.width()), y)
+
         rect = self._track_rect(index)
-        if rect.width() < 1 or rect.x() + rect.width() < PADDING:
+        if rect.width() < 1:
             return
-
-        color = TRACK_COLORS.get(track.type, QColor("#888888"))
-
-        # 选中高亮
-        if index == self._selected:
-            p.setBrush(QBrush(color.lighter(130)))
-            p.setPen(QPen(color.lighter(150), 2))
-        else:
-            p.setBrush(QBrush(color))
-            p.setPen(QPen(color.darker(120), 1))
-
-        p.drawRoundedRect(rect, 3, 3)
 
         # 轨道标签
         if rect.width() > 40:
@@ -396,44 +391,36 @@ class TimelineWidget(QWidget):
             p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
                        Qt.AlignLeft | Qt.AlignVCenter, label)
 
-        # 拖动手柄指示（边缘小方块）
+        # 拖动手柄
         if index == self._selected or self._drag_index == index:
             p.fillRect(QRectF(rect.x() - 2, rect.y(), 4, rect.height()), QColor("white"))
             p.fillRect(QRectF(rect.right() - 2, rect.y(), 4, rect.height()), QColor("white"))
 
-    def _draw_zoom_track_label(self, p: QPainter, track, index: int):
-        """仅绘制 zoom 轨道的文字标签，不画背景条"""
-        rect = self._track_rect(index)
-        if rect.width() < 1:
-            return
-        p.setPen(QColor(TRACK_COLORS["zoom"]).lighter(140))
-        p.setFont(QFont("sans-serif", 8))
-        p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
-                   Qt.AlignLeft | Qt.AlignVCenter, "镜头缩放")
+    def _draw_content_segments(self, p: QPainter):
+        """绘制所有轨道的内容段（彩色块）"""
+        for i, track in enumerate(self._tracks):
+            color = TRACK_COLORS.get(track.type, QColor("#888888"))
+            y = RULER_HEIGHT + i * TRACK_HEIGHT + 2
+            h = TRACK_HEIGHT - 4
 
-    def _draw_zoom_segments(self, p: QPainter):
-        """在 zoom 轨道行内绘制多个缩放段"""
-        if not self._zoom_segments:
-            return
-        # 找到 zoom 轨道的索引和位置
-        zoom_idx = None
-        for i, t in enumerate(self._tracks):
-            if t.type == "zoom":
-                zoom_idx = i
-                break
-        if zoom_idx is None:
-            return
-        y = RULER_HEIGHT + zoom_idx * TRACK_HEIGHT + 2
-        h = TRACK_HEIGHT - 4
-        color = TRACK_COLORS["zoom"]
-        for start_s, end_s in self._zoom_segments:
-            x1 = self.time_to_x(start_s)
-            x2 = self.time_to_x(end_s)
-            if x2 - x1 < 2:
-                continue
-            p.setBrush(QBrush(color))
-            p.setPen(QPen(color.darker(120), 1))
-            p.drawRoundedRect(QRectF(x1, y, x2 - x1, h), 3, 3)
+            segments = []
+            if track.type == "zoom" and self._zoom_segments:
+                segments = self._zoom_segments
+            elif track.content:
+                segments = [(track.start, track.end)]
+
+            for start_s, end_s in segments:
+                x1 = self.time_to_x(start_s)
+                x2 = self.time_to_x(end_s)
+                if x2 - x1 < 2:
+                    continue
+                if i == self._selected:
+                    p.setBrush(QBrush(color.lighter(130)))
+                    p.setPen(QPen(color.lighter(150), 2))
+                else:
+                    p.setBrush(QBrush(color))
+                    p.setPen(QPen(color.darker(120), 1))
+                p.drawRoundedRect(QRectF(x1, y, x2 - x1, h), 3, 3)
 
     def _draw_playhead(self, p: QPainter):
         x = self.time_to_x(self._playhead_s)
