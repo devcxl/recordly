@@ -59,44 +59,18 @@ runs:
         sed -i '/sha256sums/d' "${BUILD_DIR}/PKGBUILD"
         echo "sha256sums=('SKIP')" >> "${BUILD_DIR}/PKGBUILD"
 
-        # Docker 构建脚本
-        cat > "${BUILD_DIR}/build.sh" << 'DOCKER_EOF'
-        #!/usr/bin/bash -e
-        pacman-key --init
-        pacman-key --populate archlinux
-
-        # 安装构建依赖
-        pacman -Syu --noconfirm \
-          base-devel \
-          python \
-          python-build \
-          python-installer \
-          python-wheel \
-          python-setuptools \
-          python-pyqt5 \
-          python-pillow \
-          python-numpy \
-          python-mss \
-          python-pynput \
-          python-sounddevice \
-          ffmpeg \
-          portaudio
-
-        # 创建非 root 用户
-        useradd -m builder
-        chown -R builder:builder /build
-
-        # 构建
-        cd /build
-        sudo -u builder makepkg -sr --noconfirm --skipchecksums --nodeps
-DOCKER_EOF
-        chmod +x "${BUILD_DIR}/build.sh"
-
-        # 执行 Docker 构建
+        # 在 Docker 容器内执行构建（shell heredoc 会导致 YAML 解析错误，故用 sh -c）
         docker run --rm \
           -v "${BUILD_DIR}:/build:Z" \
           archlinux:latest \
-          /build/build.sh
+          sh -c "
+            pacman-key --init &&
+            pacman-key --populate archlinux &&
+            pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pyqt5 python-pillow python-numpy python-mss python-pynput python-sounddevice ffmpeg portaudio &&
+            useradd -m builder &&
+            chown -R builder:builder /build &&
+            su builder -c 'cd /build && makepkg -sr --noconfirm --skipchecksums --nodeps'
+          "
 
         # 复制构建产物回来
         mkdir -p "${WORKSPACE}/.aur/out"

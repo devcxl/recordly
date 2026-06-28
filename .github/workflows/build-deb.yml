@@ -64,7 +64,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          echo "version=1.0.0" >> "$GITHUB_OUTPUT"
+          echo "version=1.0.0dev" >> "$GITHUB_OUTPUT"
 
       - name: Build AUR package
         uses: ./.github/actions/build-aur
