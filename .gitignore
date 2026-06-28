@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+*.sublime-*
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.bak
