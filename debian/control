@@ -1,0 +1,28 @@
+Source: recordly
+Section: video
+Priority: optional
+Maintainer: devcxl <64475363+devcxl@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13),
+               python3 (>= 3.10),
+               python3-setuptools,
+               python3-pip,
+               ffmpeg
+Standards-Version: 4.6.2
+Homepage: https://github.com/devcxl/recordly
+Rules-Requires-Root: no
+
+Package: recordly
+Architecture: all
+Depends: ${misc:Depends},
+         python3 (>= 3.10),
+         python3-pyqt5 (>= 5.15),
+         python3-pil (>= 9.0),
+         python3-numpy (>= 1.20),
+         ffmpeg,
+         libportaudio2,
+         pulseaudio-utils
+Description: 开源屏幕录制与回放工具
+ Recordly 是一款开源的屏幕录制和回放工具，
+ 支持鼠标轨迹记录、多轨道时间线编辑、
+ 各种光标特效和多种导出格式（MP4/GIF/APNG）。
+ 基于 Python + PyQt5 构建，轻量高效。

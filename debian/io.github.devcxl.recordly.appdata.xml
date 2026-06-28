@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.devcxl.recordly</id>
+  <name>Recordly</name>
+  <summary>开源屏幕录制与回放工具</summary>
+  <developer_name>devcxl</developer_name>
+  <url type="homepage">https://github.com/devcxl/recordly</url>
+  <url type="bugtracker">https://github.com/devcxl/recordly/issues</url>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      一款开源的屏幕录制和回放工具，支持鼠标轨迹记录、
+      多轨道时间线编辑、各种光标特效和多种导出格式（MP4/GIF/APNG）。
+      基于 Python + PyQt5 构建，轻量高效。
+    </p>
+  </description>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Recorder</category>
+  </categories>
+  <keywords>
+    <keyword>screen</keyword>
+    <keyword>recorder</keyword>
+    <keyword>capture</keyword>
+    <keyword>gif</keyword>
+    <keyword>mp4</keyword>
+  </keywords>
+  <releases>
+    <release version="1.0.0" date="2026-06-29"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

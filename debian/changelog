@@ -1,0 +1,9 @@
+recordly (1.0.0-1) unstable; urgency=medium
+
+  * Initial release.
+  * Screen recording with mouse tracking.
+  * Multi-track timeline editing.
+  * Export to MP4/GIF/APNG.
+  * Cursor effects and annotations support.
+
+ -- devcxl <64475363+devcxl@users.noreply.github.com>  Mon, 29 Jun 2026 00:00:00 +0800

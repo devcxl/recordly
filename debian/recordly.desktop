@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Recordly
+GenericName=Screen Recorder
+Comment=Open-source screen recording and playback tool
+Exec=recordly
+Icon=recordly
+Terminal=false
+Categories=AudioVideo;Recorder;Video;
+Keywords=screen;recorder;capture;gif;mp4
+StartupNotify=true

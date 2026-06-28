@@ -1,0 +1,58 @@
+name: Build Debian Package
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "README.md"
+      - "**.md"
+      - ".gitignore"
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            debhelper \
+            devscripts \
+            fakeroot \
+            build-essential \
+            python3 \
+            python3-setuptools \
+            python3-pip \
+            python3-pyqt5 \
+            python3-pil \
+            python3-numpy \
+            ffmpeg \
+            libportaudio2 \
+            pulseaudio-utils
+
+      - name: Install pip-only dependencies
+        run: |
+          pip install --break-system-packages --no-deps mss pynput sounddevice
+
+      - name: Build Debian package
+        run: |
+          dpkg-buildpackage -b -us -uc -j$(nproc)
+        env:
+          DEB_BUILD_OPTIONS: nocheck
+
+      - name: List build artifacts
+        run: |
+          ls -lh ../*.deb ../*.buildinfo ../*.changes
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recordly-deb-ubuntu-24.04
+          path: ../recordly_*.deb
+          if-no-files-found: error
+          retention-days: 90

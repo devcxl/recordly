@@ -1,0 +1,55 @@
+#!/usr/bin/make -f
+# -*- makefile -*-
+
+export DH_VERBOSE = 1
+export PYTHONDONTWRITEBYTECODE = 1
+
+%:
+	dh $@
+
+override_dh_auto_clean:
+	# 清除 Python 构建产物
+	rm -rf build dist *.egg-info
+	rm -rf .pybuild/
+
+override_dh_auto_build:
+	# 不需要编译（纯 Python）
+
+override_dh_auto_test:
+	# CI 分离，打包时不运行测试
+
+override_dh_auto_install:
+	# 1. 生成 Python 包元数据（仅用于依赖生成）
+	python3 setup.py egg_info
+
+	# 2. 安装 Python 包到系统 site-packages
+	install -d $(CURDIR)/debian/recordly/usr/lib/python3/dist-packages
+	cp -a app core ui $(CURDIR)/debian/recordly/usr/lib/python3/dist-packages/
+	cp -a main.py $(CURDIR)/debian/recordly/usr/lib/python3/dist-packages/
+
+	# 3. 安装 pip-only 依赖（system packages 中缺失的）
+	pip install \
+		--no-deps \
+		--no-compile \
+		--root=$(CURDIR)/debian/recordly \
+		--target=/usr/lib/python3/dist-packages \
+		mss pynput sounddevice audio2numpy 2>&1
+
+	# 4. 安装可执行入口（/usr/bin/recordly）
+	install -d $(CURDIR)/debian/recordly/usr/bin
+	install -m 0755 debian/recordly-entry.sh \
+		$(CURDIR)/debian/recordly/usr/bin/recordly
+
+	# 5. 安装桌面入口文件和图标
+	install -D -m 0644 debian/recordly.desktop \
+		$(CURDIR)/debian/recordly/usr/share/applications/recordly.desktop
+
+	install -D -m 0644 resources/icons/recordly.svg \
+		$(CURDIR)/debian/recordly/usr/share/icons/hicolor/scalable/apps/recordly.svg
+
+override_dh_compress:
+	# Python 源文件不需要压缩
+	dh_compress -X.py
+
+override_dh_strip:
+	# Python 包不需要 strip
