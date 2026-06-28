@@ -29,6 +29,7 @@ class AppConfig:
     cursor_size: int = 32
     cursor_theme: str = "dark"
     trail_enabled: bool = True
+    zoom_rect_ratio: float = 0.5
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -43,6 +44,7 @@ class AppConfig:
         cfg.cursor_size = int(s.value("cursor_size", cls.cursor_size))
         cfg.cursor_theme = s.value("cursor_theme", cls.cursor_theme)
         cfg.trail_enabled = s.value("trail_enabled", "true").lower() == "true"
+        cfg.zoom_rect_ratio = float(s.value("zoom_rect_ratio", cls.zoom_rect_ratio))
         cfg.recordings_dir = os.path.expanduser(cfg.recordings_dir)
         cfg.projects_dir = os.path.expanduser(cfg.projects_dir)
         return cfg
@@ -58,3 +60,4 @@ class AppConfig:
         s.setValue("cursor_size", self.cursor_size)
         s.setValue("cursor_theme", self.cursor_theme)
         s.setValue("trail_enabled", "true" if self.trail_enabled else "false")
+        s.setValue("zoom_rect_ratio", self.zoom_rect_ratio)

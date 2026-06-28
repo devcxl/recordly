@@ -2,8 +2,8 @@
 
 try:
     from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QSlider, QHBoxLayout
-    from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QPixmap, QImage
+    from PyQt5.QtCore import Qt, QTimer, QRectF, pyqtSignal
+    from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush
     _HAS_QT = True
 except ImportError:
     _HAS_QT = False
@@ -16,9 +16,111 @@ except ImportError:
     class QTimer: pass
     class QPixmap: pass
     class QImage: pass
+    class QPainter: pass
+    class QRectF: pass
+    class QColor: pass
+    class QPen: pass
+    class QBrush: pass
+    pyqtSignal = None
 
 from PIL import Image
 from app.constants import DEFAULT_FPS
+
+
+class ZoomOverlay(QWidget):
+    """预览区域上的缩放框叠加层"""
+
+    rect_changed = pyqtSignal(int, int, int, int)  # x, y, w, h
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rect = None
+        self._dragging = False
+        self._drag_start = (0, 0)
+        self._drag_orig = (0, 0, 0, 0)
+        self._resize_edge = None
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setMouseTracking(True)
+        self.hide()
+
+    def set_rect(self, x, y, w, h):
+        self._rect = (x, y, w, h)
+        self.update()
+
+    def clear_rect(self):
+        self._rect = None
+        self.hide()
+
+    def paintEvent(self, event):
+        if not self._rect:
+            return
+        p = QPainter(self)
+        x, y, w, h = self._rect
+        ow, oh = self.width(), self.height()
+        # 缩放框坐标按 widget 尺寸映射
+        p.setPen(QPen(QColor("#00ccff"), 2))
+        p.setBrush(QBrush(QColor(0, 204, 255, 30)))
+        p.drawRect(int(x), int(y), int(w), int(h))
+        p.setPen(QColor("#00ccff"))
+        p.drawText(int(x) + 4, int(y) + 14, "缩放区域")
+
+    def mousePressEvent(self, event):
+        if not self._rect or event.button() != Qt.LeftButton:
+            return
+        x, y, w, h = self._rect
+        margin = 8
+        edges = []
+        if abs(event.x() - x) < margin:
+            edges.append("left")
+        if abs(event.x() - (x + w)) < margin:
+            edges.append("right")
+        if abs(event.y() - y) < margin:
+            edges.append("top")
+        if abs(event.y() - (y + h)) < margin:
+            edges.append("bottom")
+
+        if edges:
+            self._resize_edge = edges
+            self._drag_start = (event.x(), event.y())
+            self._drag_orig = self._rect
+        elif x <= event.x() <= x + w and y <= event.y() <= y + h:
+            self._dragging = True
+            self._drag_start = (event.x(), event.y())
+            self._drag_orig = self._rect
+
+    def mouseMoveEvent(self, event):
+        if self._dragging and self._rect:
+            dx = event.x() - self._drag_start[0]
+            dy = event.y() - self._drag_start[1]
+            x, y, w, h = self._drag_orig
+            self._rect = (x + dx, y + dy, w, h)
+            self.update()
+        elif self._resize_edge and self._rect:
+            dx = event.x() - self._drag_start[0]
+            dy = event.y() - self._drag_start[1]
+            x, y, w, h = self._drag_orig
+            edges = self._resize_edge
+            if "left" in edges:
+                x += dx
+                w -= dx
+            if "right" in edges:
+                w += dx
+            if "top" in edges:
+                y += dy
+                h -= dy
+            if "bottom" in edges:
+                h += dy
+            self._rect = (max(0, x), max(0, y), max(20, w), max(20, h))
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        if self._dragging or self._resize_edge:
+            self._dragging = False
+            self._resize_edge = None
+            if self._rect:
+                self.rect_changed.emit(*self._rect)
 
 
 class PreviewWidget(QWidget):
@@ -35,11 +137,30 @@ class PreviewWidget(QWidget):
         layout.addWidget(self._label)
         self.setLayout(layout)
 
+        self._overlay = ZoomOverlay(self._label)
+        self._overlay.hide()
+
         self._timer = QTimer()
         self._timer.setInterval(1000 // DEFAULT_FPS)
         self._timer.timeout.connect(self._tick)
         self._frame_generator = None
         self._fps = DEFAULT_FPS
+
+    def show_zoom_rect(self, rect):
+        if rect:
+            ow, oh = self._overlay.width(), self._overlay.height()
+            scale_x = ow / max(self._label.width(), 1)
+            scale_y = oh / max(self._label.height(), 1)
+            scaled = (int(rect[0] * scale_x), int(rect[1] * scale_y),
+                      int(rect[2] * scale_x), int(rect[3] * scale_y))
+            self._overlay.set_rect(*scaled)
+            self._overlay.show()
+        else:
+            self._overlay.clear_rect()
+
+    @property
+    def overlay(self):
+        return self._overlay
 
     def show_frame(self, pil_image: Image.Image | None):
         if pil_image is None:
@@ -54,6 +175,7 @@ class PreviewWidget(QWidget):
             Qt.KeepAspectRatio, Qt.SmoothTransformation,
         )
         self._label.setPixmap(scaled)
+        self._overlay.resize(self._label.width(), self._label.height())
 
     def start_playback(self, frame_generator):
         self._frame_generator = frame_generator
@@ -77,6 +199,7 @@ class PreviewWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._overlay.resize(self._label.width(), self._label.height())
 
 
 class PlaybackController:

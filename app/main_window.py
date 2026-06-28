@@ -202,13 +202,6 @@ class MainWindow(FluentWindow):
         hbox.setContentsMargins(16, 0, 16, 0)
         self._status_label = CaptionLabel("● 准备就绪")
         hbox.addWidget(self._status_label)
-
-        settings_btn = ToolButton(FluentIcon.SETTING)
-        settings_btn.setToolTip("设置")
-        settings_btn.clicked.connect(self._on_open_settings)
-        settings_btn.setFixedSize(24, 24)
-        hbox.addWidget(settings_btn)
-
         hbox.addStretch()
         layout.addWidget(sb)
 
@@ -252,10 +245,10 @@ class MainWindow(FluentWindow):
         self.addSubInterface(
             self._project_interface, FluentIcon.FOLDER, "项目文件")
         self.navigationInterface.addItem(
-            routeKey="about",
-            icon=FluentIcon.INFO,
-            text="关于",
-            onClick=self._on_about,
+            routeKey="settings",
+            icon=FluentIcon.SETTING,
+            text="设置",
+            onClick=self._on_open_settings,
             selectable=False,
             position=NavigationItemPosition.BOTTOM,
         )
@@ -336,6 +329,7 @@ class MainWindow(FluentWindow):
             self._playback.seek(0)
             self._populate_timeline()
             self._timeline.playhead_changed.connect(self._on_timeline_seek)
+            self._timeline.zoom_double_clicked.connect(self._on_zoom_double_clicked)
         self.update_status("● 录制完成")
 
     def _populate_timeline(self):
@@ -455,6 +449,26 @@ class MainWindow(FluentWindow):
         idx = int(sec * self._compositor.fps)
         self._playback.seek(idx)
         self._update_frame_counter(idx)
+
+    def _on_zoom_double_clicked(self, time_s: float):
+        """双击 zoom 轨道 → 添加手动缩放 clip"""
+        from core.project import Clip
+        ratio = self.config.zoom_rect_ratio
+        w = int(self._compositor.width * ratio)
+        h = int(self._compositor.height * ratio)
+        cx = self._compositor.width // 2
+        cy = self._compositor.height // 2
+        clip = Clip(type="zoom", start=time_s, end=min(time_s + 2.0, self._timeline.duration),
+                    content="手动缩放", rect=[cx - w // 2, cy - h // 2, w, h])
+        for track in self._timeline.tracks:
+            if track.type == "zoom":
+                track.clips.append(clip)
+                break
+        self._compositor.load_manual_zoom_clips(
+            [c for t in self._timeline.tracks if t.type == "zoom"
+             for c in t.clips if c.rect])
+        self._preview.show_zoom_rect(clip.rect)
+        self._timeline.update()
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)

@@ -52,7 +52,9 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         tabs.addTab(self._build_general_tab(), "通用")
         tabs.addTab(self._build_cursor_tab(), "光标")
+        tabs.addTab(self._build_zoom_tab(), "缩放")
         tabs.addTab(self._build_preview_tab(), "预览")
+        tabs.addTab(self._build_about_tab(), "关于")
 
         layout.addWidget(tabs, 1)
 
@@ -129,6 +131,30 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return w
 
+    # ── 缩放 ───────────────────────────────────────────────
+
+    def _build_zoom_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        ratio_row = QHBoxLayout()
+        ratio_row.addWidget(QLabel("缩放框大小 (%):"))
+        self._zoom_ratio_slider = QSlider(Qt.Horizontal)
+        self._zoom_ratio_slider.setRange(10, 90)
+        self._zoom_ratio_slider.setValue(int(self._config.zoom_rect_ratio * 100))
+        self._zoom_ratio_label = QLabel(f"{int(self._config.zoom_rect_ratio * 100)}%")
+        self._zoom_ratio_label.setFixedWidth(40)
+        self._zoom_ratio_slider.valueChanged.connect(
+            lambda v: self._zoom_ratio_label.setText(f"{v}%"))
+        ratio_row.addWidget(self._zoom_ratio_slider, 1)
+        ratio_row.addWidget(self._zoom_ratio_label)
+        layout.addLayout(ratio_row)
+
+        layout.addStretch()
+        return w
+
     # ── 预览 ───────────────────────────────────────────────
 
     def _build_preview_tab(self):
@@ -153,6 +179,22 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return w
 
+    # ── 关于 ───────────────────────────────────────────────
+
+    def _build_about_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("Recordly v1.0"))
+        layout.addWidget(QLabel("开源演示视频录制与编辑工具"))
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("基于 PyQt5 + FFmpeg"))
+        layout.addWidget(QLabel(""))
+        layout.addStretch()
+        return w
+
     # ── 保存 ───────────────────────────────────────────────
 
     def _on_save(self):
@@ -161,6 +203,7 @@ class SettingsDialog(QDialog):
         self._config.cursor_size = self._cursor_slider.value()
         self._config.cursor_theme = self._theme_combo.currentText()
         self._config.trail_enabled = self._trail_check.isChecked()
+        self._config.zoom_rect_ratio = self._zoom_ratio_slider.value() / 100.0
         self._config.preview_quality = self._quality_slider.value() / 100.0
         self._config.save()
         self.accept()

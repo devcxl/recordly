@@ -42,6 +42,7 @@ class Compositor:
         self._click_events: list[tuple[int, int, float]] = []
         self._zoom_rect: tuple | None = None
         self._zoom_keyframes: list[tuple[float, int, int, int, int]] = []
+        self._manual_zoom_clips: list = []
         self._camera = None
         self._effects: dict[str, Effect] = {}
         self._frame_index = 0
@@ -77,6 +78,10 @@ class Compositor:
     def load_camera(self, camera):
         """加载智能镜头系统，替代旧 keyframe 方案"""
         self._camera = camera
+
+    def load_manual_zoom_clips(self, clips: list):
+        """加载手动添加的缩放 clip，优先级高于 auto camera"""
+        self._manual_zoom_clips = clips or []
 
     def register_effect(self, name: str, effect: Effect):
         self._effects[name] = effect
@@ -125,7 +130,10 @@ class Compositor:
         return events[-1].x, events[-1].y
 
     def _get_zoom_at(self, ts: float) -> tuple | None:
-        """通过 CameraSynthesizer 获取当前帧的 zoom rect"""
+        """检查手动缩放 clip → 回退到 CameraSynthesizer"""
+        for clip in self._manual_zoom_clips:
+            if clip.start <= ts <= clip.end and clip.rect:
+                return tuple(clip.rect)
         if not self._camera:
             return None
         w, h = self.width, self.height
