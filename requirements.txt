@@ -6,3 +6,4 @@ sounddevice>=0.5
 pynput>=1.7
 ffmpeg-python>=0.2
 opencv-python-headless>=4.8
+PyQt-Fluent-Widgets>=1.5
