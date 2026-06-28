@@ -26,18 +26,29 @@ class TestTextAnnotationEffect:
 
     def test_annotation_applied_in_time_range(self):
         effect = TextAnnotationEffect()
-        ann = Annotation(text="Hello", x=10, y=10, start=0, end=5)
+        ann = Annotation(text="Hello", x=50, y=100, start=0, end=5)
         effect.add(ann)
 
         bg = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
         ctx = self._make_context(ts=2.0)
         result = effect.apply(bg, ctx)
 
-        px = result.getpixel((10, 10))
-        # 标注区域应渲染了文字（不是纯透明/纯黑）
-        r, g, b, a = px
-        # 文字默认白色 (255,255,255) 在半透明背景上
-        assert not (r == 0 and g == 0 and b == 0)
+        # 文字应产生变化：整张图不全等于背景
+        pixels_a = sum(bg.getdata())
+        pixels_b = sum(result.getdata())
+        assert pixels_a != pixels_b
+
+        # 标注区域的某个像素应有文字颜色
+        found = False
+        for x in range(45, 100):
+            for y in range(95, 130):
+                px = result.getpixel((x, y))
+                if px[:3] == (255, 255, 255):
+                    found = True
+                    break
+            if found:
+                break
+        assert found, "标注区域应渲染白色文字"
 
     def test_annotation_not_applied_outside_range(self):
         """超出时间范围应返回原始帧"""
