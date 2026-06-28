@@ -12,6 +12,9 @@ override_dh_auto_clean:
 	rm -rf build dist *.egg-info
 	rm -rf .pybuild/
 
+override_dh_auto_configure:
+	# 纯 Python，无需 configure
+
 override_dh_auto_build:
 	# 不需要编译（纯 Python）
 
@@ -28,7 +31,7 @@ override_dh_auto_install:
 	cp -a main.py $(CURDIR)/debian/recordly/usr/lib/python3/dist-packages/
 
 	# 3. 安装 pip-only 依赖（system packages 中缺失的）
-	pip install \
+	pip install --break-system-packages \
 		--no-deps \
 		--no-compile \
 		--root=$(CURDIR)/debian/recordly \
