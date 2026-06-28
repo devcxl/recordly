@@ -3,12 +3,18 @@
 from PyQt5.QtWidgets import (
     QMainWindow, QToolBar, QAction, QMenuBar,
     QStatusBar, QLabel, QVBoxLayout, QWidget,
-    QDockWidget, QListWidget, QApplication,
+    QDockWidget, QListWidget, QApplication, QFileDialog,
+    QMessageBox, QProgressDialog,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QKeySequence, QPixmap
 
 from app.config import AppConfig
+from app.constants import DEFAULT_FPS
+from core.recorder import Recorder
+from core.compositor import Compositor
+from core.exporter import Exporter, ExportSettings
+from ui.preview_widget import PreviewWidget
 
 
 class MainWindow(QMainWindow):
@@ -22,12 +28,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self._is_recording = False
+        self._recorder = Recorder()
+        self._compositor = Compositor(1920, 1080, config.default_fps)
+        self._exporter = Exporter(self)
+        self._recorded_data = None
         self._setup_window()
         self._setup_menus()
         self._setup_toolbar()
         self._setup_central()
         self._setup_docks()
         self._setup_statusbar()
+        self._setup_signals()
         self._update_ui_state()
 
     # ── 窗口 ──────────────────────────────────────────────
@@ -137,23 +148,59 @@ class MainWindow(QMainWindow):
             self.recording_started.emit()
         self._update_ui_state()
 
+    def _on_recording_started(self):
+        self._recorder.start_recording()
+        self.update_status("⬤ 录制中...")
+
+    def _on_recording_stopped(self):
+        self._recorded_data = self._recorder.stop_recording()
+        if self._recorded_data and self._recorded_data.get("frames"):
+            self._compositor.load_frames(self._recorded_data["frames"])
+            self._btn_preview.setEnabled(True)
+            self._btn_export.setEnabled(True)
+        self.update_status("⬤ 录制完成")
+
     def _on_export(self):
-        from PyQt5.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getSaveFileName(
+        path, fmt = QFileDialog.getSaveFileName(
             self, "导出视频", self.config.recordings_dir,
             "MP4 (*.mp4);;GIF (*.gif)")
-        if path:
-            self.export_requested.emit(path)
+        if not path:
+            return
+        is_gif = path.lower().endswith(".gif")
+        settings = ExportSettings(
+            output_path=path,
+            format="gif" if is_gif else "mp4",
+            fps=self.config.default_fps,
+            bitrate=self.config.default_bitrate,
+        )
+        self.update_status("⏏ 正在导出...")
+        self._btn_export.setEnabled(False)
+
+        audio = self._recorded_data.get("audio")
+        audio_data = audio.data if audio else None
+
+        if is_gif:
+            self._exporter.export_gif(self._compositor, settings)
+        else:
+            self._exporter.export_mp4(self._compositor, audio_data, settings)
+
+    def _on_export_finished(self, result):
+        self._btn_export.setEnabled(True)
+        if result.success:
+            self.update_status(f"✅ 导出完成: {result.path} "
+                               f"({result.size_bytes/1024/1024:.1f}MB)")
+            QMessageBox.information(self, "导出完成",
+                f"视频已保存到:\n{result.path}")
+        else:
+            self.update_status(f"❌ 导出失败: {result.error}")
+            QMessageBox.warning(self, "导出失败", result.error or "未知错误")
 
     # ── 中央区域 ──────────────────────────────────────────
 
     def _setup_central(self):
-        self.preview_label = QLabel()
-        self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setStyleSheet("background: #1a1a1a; color: #888;")
-        self.preview_label.setText("录制准备就绪\nCtrl+R 开始录制")
-        self.preview_label.setMinimumSize(640, 480)
-        self.setCentralWidget(self.preview_label)
+        self._preview = PreviewWidget()
+        self._preview.setMinimumSize(640, 480)
+        self.setCentralWidget(self._preview)
 
     # ── 侧面板 ────────────────────────────────────────────
 
@@ -167,6 +214,11 @@ class MainWindow(QMainWindow):
     def _setup_statusbar(self):
         self._status_label = QLabel("⬤ 准备就绪")
         self.statusBar().addWidget(self._status_label)
+
+    def _setup_signals(self):
+        self.recording_started.connect(self._on_recording_started)
+        self.recording_stopped.connect(self._on_recording_stopped)
+        self._exporter.finished.connect(self._on_export_finished)
 
     # ── 状态更新 ──────────────────────────────────────────
 
