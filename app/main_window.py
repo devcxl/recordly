@@ -14,6 +14,7 @@ from qfluentwidgets import (
     InfoBar, InfoBarPosition,
     Action, CaptionLabel,
 )
+from qfluentwidgets import FluentIcon as FI
 
 from app.config import AppConfig
 from core.recorder import Recorder
@@ -201,8 +202,26 @@ class MainWindow(FluentWindow):
         hbox.setContentsMargins(16, 0, 16, 0)
         self._status_label = CaptionLabel("● 准备就绪")
         hbox.addWidget(self._status_label)
+
+        settings_btn = ToolButton(FluentIcon.SETTING)
+        settings_btn.setToolTip("设置")
+        settings_btn.clicked.connect(self._on_open_settings)
+        settings_btn.setFixedSize(24, 24)
+        hbox.addWidget(settings_btn)
+
         hbox.addStretch()
         layout.addWidget(sb)
+
+    def _on_open_settings(self):
+        from ui.settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self.config, self)
+        if dialog.exec_() == SettingsDialog.Accepted:
+            self._compositor.fps = self.config.default_fps
+            if hasattr(self, '_cursor_effect'):
+                self._cursor_effect.cursor_size = self.config.cursor_size
+                self._cursor_effect.cursor_theme = self.config.cursor_theme
+                self._cursor_effect.enabled["trail"] = self.config.trail_enabled
+            self._compositor.set_preview_quality(self.config.preview_quality)
 
     def _setup_project_interface(self):
         self._project_interface = QWidget()
@@ -300,7 +319,13 @@ class MainWindow(FluentWindow):
                 self._recorded_data.get("clicks", []),
             )
             from core.cursor_effects import CursorEffect
-            self._compositor.register_effect("cursor", CursorEffect())
+            self._cursor_effect = CursorEffect(
+                cursor_size=self.config.cursor_size,
+                cursor_theme=self.config.cursor_theme,
+            )
+            self._compositor.register_effect("cursor", self._cursor_effect)
+            if not self.config.trail_enabled:
+                self._cursor_effect.enabled["trail"] = False
             self._btn_export.setEnabled(True)
             self._enable_playback_controls(True)
             total = len(self._compositor._frames)
