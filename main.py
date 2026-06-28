@@ -2,6 +2,7 @@
 
 import sys
 from PyQt5.QtWidgets import QApplication
+from qfluentwidgets import setTheme, Theme
 
 from app.config import AppConfig
 from app.main_window import MainWindow
@@ -13,6 +14,7 @@ def main():
     app.setOrganizationName("Recordly")
     app.setApplicationVersion("1.0.0")
 
+    setTheme(Theme.DARK)
     config = AppConfig.load()
     window = MainWindow(config)
     window.show()
