@@ -33,12 +33,10 @@ class TestTextAnnotationEffect:
         ctx = self._make_context(ts=2.0)
         result = effect.apply(bg, ctx)
 
-        # 文字应产生变化：整张图不全等于背景
-        pixels_a = sum(bg.getdata())
-        pixels_b = sum(result.getdata())
-        assert pixels_a != pixels_b
+        # 文字应产生变化：结果图不全部等于背景
+        assert result.tobytes() != bg.tobytes(), "标注应修改帧内容"
 
-        # 标注区域的某个像素应有文字颜色
+        # 标注位置的某个像素应有文字颜色
         found = False
         for x in range(45, 100):
             for y in range(95, 130):
