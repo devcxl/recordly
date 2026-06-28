@@ -10,8 +10,9 @@ from core.compositor import Effect, CompositorContext
 class CursorEffect(Effect):
     """综合光标效果：平滑/波纹/拖尾/模糊/Sway/样式替换"""
 
-    def __init__(self, cursor_size: int = 24):
+    def __init__(self, cursor_size: int = 32, cursor_theme: str = "dark"):
         self.cursor_size = cursor_size
+        self.cursor_theme = cursor_theme
         # 状态
         self._smooth_x: float | None = None
         self._smooth_y: float | None = None
@@ -22,7 +23,7 @@ class CursorEffect(Effect):
         # 配置参数
         self.smooth_alpha = 0.3
         self.trail_length = 8
-        self.trail_opacity = 120
+        self.trail_opacity = 160
         self.ripple_duration = 0.5
         self.ripple_max_radius = 40
         self.sway_amplitude = 4
@@ -83,8 +84,8 @@ class CursorEffect(Effect):
             self._trail.pop(0)
         for i, (tx, ty) in enumerate(self._trail):
             alpha = int(self.trail_opacity * ((i + 1) / len(self._trail)))
-            radius = max(2, self.cursor_size // 3
-                         * ((i + 1) / len(self._trail)))
+            radius = max(2, int(self.cursor_size * 0.3
+                                * ((i + 1) / len(self._trail))))
             draw.ellipse(
                 [tx - radius, ty - radius, tx + radius, ty + radius],
                 fill=(255, 255, 255, alpha),
@@ -106,15 +107,18 @@ class CursorEffect(Effect):
                          fill=(255, 255, 255, alpha))
 
     def _draw_cursor(self, img: Image.Image, cx: int, cy: int):
-        """绘制光标图形"""
+        """绘制光标图形（支持缩放）"""
         sprite = self._sprites.get(self.cursor_theme)
         if sprite:
-            img.paste(sprite, (cx, cy), sprite)
+            s = self.cursor_size
+            if sprite.size != (s, s):
+                sprite = sprite.resize((s, s), Image.LANCZOS)
+            img.paste(sprite, (cx - s // 8, cy - s // 8), sprite)
         else:
-            # 兜底：画一个箭头
             draw = ImageDraw.Draw(img)
+            s = self.cursor_size
             draw.polygon(
-                [(cx, cy), (cx + 12, cy + 6), (cx, cy + 16)],
+                [(cx, cy), (cx + s, cy + s // 2), (cx, cy + s)],
                 fill=(255, 255, 255, 220),
             )
 

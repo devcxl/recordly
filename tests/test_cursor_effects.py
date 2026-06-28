@@ -9,7 +9,7 @@ from core.cursor_effects import CursorEffect
 class TestCursorEffectConfig:
     def test_default_config(self):
         effect = CursorEffect()
-        assert effect.cursor_size == 24
+        assert effect.cursor_size == 32
         assert effect.smooth_alpha == 0.3
         assert effect.trail_length == 8
         assert effect.enabled["smooth"] is True
