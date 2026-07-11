@@ -78,11 +78,17 @@ class CursorEffect(Effect):
             self.sway_frequency * ts * math.pi * 2)
         return cx + int(offset), cy
 
-    def _draw_trail(self, draw: ImageDraw.ImageDraw, cx: int, cy: int):
-        self._trail.append((cx, cy))
+    def _draw_trail(self, draw: ImageDraw.ImageDraw,
+                    raw_cx: int, raw_cy: int,
+                    ctx: CompositorContext):
+        self._trail.append((raw_cx, raw_cy))
         if len(self._trail) > self.trail_length:
             self._trail.pop(0)
         for i, (tx, ty) in enumerate(self._trail):
+            if ctx.zoom_rect:
+                zx, zy, zw, zh = ctx.zoom_rect
+                tx = int((tx - zx) * ctx.width / max(zw, 1))
+                ty = int((ty - zy) * ctx.height / max(zh, 1))
             alpha = int(self.trail_opacity * ((i + 1) / len(self._trail)))
             radius = max(2, int(self.cursor_size * 0.3
                                 * ((i + 1) / len(self._trail))))
@@ -140,7 +146,7 @@ class CursorEffect(Effect):
 
         # 3. 拖尾
         if self.enabled["trail"]:
-            self._draw_trail(draw, cx, cy)
+            self._draw_trail(draw, ctx.raw_cursor_x, ctx.raw_cursor_y, ctx)
 
         # 4. 点击波纹
         if self.enabled["ripple"]:

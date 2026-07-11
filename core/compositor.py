@@ -21,6 +21,8 @@ class CompositorContext:
     zoom_rect: tuple | None
     width: int
     height: int
+    raw_cursor_x: int = 0
+    raw_cursor_y: int = 0
 
 
 class Effect(ABC):
@@ -173,6 +175,7 @@ class Compositor:
                 zh = new_zh
             zx = max(0, min(zx, w - zw))
             zy = max(0, min(zy, h - zh))
+            zoom = (zx, zy, zw, zh)
             img = img.crop((zx, zy, zx + zw, zy + zh))
             img = img.resize((w, h), Image.LANCZOS)
             zoom_cx = int((cx - zx) * w / max(zw, 1))
@@ -190,6 +193,7 @@ class Compositor:
             timestamp=ts,
             zoom_rect=zoom,
             width=w, height=h,
+            raw_cursor_x=cx, raw_cursor_y=cy,
         )
 
         for name, effect in self._effects.items():

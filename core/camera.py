@@ -37,6 +37,14 @@ class CameraSynthesizer:
         self._last_state = (0.5, 0.5, 1.0)
 
         self._zoomed_segments = self._compute_zoomed_segments()
+        self._reset_state()
+
+    def _reset_state(self):
+        self._from_state = (0.5, 0.5, 1.0)
+        self._to_state = (0.5, 0.5, 1.0)
+        self._trans_start = -1.0
+        self._last_fast_ts = -10.0
+        self._last_state = (0.5, 0.5, 1.0)
 
     @property
     def zoomed_segments(self) -> list[tuple[float, float]]:
