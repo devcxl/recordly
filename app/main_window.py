@@ -1,4 +1,4 @@
-"""Recordly 主窗口 — Fluent Design 重构"""
+"""Recordly 主窗口 — 纯 PyQt5"""
 
 import os
 import shutil
@@ -8,20 +8,13 @@ from datetime import datetime
 from uuid import uuid4
 
 from PyQt5.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
-    QFileDialog, QApplication, QMessageBox,
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
+    QFileDialog, QApplication, QMessageBox, QToolBar, QAction,
+    QStackedWidget, QStatusBar, QPushButton, QToolButton,
     QLabel, QProgressDialog, QScrollArea,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
-
-from qfluentwidgets import (
-    FluentWindow, FluentIcon, NavigationItemPosition,
-    PrimaryPushButton, PushButton, ToolButton,
-    InfoBar, InfoBarPosition,
-    Action, CaptionLabel,
-)
-from qfluentwidgets import FluentIcon as FI
 
 from app.config import AppConfig
 from core.recorder import Recorder
@@ -39,7 +32,7 @@ from ui.export_dialog import ExportDialog
 from ui.project_gallery import ProjectGallery
 
 
-class MainWindow(FluentWindow):
+class MainWindow(QMainWindow):
     """主窗口，管理录制/预览/导出的生命周期"""
 
     recording_started = pyqtSignal()
@@ -116,6 +109,19 @@ class MainWindow(FluentWindow):
         QMessageBox.warning(self, "缺少系统依赖",
                             f"以下依赖未安装，部分功能不可用:\n\n{msgs}")
 
+    # ── 通知 ──────────────────────────────────────────────
+
+    def _show_notification(self, title: str, content: str, level: str = "info"):
+        """显示通知：info 用状态栏，warning/error 用 QMessageBox"""
+        if level == "info":
+            self.statusBar().showMessage(f"{title}: {content}", 5000)
+        elif level == "success":
+            self.statusBar().showMessage(f"✓ {title}: {content}", 5000)
+        elif level == "warning":
+            QMessageBox.warning(self, title, content)
+        elif level == "error":
+            QMessageBox.critical(self, title, content)
+
     # ── 界面 ──────────────────────────────────────────────
 
     def _setup_interfaces(self):
@@ -144,25 +150,35 @@ class MainWindow(FluentWindow):
         hbox.setSpacing(8)
 
         # 录制控制
-        self._btn_record = PrimaryPushButton(FluentIcon.VIDEO, "录制")
-        self._btn_stop_rec = PushButton(FluentIcon.CANCEL_MEDIUM, "停止")
+        self._btn_record = QPushButton("● 录制")
+        self._btn_stop_rec = QPushButton("■ 停止")
         self._btn_record.clicked.connect(self._toggle_record)
         self._btn_stop_rec.clicked.connect(self._toggle_record)
         self._btn_stop_rec.setEnabled(False)
+        self._btn_stop_rec.setStyleSheet(
+            "QPushButton { background: #d32f2f; }"
+            "QPushButton:hover { background: #e53935; }"
+            "QPushButton:disabled { background: #3a3a3a; color: #666; }"
+        )
         hbox.addWidget(self._btn_record)
         hbox.addWidget(self._btn_stop_rec)
         hbox.addSpacing(16)
 
         # 播放控制
-        self._btn_rewind = ToolButton(FluentIcon.SKIP_BACK)
+        self._btn_rewind = QToolButton()
+        self._btn_rewind.setText("⏪")
         self._btn_rewind.setToolTip("后退 10 帧")
-        self._btn_step_back = ToolButton(FluentIcon.CARE_LEFT_SOLID)
+        self._btn_step_back = QToolButton()
+        self._btn_step_back.setText("◀")
         self._btn_step_back.setToolTip("上一帧")
-        self._btn_play = ToolButton(FluentIcon.PLAY)
+        self._btn_play = QToolButton()
+        self._btn_play.setText("▶")
         self._btn_play.setToolTip("播放")
-        self._btn_step_fwd = ToolButton(FluentIcon.CARE_RIGHT_SOLID)
+        self._btn_step_fwd = QToolButton()
+        self._btn_step_fwd.setText("⏭")
         self._btn_step_fwd.setToolTip("下一帧")
-        self._btn_ff = ToolButton(FluentIcon.SKIP_FORWARD)
+        self._btn_ff = QToolButton()
+        self._btn_ff.setText("⏩")
         self._btn_ff.setToolTip("快进")
 
         self._btn_rewind.clicked.connect(self._on_rewind)
@@ -194,14 +210,16 @@ class MainWindow(FluentWindow):
         hbox.addSpacing(16)
 
         # 导出
-        self._btn_export = ToolButton(FluentIcon.SHARE)
+        self._btn_export = QToolButton()
+        self._btn_export.setText("📤")
         self._btn_export.setToolTip("导出")
         self._btn_export.clicked.connect(self._on_export)
         self._btn_export.setEnabled(False)
         hbox.addWidget(self._btn_export)
 
         # 裁剪
-        self._btn_crop = ToolButton(FluentIcon.CLIPPING_TOOL)
+        self._btn_crop = QToolButton()
+        self._btn_crop.setText("✂")
         self._btn_crop.setToolTip("裁剪模式")
         self._btn_crop.setCheckable(True)
         self._btn_crop.toggled.connect(self._on_crop_toggled)
@@ -209,7 +227,8 @@ class MainWindow(FluentWindow):
         hbox.addWidget(self._btn_crop)
 
         # 添加音频
-        self._btn_add_audio = ToolButton(FluentIcon.MUSIC)
+        self._btn_add_audio = QToolButton()
+        self._btn_add_audio.setText("🎵")
         self._btn_add_audio.setToolTip("添加额外音频")
         self._btn_add_audio.clicked.connect(self._on_add_audio)
         self._btn_add_audio.setEnabled(False)
@@ -245,7 +264,8 @@ class MainWindow(FluentWindow):
         sb.setFixedHeight(28)
         hbox = QHBoxLayout(sb)
         hbox.setContentsMargins(16, 0, 16, 0)
-        self._status_label = CaptionLabel("● 准备就绪")
+        self._status_label = QLabel("● 准备就绪")
+        self._status_label.setStyleSheet("color: #999;")
         hbox.addWidget(self._status_label)
         hbox.addStretch()
         layout.addWidget(sb)
@@ -255,13 +275,11 @@ class MainWindow(FluentWindow):
         dialog = SettingsDialog(self.config, self)
         if dialog.exec_() == SettingsDialog.Accepted:
             self._compositor.fps = self.config.default_fps
-            # 录制过程中修改帧率会抛出 RuntimeError，捕获并弹窗提示而非闪退
             if self._is_recording:
-                InfoBar.warning(
-                    title="设置未完全应用",
-                    content="录制过程中无法修改帧率，将在下次录制时生效",
-                    orient=Qt.Horizontal, isClosable=True,
-                    position=InfoBarPosition.TOP_RIGHT, duration=4000, parent=self,
+                self._show_notification(
+                    "设置未完全应用",
+                    "录制过程中无法修改帧率，将在下次录制时生效",
+                    "warning",
                 )
             else:
                 self._recorder.set_target_fps(self.config.default_fps)
@@ -299,18 +317,53 @@ class MainWindow(FluentWindow):
     # ── 导航 ──────────────────────────────────────────────
 
     def _setup_navigation(self):
-        self.addSubInterface(
-            self._editor_interface, FluentIcon.EDIT, "编辑")
-        self.addSubInterface(
-            self._project_interface, FluentIcon.FOLDER, "项目文件")
-        self.navigationInterface.addItem(
-            routeKey="settings",
-            icon=FluentIcon.SETTING,
-            text="设置",
-            onClick=self._on_open_settings,
-            selectable=False,
-            position=NavigationItemPosition.BOTTOM,
-        )
+        # 工具栏
+        self._nav_toolbar = QToolBar("导航")
+        self._nav_toolbar.setMovable(False)
+        self._nav_toolbar.setFloatable(False)
+        self.addToolBar(self._nav_toolbar)
+
+        self._nav_edit_action = QAction("编辑", self)
+        self._nav_edit_action.setCheckable(True)
+        self._nav_edit_action.setChecked(True)
+        self._nav_edit_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._editor_interface))
+        self._nav_toolbar.addAction(self._nav_edit_action)
+
+        self._nav_project_action = QAction("项目文件", self)
+        self._nav_project_action.setCheckable(True)
+        self._nav_project_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._project_interface))
+        self._nav_toolbar.addAction(self._nav_project_action)
+
+        # 互斥切换
+        self._nav_edit_action.triggered.connect(lambda: self._nav_project_action.setChecked(False))
+        self._nav_project_action.triggered.connect(lambda: self._nav_edit_action.setChecked(False))
+
+        # 设置按钮放在右侧
+        spacer = QWidget()
+        spacer.setSizePolicy(QWidget().sizePolicy().horizontalPolicy().Expanding,
+                            QWidget().sizePolicy().verticalPolicy().Preferred)
+        self._nav_toolbar.addWidget(spacer)
+        settings_action = QAction("⚙ 设置", self)
+        settings_action.triggered.connect(self._on_open_settings)
+        self._nav_toolbar.addAction(settings_action)
+
+        # 堆叠页面
+        self._stacked_widget = QStackedWidget()
+        self._stacked_widget.addWidget(self._editor_interface)
+        self._stacked_widget.addWidget(self._project_interface)
+        self.setCentralWidget(self._stacked_widget)
+
+        # 状态栏
+        self.setStatusBar(QStatusBar())
+
+        # 页面切换时同步导航状态
+        self._stacked_widget.currentChanged.connect(self._on_nav_page_changed)
+
+    def _on_nav_page_changed(self, index):
+        """页面切换时更新导航按钮状态"""
+        is_editor = (self._stacked_widget.currentWidget() == self._editor_interface)
+        self._nav_edit_action.setChecked(is_editor)
+        self._nav_project_action.setChecked(not is_editor)
 
     # ── 系统托盘 ──────────────────────────────────────────
 
@@ -364,13 +417,7 @@ class MainWindow(FluentWindow):
         except Exception as exc:
             self.set_recording_state(False)
             self.update_status("● 录制启动失败")
-            InfoBar.error(
-                title="无法开始录制",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=5000, parent=self,
-            )
+            self._show_notification("无法开始录制", str(exc), "error")
             return
         self.update_status("● 录制中...")
 
@@ -381,13 +428,7 @@ class MainWindow(FluentWindow):
             self._recorded_data = None
             self.set_recording_state(False)
             self.update_status("● 录制失败")
-            InfoBar.error(
-                title="录制失败",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT,
-                duration=5000, parent=self,
-            )
+            self._show_notification("录制失败", str(exc), "error")
             return
         if self._recorded_data and self._recorded_data.get("frames"):
             self._compositor.load_frames(self._recorded_data["frames"])
@@ -456,11 +497,10 @@ class MainWindow(FluentWindow):
         """自动导出完成后创建项目"""
         if not result.success:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            InfoBar.warning(
-                title="自动创建项目失败",
-                content="源视频导出失败，可手动导出后创建项目",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            self._show_notification(
+                "自动创建项目失败",
+                "源视频导出失败，可手动导出后创建项目",
+                "warning",
             )
             return
 
@@ -478,12 +518,7 @@ class MainWindow(FluentWindow):
             self._project_manager.create_project(name, project, result.path)
             self._refresh_project_gallery()
         except Exception as exc:
-            InfoBar.error(
-                title="创建项目失败",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
-            )
+            self._show_notification("创建项目失败", str(exc), "error")
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -574,19 +609,19 @@ class MainWindow(FluentWindow):
             self._create_playback_controller()
             start_frame = int(self._timeline.playhead * self._compositor.fps)
             self._playback.play(start_frame)
-            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif not self._playback._playing:
             self._playback.play(self._playback._current_frame)
-            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif self._playback.is_paused:
             self._playback.pause()
-            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         else:
             self._playback.pause()
-            self._btn_play.setIcon(FluentIcon.PLAY)
+            self._btn_play.setText("▶")
             self._btn_play.setToolTip("继续播放")
 
     def _create_playback_controller(self):
@@ -627,7 +662,7 @@ class MainWindow(FluentWindow):
             return
         self._playback.fast_forward()
         if not self._playback.is_paused:
-            self._btn_play.setIcon(FluentIcon.CANCEL)
+            self._btn_play.setText("⏸")
 
     def _update_frame_counter(self, idx: int):
         total = self._playback.total_frames
@@ -784,11 +819,8 @@ class MainWindow(FluentWindow):
 
     def _on_export(self):
         if not self._recorded_data:
-            InfoBar.warning(
-                title="无法导出",
-                content="请先录制一段视频",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            self._show_notification(
+                "无法导出", "请先录制一段视频", "warning",
             )
             return
         dialog = ExportDialog(self, self.config.recordings_dir,
@@ -796,11 +828,8 @@ class MainWindow(FluentWindow):
         if dialog.exec_() != ExportDialog.Accepted:
             return
         if not dialog.output_path:
-            InfoBar.warning(
-                title="未选择保存路径",
-                content="请选择文件保存位置",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            self._show_notification(
+                "未选择保存路径", "请选择文件保存位置", "warning",
             )
             return
         is_gif = dialog.export_format == "gif"
@@ -854,18 +883,6 @@ class MainWindow(FluentWindow):
         self._progress.setWindowModality(Qt.WindowModal)
         self._progress.setAutoClose(True)
         self._progress.setAutoReset(True)
-        self._progress.setStyleSheet("""
-            QProgressDialog { background: #1e1e1e; color: white; min-width: 360px; }
-            QProgressBar {
-                border: 1px solid #323232; border-radius: 4px;
-                background: #2d2d2d; text-align: center; color: white;
-            }
-            QProgressBar::chunk { background: #0078D4; border-radius: 3px; }
-            QLabel { color: #ccc; font-size: 13px; }
-            QPushButton { color: white; background: #323232; border: none;
-                          padding: 4px 16px; border-radius: 4px; }
-            QPushButton:hover { background: #424242; }
-        """)
 
         self._export_worker.progress.connect(self._progress.setValue)
         self._progress.canceled.connect(self._cancel_export)
@@ -884,19 +901,17 @@ class MainWindow(FluentWindow):
 
         if result.success:
             self.update_status("● 导出完成")
-            InfoBar.success(
-                title="导出完成",
-                content=f"视频已保存到:\n{result.path}\n({result.size_bytes/1024/1024:.1f}MB)",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            self._show_notification(
+                "导出完成",
+                f"视频已保存到:\n{result.path}\n({result.size_bytes/1024/1024:.1f}MB)",
+                "success",
             )
         else:
             self.update_status("● 导出失败")
-            InfoBar.error(
-                title="导出失败",
-                content=result.error or "未知错误",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            self._show_notification(
+                "导出失败",
+                result.error or "未知错误",
+                "error",
             )
 
     # ── 额外音频 ────────────────────────────────────────────
@@ -910,11 +925,10 @@ class MainWindow(FluentWindow):
 
         duration_s = self._get_audio_duration(path)
         if duration_s <= 0:
-            InfoBar.warning(
-                title="无法读取音频",
-                content=f"无法获取文件时长: {os.path.basename(path)}",
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            self._show_notification(
+                "无法读取音频",
+                f"无法获取文件时长: {os.path.basename(path)}",
+                "warning",
             )
             return
 
@@ -939,11 +953,10 @@ class MainWindow(FluentWindow):
         self._audio_regions.append(region)
         self._update_audio_timeline()
 
-        InfoBar.success(
-            title="已添加音频",
-            content=f"{region.name} ({duration_s:.1f}s)",
-            orient=Qt.Horizontal, isClosable=True,
-            position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+        self._show_notification(
+            "已添加音频",
+            f"{region.name} ({duration_s:.1f}s)",
+            "success",
         )
 
     def _get_audio_duration(self, filepath: str) -> float:
@@ -1009,21 +1022,15 @@ class MainWindow(FluentWindow):
         try:
             project = self._project_manager.open_project(path)
         except Exception as exc:
-            InfoBar.error(
-                title="打开项目失败",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
-            )
+            self._show_notification("打开项目失败", str(exc), "error")
             return
 
         # TODO: 从 project.source.video 解码帧到 compositor
         # 当前视频帧解码到 Compositor（load_video 方法）是独立功能，本次不实现。
-        InfoBar.info(
-            title="项目已加载",
-            content="项目已加载，但视频帧解码功能尚未实现",
-            orient=Qt.Horizontal, isClosable=True,
-            position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+        self._show_notification(
+            "项目已加载",
+            "项目已加载，但视频帧解码功能尚未实现",
+            "info",
         )
 
         # 加载时间线
@@ -1050,7 +1057,7 @@ class MainWindow(FluentWindow):
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
         # 切换到编辑器界面
-        self.switchTo(self._editor_interface)
+        self._stacked_widget.setCurrentWidget(self._editor_interface)
         self.update_status(f"● 已打开项目: {project.name}")
 
     def _on_project_deleted(self, path: str):
@@ -1059,12 +1066,7 @@ class MainWindow(FluentWindow):
             self._project_manager.delete_project(path)
             self._refresh_project_gallery()
         except Exception as exc:
-            InfoBar.error(
-                title="删除项目失败",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
-            )
+            self._show_notification("删除项目失败", str(exc), "error")
 
     def _on_project_renamed(self, path: str, new_name: str):
         """重命名项目并刷新画廊"""
@@ -1072,12 +1074,7 @@ class MainWindow(FluentWindow):
             self._project_manager.rename_project(path, new_name)
             self._refresh_project_gallery()
         except Exception as exc:
-            InfoBar.error(
-                title="重命名项目失败",
-                content=str(exc),
-                orient=Qt.Horizontal, isClosable=True,
-                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
-            )
+            self._show_notification("重命名项目失败", str(exc), "error")
 
     def _on_save_project(self):
         self.update_status("● 保存项目...")

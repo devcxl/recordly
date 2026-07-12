@@ -83,7 +83,7 @@ def test_recording_duration_prefers_capture_timestamps_over_frame_count():
     assert MainWindow._get_recording_duration(window) == 10.0
 
 
-def test_recording_start_error_restores_idle_state(monkeypatch):
+def test_recording_start_error_restores_idle_state():
     import app.main_window as main_window_module
 
     errors = []
@@ -102,10 +102,9 @@ def test_recording_start_error_restores_idle_state(monkeypatch):
         def update_status(self, text):
             self.status = text
 
-    monkeypatch.setattr(
-        main_window_module.InfoBar, "error",
-        lambda **kwargs: errors.append(kwargs),
-    )
+        def _show_notification(self, title, content, level):
+            errors.append({"title": title, "content": content, "level": level})
+
     window = FakeWindow()
 
     main_window_module.MainWindow._on_recording_started(window)
