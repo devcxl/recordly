@@ -182,6 +182,10 @@ class Project:
     def __init__(self):
         self.version = self.VERSION
         self.created_at = datetime.now().isoformat()
+        self.name: str = ""
+        self.modified_at: str = ""
+        self.duration: float = 0.0
+        self.thumbnail_path: str = ""
         self.source: Optional[SourceInfo] = None
         self.timeline: list[Track] = []
         self.cursor = CursorSettings()
@@ -196,6 +200,10 @@ class Project:
         data = {
             "version": self.version,
             "created_at": self.created_at,
+            "name": self.name,
+            "modified_at": datetime.now().isoformat(),
+            "duration": self.duration,
+            "thumbnail_path": self.thumbnail_path,
             "source": asdict(self.source) if self.source else None,
             "timeline": [asdict(t) for t in self.timeline],
             "cursor": asdict(self.cursor),
@@ -217,6 +225,10 @@ class Project:
         proj = cls()
         proj.version = data.get("version", "1.0")
         proj.created_at = data.get("created_at", "")
+        proj.name = data.get("name", "")
+        proj.modified_at = data.get("modified_at", "")
+        proj.duration = data.get("duration", 0.0)
+        proj.thumbnail_path = data.get("thumbnail_path", "")
         if data.get("source"):
             proj.source = SourceInfo(**data["source"])
         proj.timeline = [Track(**t) for t in data.get("timeline", [])]
