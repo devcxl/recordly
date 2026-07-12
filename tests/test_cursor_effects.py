@@ -1,7 +1,7 @@
 """测试光标特效 — core/cursor_effects.py"""
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 from core.compositor import Effect, CompositorContext
 from core.cursor_effects import CursorEffect
 
@@ -17,6 +17,18 @@ class TestCursorEffectConfig:
         assert effect.enabled["ripple"] is True
         assert effect.enabled["blur"] is False
         assert effect.enabled["sway"] is False
+        assert effect.cursor_style == "dot"
+
+    def test_constructor_preserves_theme_and_style(self):
+        effect = CursorEffect(cursor_theme="light", cursor_style="ring")
+
+        assert effect.cursor_theme == "light"
+        assert effect.cursor_style == "ring"
+
+    def test_supported_cursor_styles(self):
+        assert CursorEffect.CURSOR_STYLES == (
+            "dot", "ring", "spotlight", "arrow",
+        )
 
     def test_preview_mode_reduces_trail(self):
         effect = CursorEffect(cursor_size=24)
@@ -46,6 +58,26 @@ class TestCursorEffectApply:
         result = effect.apply(Image.new("RGBA", (320, 240), (0, 0, 0, 255)), ctx)
         assert isinstance(result, Image.Image)
         assert result.size == (320, 240)
+
+    def test_apply_does_not_allocate_full_frame_effect_overlays(self, monkeypatch):
+        import core.cursor_effects as cursor_module
+
+        effect = CursorEffect(cursor_size=32)
+        frame = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
+        ctx = self._make_context(x=160, y=120)
+        original_new = cursor_module.Image.new
+        full_frame_allocations = []
+
+        def tracked_new(mode, size, *args, **kwargs):
+            if size == frame.size:
+                full_frame_allocations.append(size)
+            return original_new(mode, size, *args, **kwargs)
+
+        monkeypatch.setattr(cursor_module.Image, "new", tracked_new)
+
+        effect.apply(frame, ctx)
+
+        assert full_frame_allocations == []
 
     def test_mouse_movement_draws_cursor(self):
         effect = CursorEffect()
@@ -79,6 +111,20 @@ class TestCursorEffectApply:
                         if result2.getpixel((x, y))[3] > 0)
         assert px_single > 0
 
+    def test_trail_stores_transformed_cursor_coordinates(self):
+        effect = CursorEffect()
+        effect.enabled["smooth"] = False
+        effect.enabled["ripple"] = False
+        effect.enabled["sway"] = False
+        ctx = self._make_context(x=80, y=60)
+        ctx.raw_cursor_x = 10
+        ctx.raw_cursor_y = 20
+        ctx.zoom_rect = (0, 0, 50, 50)
+
+        effect.apply(Image.new("RGBA", (320, 240)), ctx)
+
+        assert effect._trail[-1] == (80, 60)
+
     def test_click_ripple(self):
         effect = CursorEffect()
         effect.enabled["smooth"] = False
@@ -93,6 +139,56 @@ class TestCursorEffectApply:
 
         px = result.getpixel((160, 60))
         assert px[3] > 0
+
+    @pytest.mark.parametrize("style", CursorEffect.CURSOR_STYLES)
+    def test_each_cursor_style_renders(self, style):
+        effect = CursorEffect(cursor_size=40, cursor_style=style)
+        image = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+
+        effect._draw_cursor(image, 50, 50)
+
+        assert image.getbbox() is not None
+
+    def test_cursor_styles_have_distinct_shapes(self):
+        rendered = []
+        for style in CursorEffect.CURSOR_STYLES:
+            effect = CursorEffect(cursor_size=40, cursor_style=style)
+            image = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+            effect._draw_cursor(image, 50, 50)
+            rendered.append(image.tobytes())
+
+        assert len(set(rendered)) == len(CursorEffect.CURSOR_STYLES)
+
+    def test_click_draws_two_ripple_rings(self):
+        effect = CursorEffect()
+        effect.ripple_duration = 0.5
+        overlay = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        effect._draw_ripples(draw, [(60, 60, 0.0)], 0.25)
+
+        horizontal_alpha = [overlay.getpixel((x, 60))[3]
+                            for x in range(60, 110)]
+        ring_runs = 0
+        inside_ring = False
+        for alpha in horizontal_alpha:
+            if alpha and not inside_ring:
+                ring_runs += 1
+                inside_ring = True
+            elif not alpha:
+                inside_ring = False
+        assert ring_runs >= 2
+
+    def test_ripple_fades_over_time(self):
+        effect = CursorEffect()
+
+        def max_alpha(timestamp):
+            overlay = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+            effect._draw_ripples(
+                ImageDraw.Draw(overlay), [(60, 60, 0.0)], timestamp)
+            return max(pixel[3] for pixel in overlay.getdata())
+
+        assert max_alpha(0.1) > max_alpha(0.45)
 
     def test_smooth_reduces_jitter(self):
         effect = CursorEffect()

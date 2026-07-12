@@ -25,6 +25,22 @@ class TestCapturedFrame:
 
 
 class TestScreenCapture:
+    def test_disk_store_keeps_more_than_legacy_600_frame_limit(self):
+        from core.screen_capture import ScreenCapture
+
+        sc = ScreenCapture()
+        for index in range(650):
+            data = np.full((4, 6, 3), index % 255, dtype=np.uint8)
+            sc._store_frame(data, timestamp=index / 60, index=index)
+
+        frames = sc.all_frames
+
+        assert len(frames) == 650
+        assert frames[0].index == 0
+        assert frames[-1].index == 649
+        assert np.allclose(frames[-1].data, 649 % 255, atol=3)
+        sc.clear()
+
     def test_importable(self):
         from core.screen_capture import ScreenCapture
         assert ScreenCapture is not None
@@ -56,3 +72,11 @@ class TestScreenCapture:
         from core.screen_capture import ScreenCapture
         sc = ScreenCapture()
         sc.clear()  # should not raise
+
+    def test_stop_before_start_is_safe(self):
+        from core.screen_capture import ScreenCapture
+
+        sc = ScreenCapture()
+        sc.stop()
+
+        assert sc.error is None

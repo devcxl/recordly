@@ -10,7 +10,7 @@ class TestProject:
     def test_create_default_project(self):
         """默认项目有正确的初始值"""
         p = Project()
-        assert p.version == "1.0"
+        assert p.version == "1.1"
         assert p.timeline == []
         assert p.source is None
         assert isinstance(p.cursor, CursorSettings)
@@ -43,7 +43,7 @@ class TestProject:
             # 验证文件内容
             with open(path) as f:
                 data = json.load(f)
-            assert data["version"] == "1.0"
+            assert data["version"] == "1.1"
             assert len(data["timeline"]) == 2
             assert data["source"]["fps"] == 30
             assert data["cursor"]["style"] == "macos-dark"
@@ -51,7 +51,7 @@ class TestProject:
 
             # 加载验证
             loaded = Project.load(path)
-            assert loaded.version == "1.0"
+            assert loaded.version == "1.1"
             assert loaded.source.fps == 30
             assert loaded.source.width == 1920
             assert len(loaded.timeline) == 2
@@ -93,7 +93,7 @@ class TestProject:
         try:
             p.save(path)
             loaded = Project.load(path)
-            assert loaded.version == "1.0"
+            assert loaded.version == "1.1"
         finally:
             os.unlink(path)
 
@@ -127,3 +127,41 @@ class TestSourceInfo:
                        width=3840, height=2160)
         assert s.video == "rec.mp4"
         assert s.width == 3840
+
+
+class TestAudioRegionSync:
+    def test_tracks_move_delete_and_split(self):
+        from core.project import (
+            AudioRegion, sync_audio_regions_from_clips,
+        )
+
+        original = AudioRegion(
+            id="audio-1", start_ms=0, end_ms=4000,
+            source_start_ms=0, source_end_ms=4000,
+            audio_path="/tmp/music.wav", volume=0.5, name="music.wav",
+        )
+        moved = Clip(
+            id="audio-1", type="audio_extra",
+            start=2.0, end=4.0,
+            source_start=0.0, source_end=2.0,
+            source_path="/tmp/music.wav", volume=0.5,
+            content="music.wav",
+        )
+        split = Clip(
+            id="audio-2", type="audio_extra",
+            start=4.0, end=6.0,
+            source_start=2.0, source_end=4.0,
+            source_path="/tmp/music.wav", volume=0.5,
+            content="music.wav",
+        )
+
+        synced = sync_audio_regions_from_clips([moved, split], [original])
+
+        assert [region.id for region in synced] == ["audio-1", "audio-2"]
+        assert synced[0].start_ms == 2000
+        assert synced[0].end_ms == 4000
+        assert synced[1].source_start_ms == 2000
+        assert synced[1].source_end_ms == 4000
+
+        after_delete = sync_audio_regions_from_clips([split], synced)
+        assert [region.id for region in after_delete] == ["audio-2"]

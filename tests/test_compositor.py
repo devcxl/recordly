@@ -1,9 +1,11 @@
 """测试合成器 — core/compositor.py"""
 
 import numpy as np
+import pytest
 from PIL import Image
 from core.compositor import Compositor, Effect, CompositorContext, CapturedFrame
 from core.screen_capture import CapturedFrame
+from core.project import Clip
 
 
 class TestCompositorInit:
@@ -76,6 +78,102 @@ class TestCompositorZoom:
         # load_frames 覆盖了 compositor 的尺寸
         assert result.size == (320, 240)
 
+    def test_zoom_timeline_is_authoritative_over_camera(self):
+        from core.project import Clip
+
+        class AlwaysZoomCamera:
+            def sample(self, _time_ms):
+                return (0.5, 0.5, 2.0)
+
+        c = Compositor(200, 100, 30)
+        c.load_camera(AlwaysZoomCamera())
+        clip = Clip(
+            type="zoom", start=1.0, end=4.0,
+            rect=[50, 25, 100, 50], transition_duration=0.4,
+        )
+        c.load_manual_zoom_clips([clip])
+        assert c._get_zoom_at(2.0) == (50, 25, 100, 50)
+
+        clip.start = 5.0
+        clip.end = 8.0
+        c.load_manual_zoom_clips([clip])
+
+        assert c._get_zoom_at(2.0) is None
+
+    def test_zoom_rect_edit_changes_rendered_region(self):
+        from core.project import Clip
+
+        c = Compositor(200, 100, 30)
+        clip = Clip(
+            type="zoom", start=0.0, end=3.0,
+            rect=[20, 10, 80, 40], transition_duration=0.2,
+        )
+        c.load_manual_zoom_clips([clip])
+        assert c._get_zoom_at(1.0) == (20, 10, 80, 40)
+
+        clip.rect = [100, 50, 60, 30]
+        c.load_manual_zoom_clips([clip])
+
+        assert c._get_zoom_at(1.0) == (100, 50, 60, 30)
+
+    def test_compositor_preserves_requested_zoom_aspect(self):
+        from core.project import Clip
+
+        c = Compositor(200, 100, 30)
+        frame = CapturedFrame(
+            data=np.zeros((100, 200, 3), dtype=np.uint8),
+            timestamp=0.0, index=0,
+        )
+        c.load_frames([frame])
+        c.load_manual_zoom_clips([Clip(
+            type="zoom", start=0.0, end=2.0,
+            rect=[20, 10, 50, 80], transition_duration=0.1,
+        )])
+        captured = {}
+
+        class CaptureZoom(Effect):
+            def apply(self, image, ctx):
+                captured["zoom"] = ctx.zoom_rect
+                return image
+
+        c.register_effect("capture", CaptureZoom())
+        c.compose(frame, timeline_ts=1.0)
+
+        assert captured["zoom"] == (20, 10, 50, 80)
+
+    def test_zoom_clip_eases_from_full_frame(self):
+        from core.project import Clip
+
+        c = Compositor(200, 100, 30)
+        c.load_manual_zoom_clips([Clip(
+            type="zoom", start=1.0, end=4.0,
+            rect=[50, 25, 100, 50], transition_duration=1.0,
+        )])
+
+        assert c._get_zoom_at(1.0) == (0, 0, 200, 100)
+        halfway = c._get_zoom_at(1.5)
+        assert halfway not in ((0, 0, 200, 100), (50, 25, 100, 50))
+        assert c._get_zoom_at(2.0) == (50, 25, 100, 50)
+
+    def test_adjacent_zoom_clips_pan_once_without_boundary_jump(self):
+        from core.project import Clip
+
+        first_rect = (10, 10, 100, 50)
+        second_rect = (80, 40, 100, 50)
+        c = Compositor(200, 100, 30)
+        c.load_manual_zoom_clips([
+            Clip(type="zoom", start=0.0, end=2.0,
+                 rect=list(first_rect), transition_duration=0.4),
+            Clip(type="zoom", start=2.0, end=5.0,
+                 rect=list(second_rect), transition_duration=0.4),
+        ])
+
+        assert c._get_zoom_at(1.99) == first_rect
+        assert c._get_zoom_at(2.0) == first_rect
+        halfway = c._get_zoom_at(2.2)
+        assert halfway not in (first_rect, second_rect)
+        assert c._get_zoom_at(2.4) == second_rect
+
 
 class TestCompositorEffects:
     def test_register_effect(self):
@@ -116,6 +214,36 @@ class TestCompositorEffects:
         px = result.convert("RGB").getpixel((0, 0))
         assert px == (255, 255, 255)
 
+    def test_crop_transforms_cursor_and_click_coordinates(self):
+        from types import SimpleNamespace
+        from core.project import CropRegion
+
+        c = Compositor(100, 100, 10)
+        frame = CapturedFrame(
+            data=np.zeros((100, 100, 3), dtype=np.uint8),
+            timestamp=10.0, index=0,
+        )
+        c.load_frames([frame])
+        c.load_cursor_events([
+            SimpleNamespace(timestamp=10.0, x=75, y=50),
+        ], [
+            SimpleNamespace(timestamp=10.0, x=75, y=50),
+        ])
+        c.set_crop(CropRegion(x=0.5, y=0.0, width=0.5, height=1.0))
+        captured = {}
+
+        class CaptureContext(Effect):
+            def apply(self, image, ctx):
+                captured["cursor"] = (ctx.cursor_x, ctx.cursor_y)
+                captured["clicks"] = ctx.click_events
+                return image
+
+        c.register_effect("capture", CaptureContext())
+        c.compose(frame)
+
+        assert captured["cursor"] == (50, 50)
+        assert captured["clicks"][0][:2] == (50, 50)
+
 
 class TestCompositorRenderAll:
     def test_render_all_yields_frames(self):
@@ -141,6 +269,62 @@ class TestCompositorRenderAll:
         results = list(c.render_all(start=2, end=7))
         assert len(results) == 5
 
+    def test_render_uses_clip_source_range_and_speed(self):
+        from core.project import Clip
+
+        c = Compositor(1, 1, 1)
+        frames = [
+            CapturedFrame(
+                data=np.full((1, 1, 3), i, dtype=np.uint8),
+                timestamp=float(i), index=i,
+            )
+            for i in range(10)
+        ]
+        c.load_frames(frames)
+        c.load_clips([Clip(
+            type="video", start=0.0, end=2.0,
+            source_start=2.0, source_end=6.0, speed=2.0,
+        )])
+
+        rendered = list(c.render_all())
+
+        assert len(rendered) == 2
+        assert [frame.convert("RGB").getpixel((0, 0))[0]
+                for frame in rendered] == [2, 4]
+
+    def test_render_preserves_timeline_gaps_as_black_frames(self):
+        from core.project import Clip
+
+        c = Compositor(1, 1, 1)
+        frames = [CapturedFrame(
+            data=np.full((1, 1, 3), 100, dtype=np.uint8),
+            timestamp=float(i), index=i,
+        ) for i in range(3)]
+        c.load_frames(frames)
+        c.load_clips([Clip(
+            type="video", start=1.0, end=3.0,
+            source_start=0.0, source_end=2.0,
+        )])
+
+        rendered = list(c.render_all())
+
+        assert len(rendered) == 3
+        assert rendered[0].convert("RGB").getpixel((0, 0)) == (0, 0, 0)
+        assert rendered[1].convert("RGB").getpixel((0, 0)) == (100, 100, 100)
+
+    def test_explicit_empty_video_timeline_renders_nothing(self):
+        c = Compositor(10, 10, 1)
+        c.load_frames([CapturedFrame(
+            data=np.full((10, 10, 3), 100, dtype=np.uint8),
+            timestamp=0.0, index=0,
+        )])
+
+        c.load_clips([])
+
+        assert c.total_output_frames == 0
+        assert list(c.render_all()) == []
+        assert c.compose_index(0) is None
+
 
 class TestCompositorPreviewQuality:
     def test_set_get_quality(self):
@@ -154,6 +338,60 @@ class TestCompositorPreviewQuality:
         assert c.get_preview_quality() == 0.1
         c.set_preview_quality(2.0)
         assert c.get_preview_quality() == 1.0
+
+    def test_preview_uses_fast_filter_but_export_keeps_lanczos(self):
+        c = Compositor(320, 240, 30)
+        c.set_preview_quality(0.5)
+
+        assert c._resize_filter(preview=True) == Image.BILINEAR
+        assert c._resize_filter(preview=False) == Image.LANCZOS
+
+        c.set_preview_quality(0.9)
+        assert c._resize_filter(preview=True) == Image.BICUBIC
+
+    def test_preview_crop_uses_opencv_fast_path(self, monkeypatch):
+        import core.compositor as compositor_module
+
+        calls = []
+
+        def fake_resize(array, size, interpolation):
+            calls.append((array.shape, size, interpolation))
+            return np.zeros((size[1], size[0], array.shape[2]), dtype=np.uint8)
+
+        monkeypatch.setattr(compositor_module.cv2, "resize", fake_resize)
+        c = Compositor(320, 240, 60)
+        image = Image.new("RGB", (320, 240), "black")
+
+        result = c._resize_crop(image, (40, 30, 280, 210), preview=True)
+
+        assert calls[0][1] == (320, 240)
+        assert result.size == (320, 240)
+
+
+class TestTimestampBasedTiming:
+    def test_source_duration_uses_capture_timestamps_not_target_fps(self):
+        c = Compositor(1, 1, 60)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 40,
+            index=i,
+        ) for i in range(400)]
+
+        c.load_frames(frames)
+
+        assert c.source_duration == pytest.approx(10.0, abs=0.001)
+
+    def test_source_lookup_uses_nearest_timestamp_at_60fps(self):
+        c = Compositor(1, 1, 60)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 40,
+            index=i,
+        ) for i in range(400)]
+        c.load_frames(frames)
+        c.load_clips([Clip(type="video", start=0, end=10)])
+
+        assert c._source_index_at(5.0) == 200
 
 
 class TestCapturedFrameDataclass:

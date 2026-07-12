@@ -6,7 +6,7 @@ import pytest
 class TestExportResult:
     def test_fields(self):
         from core.exporter import ExportResult
-        fields = ExportResult.__dataclass_fields__  # pyright: ignore
+        fields = ExportResult.__dataclass_fields__
         assert 'success' in fields
         assert 'path' in fields
         assert 'duration' in fields
@@ -41,7 +41,7 @@ class TestExportResult:
 class TestExportSettings:
     def test_fields(self):
         from core.exporter import ExportSettings
-        fields = ExportSettings.__dataclass_fields__  # pyright: ignore
+        fields = ExportSettings.__dataclass_fields__
         assert 'output_path' in fields
         assert 'format' in fields
         assert 'fps' in fields
@@ -61,20 +61,94 @@ class TestExportSettings:
         assert s.fps == 15
         assert s.width == 640
 
+    def test_aspect_ratio_default(self):
+        from core.exporter import ExportSettings
+        s = ExportSettings(output_path="out.mp4")
+        assert s.aspect_ratio == "native"
+        assert s.quality == 1.0
+        assert s.loop is True
 
-class TestExporter:
+    def test_extra_fields(self):
+        from core.exporter import ExportSettings
+        s = ExportSettings(output_path="out.mp4", aspect_ratio="16:9", quality=0.75, loop=False)
+        assert s.aspect_ratio == "16:9"
+        assert s.quality == 0.75
+        assert s.loop is False
+
+
+class TestExportWorker:
     def test_importable(self):
-        from core.exporter import Exporter
-        assert Exporter is not None
+        from core.exporter import ExportWorker
+        assert ExportWorker is not None
 
-    def test_can_instantiate(self):
-        from core.exporter import Exporter
-        e = Exporter()
-        assert hasattr(e, 'progress')
-        assert hasattr(e, 'finished')
-        assert hasattr(e, 'cancel')
+    def test_has_signals(self):
+        from core.exporter import ExportWorker
+        assert hasattr(ExportWorker, 'progress')
+        assert hasattr(ExportWorker, 'finished')
 
-    def test_cancel_before_start(self):
-        from core.exporter import Exporter
-        e = Exporter()
-        e.cancel()  # should not raise
+    def test_has_cancel(self):
+        from core.exporter import ExportWorker
+        assert hasattr(ExportWorker, 'cancel')
+
+    def test_audio_mix_trims_sources_and_preserves_timeline(self, monkeypatch):
+        from types import SimpleNamespace
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+        from core.project import AudioRegion, Clip
+
+        compositor = Compositor(320, 240, 30)
+        compositor.load_clips([Clip(
+            type="video", start=2.0, end=4.0,
+            source_start=1.0, source_end=5.0, speed=2.0,
+        )])
+        worker = ExportWorker(
+            compositor, None, ExportSettings(output_path="out.mp4"))
+        region = AudioRegion(
+            id="extra", start_ms=5000, end_ms=7000,
+            source_start_ms=1000, source_end_ms=3000,
+            audio_path="/tmp/music.wav", volume=0.5,
+        )
+        captured = {}
+
+        monkeypatch.setattr("core.exporter.os.path.exists", lambda _path: True)
+        monkeypatch.setattr("core.exporter.tempfile.mktemp",
+                            lambda **_kwargs: "/tmp/mixed.wav")
+
+        def fake_run(cmd, **_kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stderr=b"")
+
+        monkeypatch.setattr("core.exporter.subprocess.run", fake_run)
+
+        result = worker._build_audio_filtergraph(
+            [region], "/tmp/original.wav", 44100, video_duration=8.0)
+
+        filtergraph = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
+        assert result == "/tmp/mixed.wav"
+        assert "atrim=start=1.0:end=5.0" in filtergraph
+        assert "atempo=2" in filtergraph
+        assert "adelay=2000|2000" in filtergraph
+        assert "atrim=start=1.0:end=3.0" in filtergraph
+        assert "volume=0.5" in filtergraph
+        assert "adelay=5000|5000" in filtergraph
+        assert "amix=inputs=2:duration=longest" in filtergraph
+        assert "atrim=duration=8.0" in filtergraph
+
+    def test_gif_graph_connects_palette_and_keeps_source_timing(self):
+        import ffmpeg
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = Compositor(320, 240, 30)
+        worker = ExportWorker(
+            compositor, None,
+            ExportSettings(output_path="out.gif", format="gif", fps=15),
+        )
+
+        graph = worker._build_gif_output(320, 240)
+        command = " ".join(ffmpeg.compile(graph))
+
+        assert "palettegen" in command
+        assert "paletteuse" in command
+        assert "-r 30" in command
+        assert "-r 15" in command

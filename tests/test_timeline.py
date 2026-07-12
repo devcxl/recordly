@@ -55,6 +55,47 @@ class TestTimelineCommands:
         cmd.undo(mock_timeline)
         assert len(mock_timeline._tracks[0].clips) == 1
 
+    def test_split_preserves_source_ranges(self, mock_timeline):
+        from core.commands import SplitClipCommand
+
+        clip = mock_timeline._tracks[0].clips[0]
+        clip.id = "left"
+        clip.source_start = 10.0
+        clip.source_end = 20.0
+        clip.speed = 2.0
+        clip.start = 0.0
+        clip.end = 5.0
+
+        cmd = SplitClipCommand(0, 0, split_time=2.0)
+        cmd.execute(mock_timeline)
+        left, right = mock_timeline._tracks[0].clips
+
+        assert left.source_start == pytest.approx(10.0)
+        assert left.source_end == pytest.approx(14.0)
+        assert right.source_start == pytest.approx(14.0)
+        assert right.source_end == pytest.approx(20.0)
+        assert right.id != left.id
+
+        cmd.undo(mock_timeline)
+        assert clip.source_end == pytest.approx(20.0)
+
+    def test_speed_change_keeps_source_range(self, mock_timeline):
+        from core.commands import ChangeSpeedCommand
+
+        clip = mock_timeline._tracks[0].clips[0]
+        clip.source_start = 4.0
+        clip.source_end = 14.0
+        clip.start = 2.0
+        clip.end = 12.0
+        cmd = ChangeSpeedCommand(0, 0, old_speed=1.0,
+                                 new_speed=2.0, old_end=12.0)
+
+        cmd.execute(mock_timeline)
+
+        assert clip.end == pytest.approx(7.0)
+        assert clip.source_start == pytest.approx(4.0)
+        assert clip.source_end == pytest.approx(14.0)
+
 
 class TestTimelineData:
     def test_track_importable(self):
@@ -108,3 +149,137 @@ class TestTimelineGui:
         w = TimelineWidget()
         w.duration = 120.0
         assert w.duration == 120.0
+
+    def test_duration_expands_timeline_content_width(self, qapp):
+        from ui.timeline import TimelineWidget, TRACK_HEADER_WIDTH
+
+        w = TimelineWidget()
+        w.duration = 120.0
+
+        expected = TRACK_HEADER_WIDTH + int(120.0 * w._pixels_per_sec)
+        assert w.minimumWidth() >= expected
+
+    def test_duration_preserves_short_recordings(self):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 1.25
+
+        assert w.duration == pytest.approx(1.25)
+
+    def test_set_tracks_clears_undo_history(self):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from ui.timeline import TimelineWidget
+        from core.commands import MoveClipCommand
+
+        w = TimelineWidget()
+        w._undo_stack.append(MoveClipCommand(0, 0, 0, 1, 1, 2))
+        w._redo_stack.append(MoveClipCommand(0, 0, 1, 0, 2, 1))
+
+        w.set_tracks([])
+
+        assert w.can_undo is False
+        assert w.can_redo is False
+
+    def test_drag_emits_clips_changed_once(self, qapp):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import TimelineWidget
+        from core.project import Track, Clip
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        changes = []
+        w.clips_changed.connect(lambda: changes.append(True))
+
+        start = QPointF(w._time_to_x(2.0), 40)
+        end = QPointF(w._time_to_x(3.0), 40)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, start,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, end,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseReleaseEvent(QMouseEvent(
+            QEvent.MouseButtonRelease, end,
+            Qt.LeftButton, Qt.NoButton, Qt.NoModifier,
+        ))
+
+        assert w.tracks[0].clips[0].start == pytest.approx(2.0)
+        assert len(changes) == 1
+        assert w.can_undo is True
+
+    def test_empty_zoom_track_can_add_clip_by_double_click(self, qapp):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import TimelineWidget, RULER_HEIGHT, TRACK_HEIGHT
+        from core.project import Track
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[])])
+        emitted = []
+        w.zoom_double_clicked.connect(
+            lambda time_s, clip: emitted.append((time_s, clip)))
+        pos = QPointF(w._time_to_x(3.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert len(emitted) == 1
+        assert emitted[0][0] == pytest.approx(3.0)
+        assert emitted[0][1] is None
+
+    def test_double_click_existing_zoom_emits_that_clip(self, qapp):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import TimelineWidget, RULER_HEIGHT, TRACK_HEIGHT
+        from core.project import Track, Clip
+
+        clip = Clip(type="zoom", start=1.0, end=4.0,
+                    rect=[100, 100, 400, 300])
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[clip])])
+        emitted = []
+        w.zoom_double_clicked.connect(
+            lambda time_s, selected: emitted.append((time_s, selected)))
+        pos = QPointF(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert len(emitted) == 1
+        assert emitted[0][1] is clip
+
+    def test_single_click_zoom_clip_emits_selected_clip(self, qapp):
+        pytest.importorskip("PyQt5.QtWidgets")
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import TimelineWidget, RULER_HEIGHT, TRACK_HEIGHT
+        from core.project import Track, Clip
+
+        clip = Clip(type="zoom", start=1.0, end=4.0,
+                    rect=[100, 100, 400, 200])
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[clip])])
+        selected = []
+        w.zoom_clip_selected.connect(selected.append)
+        pos = QPointF(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert selected == [clip]

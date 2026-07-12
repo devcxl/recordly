@@ -15,6 +15,7 @@ class TestAppConfig:
         assert c.default_fps == 30
         assert c.default_bitrate == "10M"
         assert c.language == "zh_CN"
+        assert c.cursor_style == "dot"
 
     def test_custom_values(self):
         from app.config import AppConfig
@@ -35,3 +36,26 @@ class TestAppConfig:
         from app.config import AppConfig
         c = AppConfig.load()
         assert '~' not in c.recordings_dir
+
+    def test_cursor_style_roundtrips_through_settings(self, monkeypatch):
+        import app.config as config_module
+
+        storage = {}
+
+        class FakeSettings:
+            def __init__(self, *_args):
+                pass
+
+            def value(self, key, default=None):
+                return storage.get(key, default)
+
+            def setValue(self, key, value):
+                storage[key] = value
+
+        monkeypatch.setattr(config_module, "QSettings", FakeSettings)
+        config = config_module.AppConfig(cursor_style="spotlight")
+
+        config.save()
+        loaded = config_module.AppConfig.load()
+
+        assert loaded.cursor_style == "spotlight"
