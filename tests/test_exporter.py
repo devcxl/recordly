@@ -125,10 +125,10 @@ class TestExportWorker:
 
         filtergraph = captured["cmd"][captured["cmd"].index("-filter_complex") + 1]
         assert result == "/tmp/mixed.wav"
-        assert "atrim=start=1.0:end=5.0" in filtergraph
+        assert "atrim=start=2.0:end=4.0" in filtergraph
         assert "atempo=2" in filtergraph
         assert "adelay=2000|2000" in filtergraph
-        assert "atrim=start=1.0:end=3.0" in filtergraph
+        assert "atrim=start=5.0:end=7.0" in filtergraph
         assert "volume=0.5" in filtergraph
         assert "adelay=5000|5000" in filtergraph
         assert "amix=inputs=2:duration=longest" in filtergraph

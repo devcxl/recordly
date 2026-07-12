@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Generator, Callable
 import numpy as np
-import cv2
 from core.screen_capture import CapturedFrame
 
 
@@ -349,10 +348,8 @@ class Compositor:
 
     @property
     def total_output_frames(self) -> int:
-        if self._clips is None:
-            return len(self._frames)
         if not self._clips:
-            return 0
+            return len(self._frames)
         return max(0, math.ceil(max(c.end for c in self._clips) * self.fps))
 
     def _source_index_at(self, timeline_ts: float) -> int | None:
@@ -411,18 +408,8 @@ class Compositor:
 
     def _resize_crop(self, image: Image.Image, box: tuple,
                      preview: bool) -> Image.Image:
-        if not preview:
-            return image.crop(box).resize(
-                (self.width, self.height), self._resize_filter(False))
-        left, top, right, bottom = box
-        source = np.asarray(image)[top:bottom, left:right]
-        interpolation = (
-            cv2.INTER_CUBIC if self._preview_quality >= 0.75
-            else cv2.INTER_LINEAR
-        )
-        resized = cv2.resize(
-            source, (self.width, self.height), interpolation=interpolation)
-        return Image.fromarray(resized)
+        return image.crop(box).resize(
+            (self.width, self.height), self._resize_filter(preview))
 
     def get_preview_quality(self) -> float:
         return self._preview_quality

@@ -312,13 +312,9 @@ class ExportWorker(QObject):
             video_clips = self._compositor._clips
             if video_clips:
                 for clip_no, clip in enumerate(video_clips):
-                    source_end = clip.source_end
-                    if source_end is None:
-                        source_end = clip.source_start + (
-                            clip.end - clip.start) * clip.speed
                     label = f'[v{clip_no}]'
                     chain = (
-                        f'[0:a]atrim=start={clip.source_start}:end={source_end},'
+                        f'[0:a]atrim=start={clip.start}:end={clip.end},'
                         'asetpts=PTS-STARTPTS'
                     )
                     if abs(clip.speed - 1.0) > 0.0001:
@@ -336,11 +332,8 @@ class ExportWorker(QObject):
         for idx, r in region_inputs:
             delay = int(r.start_ms)
             label = f'[m{idx}]'
-            source_start = r.source_start_ms / 1000.0
-            source_end_ms = r.source_end_ms
-            if source_end_ms is None:
-                source_end_ms = r.source_start_ms + (r.end_ms - r.start_ms)
-            source_end = source_end_ms / 1000.0
+            source_start = r.start_ms / 1000.0
+            source_end = r.end_ms / 1000.0
             vol = f',volume={r.volume}' if r.volume != 1.0 else ''
             parts.append(
                 f'[{idx}:a]atrim=start={source_start}:end={source_end},'

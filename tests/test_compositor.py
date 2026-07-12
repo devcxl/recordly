@@ -321,9 +321,16 @@ class TestCompositorRenderAll:
 
         c.load_clips([])
 
-        assert c.total_output_frames == 0
-        assert list(c.render_all()) == []
-        assert c.compose_index(0) is None
+        # 无 clips 时 total_output_frames 返回原始帧数
+        assert c.total_output_frames == 1
+        # render_all 按原始帧数输出黑帧
+        rendered = list(c.render_all())
+        assert len(rendered) == 1
+        assert rendered[0].convert("RGB").getpixel((0, 0)) == (0, 0, 0)
+        # compose_index 返回黑帧而非 None
+        frame = c.compose_index(0)
+        assert frame is not None
+        assert frame.convert("RGB").getpixel((0, 0)) == (0, 0, 0)
 
 
 class TestCompositorPreviewQuality:
@@ -349,23 +356,17 @@ class TestCompositorPreviewQuality:
         c.set_preview_quality(0.9)
         assert c._resize_filter(preview=True) == Image.BICUBIC
 
-    def test_preview_crop_uses_opencv_fast_path(self, monkeypatch):
-        import core.compositor as compositor_module
-
-        calls = []
-
-        def fake_resize(array, size, interpolation):
-            calls.append((array.shape, size, interpolation))
-            return np.zeros((size[1], size[0], array.shape[2]), dtype=np.uint8)
-
-        monkeypatch.setattr(compositor_module.cv2, "resize", fake_resize)
+    def test_preview_crop_uses_pil_resize(self):
         c = Compositor(320, 240, 60)
-        image = Image.new("RGB", (320, 240), "black")
+        image = Image.new("RGB", (480, 360), "black")
+        # 填充一个非黑像素用于验证裁剪正确
+        image.putpixel((40, 30), (255, 0, 0))
 
         result = c._resize_crop(image, (40, 30, 280, 210), preview=True)
 
-        assert calls[0][1] == (320, 240)
         assert result.size == (320, 240)
+        # 预览品质默认 0.5，使用 BILINEAR
+        assert c._resize_filter(preview=True) == Image.BILINEAR
 
 
 class TestTimestampBasedTiming:
