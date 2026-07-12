@@ -106,6 +106,37 @@ class TestProjectManager:
         assert (Path(summary.path) / "thumbnail.png").is_file()
         assert summary.name == "my_project"
 
+    def test_create_project_without_source(self, mgr: ProjectManager,
+                                           tmp_path: Path):
+        """source=None 时 create_project 不崩溃"""
+        source = tmp_path / "source.mp4"
+        source.write_text("fake video content")
+
+        proj = Project()
+        proj.source = None
+        summary = mgr.create_project("no_source", proj, str(source))
+
+        assert Path(summary.path).is_dir()
+        assert (Path(summary.path) / "project.json").is_file()
+        assert summary.name == "no_source"
+
+    def test_create_project_rollback_on_failure(self, mgr: ProjectManager,
+                                                tmp_path: Path):
+        """创建过程中异常应回滚已创建的目录"""
+        source = tmp_path / "source.mp4"
+        source.write_text("fake")
+
+        proj = Project()
+        proj.source = SourceInfo()
+
+        # 让 copy2 抛出异常：源路径不存在
+        with pytest.raises(FileNotFoundError):
+            mgr.create_project("rollback_test", proj, "/nonexistent/source.mp4")
+
+        # 不应有残留目录
+        for child in Path(mgr._projects_dir).iterdir():
+            assert "rollback_test" not in child.name
+
     def test_create_project_preserves_source_content(self, mgr: ProjectManager,
                                                      tmp_path: Path):
         source = tmp_path / "source.mp4"
@@ -149,8 +180,26 @@ class TestProjectManager:
         assert not Path(summary.path).exists()
 
     def test_delete_project_raises_on_missing(self, mgr: ProjectManager):
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ValueError, match="不在项目目录范围内"):
             mgr.delete_project("/nonexistent/path")
+
+    def test_delete_project_raises_on_path_traversal(self, mgr: ProjectManager):
+        """路径穿越应被拒绝"""
+        with pytest.raises(ValueError, match="不在项目目录范围内"):
+            mgr.delete_project("/tmp/somewhere_else")
+
+    def test_delete_project_raises_on_path_traversal_dotdot(self,
+                                                            mgr: ProjectManager,
+                                                            tmp_path: Path):
+        """../ 路径穿越应被拒绝"""
+        source = tmp_path / "source.mp4"
+        source.write_text("fake")
+        proj = Project()
+        proj.source = SourceInfo()
+        summary = mgr.create_project("test", proj, str(source))
+        traversal = str(Path(summary.path) / "../../../etc")
+        with pytest.raises(ValueError, match="不在项目目录范围内"):
+            mgr.delete_project(traversal)
 
     # ── rename_project ───────────────────────────────────
 
@@ -168,8 +217,21 @@ class TestProjectManager:
             data = json.load(f)
         assert data["name"] == "new_name"
 
+    def test_rename_project_raises_on_empty_name(self, mgr: ProjectManager,
+                                                 tmp_path: Path):
+        source = tmp_path / "source.mp4"
+        source.write_text("fake")
+        proj = Project()
+        proj.source = SourceInfo()
+        summary = mgr.create_project("test", proj, str(source))
+
+        with pytest.raises(ValueError, match="项目名称不能为空"):
+            mgr.rename_project(summary.path, "")
+        with pytest.raises(ValueError, match="项目名称不能为空"):
+            mgr.rename_project(summary.path, "   ")
+
     def test_rename_project_raises_on_missing_json(self, mgr: ProjectManager,
-                                                   tmp_path: Path):
+                                                    tmp_path: Path):
         d = tmp_path / "no_json"
         d.mkdir()
         with pytest.raises(FileNotFoundError):

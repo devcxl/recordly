@@ -1,8 +1,10 @@
 """项目管理器 — 目录扫描、CRUD、缩略图生成"""
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -63,32 +65,36 @@ class ProjectManager:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dest_dir = self._projects_dir / f"{timestamp}_{name}"
         dest_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            # 复制源视频
+            source_dest = dest_dir / "source.mp4"
+            shutil.copy2(source_video_path, source_dest)
 
-        # 复制源视频
-        source_dest = dest_dir / "source.mp4"
-        shutil.copy2(source_video_path, source_dest)
+            # 生成缩略图
+            thumbnail_path = dest_dir / "thumbnail.png"
+            self.generate_thumbnail(str(source_dest), str(thumbnail_path))
 
-        # 生成缩略图
-        thumbnail_path = dest_dir / "thumbnail.png"
-        self.generate_thumbnail(str(source_dest), str(thumbnail_path))
+            # 填充 project 元数据
+            project.name = name
+            if project.source:
+                project.source.video = str(source_dest)
+            # duration 由调用方录制器在 project 对象上预设
+            project.thumbnail_path = "thumbnail.png"
 
-        # 填充 project 元数据
-        project.name = name
-        if project.source:
-            project.source.video = str(source_dest)
-        project.thumbnail_path = str(thumbnail_path)
+            # 保存
+            proj_file = dest_dir / "project.json"
+            project.save(str(proj_file))
 
-        # 保存
-        proj_file = dest_dir / "project.json"
-        project.save(str(proj_file))
-
-        return ProjectSummary(
-            name=name,
-            path=str(dest_dir),
-            modified_at=project.modified_at,
-            duration=project.duration,
-            thumbnail_path=str(thumbnail_path),
-        )
+            return ProjectSummary(
+                name=name,
+                path=str(dest_dir),
+                modified_at=project.modified_at,
+                duration=project.duration,
+                thumbnail_path="thumbnail.png",
+            )
+        except Exception:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise
 
     # ── 打开 ──────────────────────────────────────────────
 
@@ -103,7 +109,10 @@ class ProjectManager:
 
     def delete_project(self, project_path: str):
         """递归删除整个项目目录。"""
-        path = Path(project_path)
+        path = Path(project_path).resolve()
+        root = self._projects_dir.resolve()
+        if root not in path.parents and path != root:
+            raise ValueError(f"项目路径不在项目目录范围内: {path}")
         if not path.is_dir():
             raise FileNotFoundError(f"项目目录不存在: {path}")
         shutil.rmtree(path)
@@ -112,6 +121,8 @@ class ProjectManager:
 
     def rename_project(self, project_path: str, new_name: str):
         """更新 project.json 中的 name 字段。"""
+        if not new_name or not new_name.strip():
+            raise ValueError("项目名称不能为空")
         proj_file = Path(project_path) / "project.json"
         if not proj_file.is_file():
             raise FileNotFoundError(f"项目文件不存在: {proj_file}")
@@ -119,11 +130,18 @@ class ProjectManager:
         with open(proj_file, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        data["name"] = new_name
+        data["name"] = new_name.strip()
         data["modified_at"] = datetime.now().isoformat()
 
-        with open(proj_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        # 原子写入：临时文件 → replace
+        fd, tmp_path = tempfile.mkstemp(dir=str(proj_file.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, proj_file)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
 
     # ── 缩略图 ────────────────────────────────────────────
 
@@ -134,6 +152,7 @@ class ProjectManager:
             subprocess.run(
                 [
                     "ffmpeg",
+                    "-y",
                     "-ss", str(timestamp),
                     "-i", video_path,
                     "-vframes", "1",
