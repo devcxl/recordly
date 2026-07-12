@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
+from uuid import uuid4
+from core.speed import plan_clip_speed_change
 
 
 class UndoCommand(ABC):
@@ -83,19 +85,66 @@ class SplitClipCommand(UndoCommand):
     split_time: float
     right_clip_data: dict | None = None
     old_end: float = 0.0
+    old_source_end: float | None = None
 
     def execute(self, timeline):
         t = timeline._tracks[self.track_index]
         clip = t.clips[self.clip_index]
         self.old_end = clip.end
+        self.old_source_end = clip.source_end
+        source_end = (
+            clip.source_end
+            if clip.source_end is not None
+            else clip.source_start + (clip.end - clip.start) * clip.speed
+        )
+        split_source = clip.source_start + (
+            self.split_time - clip.start) * clip.speed
+
+        from dataclasses import asdict
+        self.right_clip_data = asdict(clip)
+        self.right_clip_data.update({
+            "id": str(uuid4()),
+            "start": self.split_time,
+            "end": self.old_end,
+            "source_start": split_source,
+            "source_end": source_end,
+        })
         clip.end = self.split_time
-        self.right_clip_data = {
-            "type": clip.type, "start": self.split_time, "end": self.old_end,
-            "speed": clip.speed, "content": clip.content,
-        }
+        clip.source_end = split_source
         from core.project import Clip
         t.clips.insert(self.clip_index + 1, Clip(**self.right_clip_data))
 
     def undo(self, timeline):
         del timeline._tracks[self.track_index].clips[self.clip_index + 1]
-        timeline._tracks[self.track_index].clips[self.clip_index].end = self.old_end
+        clip = timeline._tracks[self.track_index].clips[self.clip_index]
+        clip.end = self.old_end
+        clip.source_end = self.old_source_end
+
+
+@dataclass
+class ChangeSpeedCommand(UndoCommand):
+    track_index: int
+    clip_index: int
+    old_speed: float
+    new_speed: float
+    old_end: float
+
+    def execute(self, timeline):
+        clip = timeline._tracks[self.track_index].clips[self.clip_index]
+        clip.speed = self.new_speed
+        if clip.source_end is not None:
+            source_duration = clip.source_end - clip.source_start
+            clip.end = max(
+                clip.start + 0.1,
+                clip.start + source_duration / self.new_speed,
+            )
+        else:
+            result = plan_clip_speed_change(
+                clip.start, self.old_end, self.old_speed, self.new_speed)
+            if "new_end" in result:
+                clip.end = max(clip.start + 0.1, result["new_end"])
+
+    def undo(self, timeline):
+        clip = timeline._tracks[self.track_index].clips[self.clip_index]
+        clip.speed = self.old_speed
+        clip.end = self.old_end

@@ -1,11 +1,13 @@
 """帧合成器 — 统一合成管线"""
 
 import bisect
+import math
 from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Generator, Callable
 import numpy as np
+import cv2
 from core.screen_capture import CapturedFrame
 
 
@@ -44,13 +46,17 @@ class Compositor:
         self._cursor_state = "idle"
         self._click_events: list[tuple[int, int, float]] = []
         self._zoom_rect: tuple | None = None
-        self._zoom_keyframes: list[tuple[float, int, int, int, int]] = []
-        self._manual_zoom_clips: list = []
+        self._manual_zoom_clips: list | None = None
         self._camera = None
         self._effects: dict[str, Effect] = {}
         self._frame_index = 0
         self._preview_quality = 0.5
         self._base_time = 0.0
+        self._frame_times: list[float] = []
+        self._clips: list | None = None
+        self._crop_region = None  # CropRegion | None
+        self._monitor_left = 0
+        self._monitor_top = 0
 
     # ── 输入 ──────────────────────────────────────────────
 
@@ -58,14 +64,38 @@ class Compositor:
         self._frames = list(frames)
         if frames:
             self._base_time = frames[0].timestamp
+            self._frame_times = [
+                frame.timestamp - self._base_time for frame in frames
+            ]
             self.width = frames[0].data.shape[1]
             self.height = frames[0].data.shape[0]
+        else:
+            self._frame_times = []
+
+    @property
+    def source_duration(self) -> float:
+        if not self._frame_times:
+            return 0.0
+        if len(self._frame_times) == 1:
+            return 1 / self.fps
+        intervals = [
+            end - start
+            for start, end in zip(self._frame_times, self._frame_times[1:])
+            if end > start
+        ]
+        tail = float(np.median(intervals)) if intervals else 1 / self.fps
+        return self._frame_times[-1] + tail
 
     def load_cursor_events(self, events: list, clicks: list):
         self._cursor_events = events or []
         self._click_events = []
         for e in clicks or []:
             self._click_events.append((e.x, e.y, e.timestamp - self._base_time))
+
+    def set_monitor_offset(self, left: int, top: int):
+        """设置显示器在屏幕坐标系中的偏移量"""
+        self._monitor_left = left
+        self._monitor_top = top
 
     def set_cursor(self, x: int, y: int, state: str = "idle"):
         self._cursor_x = max(0, min(x, self.width))
@@ -79,12 +109,18 @@ class Compositor:
         self._zoom_rect = rect
 
     def load_camera(self, camera):
-        """加载智能镜头系统，替代旧 keyframe 方案"""
         self._camera = camera
 
     def load_manual_zoom_clips(self, clips: list):
-        self._manual_zoom_clips = sorted(clips or [],
-                                         key=lambda c: c.start)
+        self._manual_zoom_clips = sorted(clips or [], key=lambda c: c.start)
+
+    def load_clips(self, clips: list):
+        """加载时间线 video clip 列表（用于速度感知渲染）"""
+        self._clips = sorted(clips or [], key=lambda c: c.start)
+
+    def set_crop(self, crop):
+        from core.project import CropRegion
+        self._crop_region = crop
 
     def register_effect(self, name: str, effect: Effect):
         self._effects[name] = effect
@@ -95,23 +131,29 @@ class Compositor:
     # ── 合成 ──────────────────────────────────────────────
 
     def _interpolate_cursor(self, ts: float) -> tuple[int, int]:
-        """根据帧时间戳插值出当前帧的鼠标位置"""
+        """根据帧时间戳插值出当前帧的鼠标位置（减去显示器偏移得到帧内坐标）"""
         if not self._cursor_events:
             return self._cursor_x, self._cursor_y
         events = self._cursor_events
         target = self._base_time + ts
         if target <= events[0].timestamp:
-            return events[0].x, events[0].y
-        if target >= events[-1].timestamp:
-            return events[-1].x, events[-1].y
-        for i in range(1, len(events)):
-            if events[i].timestamp >= target:
-                e0, e1 = events[i - 1], events[i]
-                if e1.timestamp == e0.timestamp:
-                    return e1.x, e1.y
-                t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
-                return int(e0.x + (e1.x - e0.x) * t), int(e0.y + (e1.y - e0.y) * t)
-        return events[-1].x, events[-1].y
+            x, y = events[0].x, events[0].y
+        elif target >= events[-1].timestamp:
+            x, y = events[-1].x, events[-1].y
+        else:
+            for i in range(1, len(events)):
+                if events[i].timestamp >= target:
+                    e0, e1 = events[i - 1], events[i]
+                    if e1.timestamp == e0.timestamp:
+                        x, y = e1.x, e1.y
+                    else:
+                        t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
+                        x = int(e0.x + (e1.x - e0.x) * t)
+                        y = int(e0.y + (e1.y - e0.y) * t)
+                    break
+            else:
+                x, y = events[-1].x, events[-1].y
+        return x - self._monitor_left, y - self._monitor_top
 
     def _interpolate_cursor_raw(self, rel_ts: float) -> tuple[int, int]:
         """按相对时间插值光标位置（用于 keyframe 生成）"""
@@ -120,30 +162,76 @@ class Compositor:
         if not events:
             return self._cursor_x, self._cursor_y
         if target <= events[0].timestamp:
-            return events[0].x, events[0].y
-        if target >= events[-1].timestamp:
-            return events[-1].x, events[-1].y
-        for i in range(1, len(events)):
-            if events[i].timestamp >= target:
-                e0, e1 = events[i - 1], events[i]
-                if e1.timestamp == e0.timestamp:
-                    return e1.x, e1.y
-                t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
-                return int(e0.x + (e1.x - e0.x) * t), int(e0.y + (e1.y - e0.y) * t)
-        return events[-1].x, events[-1].y
+            x, y = events[0].x, events[0].y
+        elif target >= events[-1].timestamp:
+            x, y = events[-1].x, events[-1].y
+        else:
+            for i in range(1, len(events)):
+                if events[i].timestamp >= target:
+                    e0, e1 = events[i - 1], events[i]
+                    if e1.timestamp == e0.timestamp:
+                        x, y = e1.x, e1.y
+                    else:
+                        t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
+                        x = int(e0.x + (e1.x - e0.x) * t)
+                        y = int(e0.y + (e1.y - e0.y) * t)
+                    break
+            else:
+                x, y = events[-1].x, events[-1].y
+        return x - self._monitor_left, y - self._monitor_top
 
-    def _get_zoom_at(self, ts: float) -> tuple | None:
-        if self._manual_zoom_clips:
+    def _get_zoom_at(self, ts: float,
+                     source_ts: float | None = None) -> tuple | None:
+        if self._manual_zoom_clips is not None:
+            if not self._manual_zoom_clips:
+                return None
             starts = [c.start for c in self._manual_zoom_clips]
             i = bisect.bisect_right(starts, ts) - 1
             if i >= 0:
                 c = self._manual_zoom_clips[i]
                 if ts <= c.end and c.rect:
-                    return tuple(c.rect)
+                    target = tuple(c.rect)
+                    duration = max(0.0, c.end - c.start)
+                    transition = min(
+                        max(0.0, getattr(c, "transition_duration", 0.4)),
+                        duration / 2,
+                    )
+                    if transition <= 0:
+                        return target
+
+                    full = (0, 0, self.width, self.height)
+                    previous = full
+                    if i > 0:
+                        prev_clip = self._manual_zoom_clips[i - 1]
+                        if (prev_clip.rect
+                                and c.start - prev_clip.end <= 0.001):
+                            previous = tuple(prev_clip.rect)
+
+                    elapsed = ts - c.start
+                    if elapsed < transition:
+                        return self._interpolate_rect(
+                            previous, target, elapsed / transition)
+
+                    remaining = c.end - ts
+                    if remaining < transition:
+                        if i + 1 < len(self._manual_zoom_clips):
+                            next_clip = self._manual_zoom_clips[i + 1]
+                            if (next_clip.rect
+                                    and next_clip.start - c.end <= 0.001):
+                                # 相邻 Clip 的平移由下一个 Clip 入场过渡完成，
+                                # 避免当前 Clip 先移动一次导致边界跳变。
+                                return target
+                        return self._interpolate_rect(
+                            target, full,
+                            1.0 - remaining / transition,
+                        )
+                    return target
+            return None
         if not self._camera:
             return None
         w, h = self.width, self.height
-        fx, fy, scale = self._camera.sample(ts * 1000)
+        camera_ts = ts if source_ts is None else source_ts
+        fx, fy, scale = self._camera.sample(camera_ts * 1000)
         zw = int(w / scale)
         zh = int(h / scale)
         zx = int(fx * w - zw / 2)
@@ -152,34 +240,77 @@ class Compositor:
         zy = max(0, min(zy, h - zh))
         return (zx, zy, zw, zh)
 
-    def compose(self, frame: CapturedFrame) -> Image.Image:
+    @staticmethod
+    def _interpolate_rect(start: tuple, end: tuple,
+                          progress: float) -> tuple[int, int, int, int]:
+        progress = max(0.0, min(1.0, progress))
+        eased = 10 * progress ** 3 - 15 * progress ** 4 + 6 * progress ** 5
+        return tuple(round(a + (b - a) * eased)
+                     for a, b in zip(start, end))
+
+    @staticmethod
+    def _transform_point(x: int, y: int, width: int, height: int,
+                         zoom: tuple | None = None,
+                         crop_rect: tuple | None = None) -> tuple[int, int]:
+        if zoom:
+            zx, zy, zw, zh = zoom
+            x = int((x - zx) * width / max(zw, 1))
+            y = int((y - zy) * height / max(zh, 1))
+        if crop_rect:
+            crop_x, crop_y, crop_w, crop_h = crop_rect
+            x = int((x - crop_x) * width / max(crop_w, 1))
+            y = int((y - crop_y) * height / max(crop_h, 1))
+        return x, y
+
+    def compose(self, frame: CapturedFrame,
+                timeline_ts: float | None = None,
+                preview: bool = False) -> Image.Image:
         img = Image.fromarray(frame.data, mode="RGB")
-        ts = frame.timestamp - self._base_time
+        source_ts = frame.timestamp - self._base_time
+        if timeline_ts is None:
+            timeline_ts = source_ts
         w, h = self.width, self.height
 
-        cx, cy = self._interpolate_cursor(ts)
+        cx, cy = self._interpolate_cursor(source_ts)
 
-        zoom = self._get_zoom_at(ts) or self._zoom_rect
+        zoom = self._get_zoom_at(timeline_ts, source_ts) or self._zoom_rect
         zoom_cx, zoom_cy = cx, cy
         if zoom:
             zx, zy, zw, zh = zoom
-            # 保持视频宽高比
-            target_ratio = w / h
-            if zw / zh > target_ratio:
-                new_zw = int(zh * target_ratio)
-                zx += (zw - new_zw) // 2
-                zw = new_zw
-            elif zw / zh < target_ratio:
-                new_zh = int(zw / target_ratio)
-                zy += (zh - new_zh) // 2
-                zh = new_zh
             zx = max(0, min(zx, w - zw))
             zy = max(0, min(zy, h - zh))
             zoom = (zx, zy, zw, zh)
-            img = img.crop((zx, zy, zx + zw, zy + zh))
-            img = img.resize((w, h), Image.LANCZOS)
-            zoom_cx = int((cx - zx) * w / max(zw, 1))
-            zoom_cy = int((cy - zy) * h / max(zh, 1))
+            img = self._resize_crop(
+                img, (zx, zy, zx + zw, zy + zh), preview)
+            zoom_cx, zoom_cy = self._transform_point(
+                cx, cy, w, h, zoom=zoom)
+
+        # 裁剪（缩放之后、效果之前）
+        crop_rect = None
+        if self._crop_region is not None:
+            cr = self._crop_region
+            if cr.width < 1.0 or cr.height < 1.0:
+                from core.project import CropRegion
+                cx_c = int(cr.x * w)
+                cy_c = int(cr.y * h)
+                cw_c = max(2, int(cr.width * w))
+                ch_c = max(2, int(cr.height * h))
+                crop_rect = (cx_c, cy_c, cw_c, ch_c)
+                img = self._resize_crop(
+                    img, (cx_c, cy_c, cx_c + cw_c, cy_c + ch_c),
+                    preview,
+                )
+                zoom_cx, zoom_cy = self._transform_point(
+                    zoom_cx, zoom_cy, w, h, crop_rect=crop_rect)
+
+        transformed_clicks = []
+        for click_x, click_y, click_ts in self._click_events:
+            point_x = click_x - self._monitor_left
+            point_y = click_y - self._monitor_top
+            point_x, point_y = self._transform_point(
+                point_x, point_y, w, h, zoom=zoom,
+                crop_rect=crop_rect)
+            transformed_clicks.append((point_x, point_y, click_ts))
 
         if img.mode != "RGBA":
             img = img.convert("RGBA")
@@ -188,9 +319,9 @@ class Compositor:
             frame=img,
             cursor_x=zoom_cx, cursor_y=zoom_cy,
             cursor_state=self._cursor_state,
-            click_events=self._click_events,
+            click_events=transformed_clicks,
             frame_index=self._frame_index,
-            timestamp=ts,
+            timestamp=source_ts,
             zoom_rect=zoom,
             width=w, height=h,
             raw_cursor_x=cx, raw_cursor_y=cy,
@@ -203,18 +334,95 @@ class Compositor:
         return img
 
     def compose_index(self, idx: int) -> Image.Image | None:
+        if self._clips is not None:
+            if 0 <= idx < self.total_output_frames:
+                source_idx = self._source_index_at(idx / self.fps)
+                if source_idx is None:
+                    return Image.new("RGBA", (self.width, self.height),
+                                     (0, 0, 0, 255))
+                return self.compose(
+                    self._frames[source_idx], idx / self.fps, preview=True)
+            return None
         if 0 <= idx < len(self._frames):
-            return self.compose(self._frames[idx])
+            return self.compose(self._frames[idx], idx / self.fps, preview=True)
         return None
+
+    @property
+    def total_output_frames(self) -> int:
+        if self._clips is None:
+            return len(self._frames)
+        if not self._clips:
+            return 0
+        return max(0, math.ceil(max(c.end for c in self._clips) * self.fps))
+
+    def _source_index_at(self, timeline_ts: float) -> int | None:
+        """将时间线时刻映射到源帧；空洞返回 None。"""
+        clip = next((
+            candidate for candidate in reversed(self._clips)
+            if candidate.start <= timeline_ts < candidate.end
+        ), None)
+        if clip is None:
+            return None
+
+        source_time = clip.source_start + (
+            timeline_ts - clip.start) * max(clip.speed, 0.0001)
+        if clip.source_end is not None:
+            source_time = min(source_time, max(clip.source_start,
+                                               clip.source_end - 1 / self.fps))
+        if not self._frame_times or source_time < 0:
+            return None
+        position = bisect.bisect_left(self._frame_times, source_time)
+        if position <= 0:
+            return 0
+        if position >= len(self._frame_times):
+            return len(self._frame_times) - 1
+        before = self._frame_times[position - 1]
+        after = self._frame_times[position]
+        return position - 1 if source_time - before <= after - source_time else position
 
     def render_all(self, start: int = 0, end: int = None
                    ) -> Generator[Image.Image, None, None]:
-        frames = self._frames[start:end]
-        for f in frames:
-            yield self.compose(f)
+        if self._clips is None:
+            frames = self._frames[start:end]
+            for offset, frame in enumerate(frames, start=start):
+                yield self.compose(frame, offset / self.fps)
+            return
+
+        output_end = self.total_output_frames if end is None else min(
+            end, self.total_output_frames)
+        for output_idx in range(max(0, start), output_end):
+            source_idx = self._source_index_at(output_idx / self.fps)
+            if source_idx is None:
+                yield Image.new("RGBA", (self.width, self.height),
+                                (0, 0, 0, 255))
+            else:
+                yield self.compose(
+                    self._frames[source_idx], output_idx / self.fps)
 
     def set_preview_quality(self, quality: float):
         self._preview_quality = max(0.1, min(1.0, quality))
+
+    def _resize_filter(self, preview: bool):
+        if not preview:
+            return Image.LANCZOS
+        if self._preview_quality >= 0.75:
+            return Image.BICUBIC
+        return Image.BILINEAR
+
+    def _resize_crop(self, image: Image.Image, box: tuple,
+                     preview: bool) -> Image.Image:
+        if not preview:
+            return image.crop(box).resize(
+                (self.width, self.height), self._resize_filter(False))
+        left, top, right, bottom = box
+        source = np.asarray(image)[top:bottom, left:right]
+        interpolation = (
+            cv2.INTER_CUBIC if self._preview_quality >= 0.75
+            else cv2.INTER_LINEAR
+        )
+        resized = cv2.resize(
+            source, (self.width, self.height), interpolation=interpolation)
+        return Image.fromarray(resized)
 
     def get_preview_quality(self) -> float:
         return self._preview_quality
