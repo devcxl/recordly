@@ -87,5 +87,43 @@ class TestCalculateExportDimensions:
 
     def test_zero_source_dimensions(self):
         d = calculate_export_dimensions(0, 0, "16:9")
-        assert d.width == 0
-        assert d.height == 0
+        assert d.width == 2
+        assert d.height == 2
+
+    # ── 分辨率上限测试 ────────────────────────────────────
+
+    def test_max_height_caps_16_9(self):
+        """1080p 上限：3840×2160 的 16:9 源应缩放到 1920×1080"""
+        d = calculate_export_dimensions(3840, 2160, "native", max_height=1080)
+        assert d.width == 1920
+        assert d.height == 1080
+
+    def test_max_height_caps_square(self):
+        """1080p 上限 + 1:1 宽高比：2160×2160 → 1080×1080"""
+        d = calculate_export_dimensions(3840, 2160, "1:1", max_height=1080)
+        assert d.width == 1080
+        assert d.height == 1080
+
+    def test_max_height_caps_vertical(self):
+        """1080p 上限 + 9:16 宽高比：1215×2160 → 606×1080（经偶数归一化）"""
+        d = calculate_export_dimensions(3840, 2160, "9:16", max_height=1080)
+        assert d.width == 606
+        assert d.height == 1080
+
+    def test_max_height_no_upscale(self):
+        """源小于上限时不应放大：640×480 源 + 1080p 上限 → 保持原尺寸"""
+        d = calculate_export_dimensions(640, 480, "native", max_height=1080)
+        assert d.width == 640
+        assert d.height == 480
+
+    def test_max_height_with_quality(self):
+        """1080p + 50% 质量：先缩放到 1080p，再乘质量"""
+        d = calculate_export_dimensions(3840, 2160, "native", max_height=1080, quality=0.5)
+        assert d.width == 960
+        assert d.height == 540
+
+    def test_max_height_none_no_effect(self):
+        """max_height=None 与不传等价"""
+        d1 = calculate_export_dimensions(1920, 1080, "native", max_height=None)
+        d2 = calculate_export_dimensions(1920, 1080, "native")
+        assert d1 == d2

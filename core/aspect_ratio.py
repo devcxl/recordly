@@ -10,6 +10,17 @@ ASPECT_RATIO_PRESETS: list[str] = [
 """字符串类型: 预设值之一或 "W:H" 自定义"""
 AspectRatio = str
 
+# 分辨率预设：显示名 → 最大高度像素（None = 不限制）
+RESOLUTION_PRESETS: dict[str, int | None] = {
+    "原始（不限制）": None,
+    "2160p (4K)": 2160,
+    "1440p (2K)": 1440,
+    "1080p (Full HD)": 1080,
+    "720p (HD)": 720,
+    "480p (SD)": 480,
+    "360p": 360,
+}
+
 
 @dataclass
 class ExportDimensions:
@@ -40,21 +51,24 @@ def calculate_export_dimensions(
     aspect_ratio: AspectRatio,
     crop_width: float = 1.0, crop_height: float = 1.0,
     quality: float = 1.0,
+    max_height: int | None = None,
 ) -> ExportDimensions:
     """
-    根据宽高比和裁剪计算导出尺寸。
+    根据宽高比、裁剪和质量计算导出尺寸。
 
     - native: 使用裁剪后的源尺寸
     - 预设 (如 "16:9", "4:3"): 在裁剪区域内 fit 到指定比例
     - 自定义 "W:H": 同上
+    - max_height: 最大高度上限（仅缩小，不放大），None = 不限制
     - 所有结果归一化到偶数
     """
     cw = int(source_width * crop_width)
     ch = int(source_height * crop_height)
 
     if cw < 1 or ch < 1:
-        return ExportDimensions(width=normalize_even(int(source_width * quality)),
-                                height=normalize_even(int(source_height * quality)))
+        w = normalize_even(int(source_width * quality))
+        h = normalize_even(int(source_height * quality))
+        return ExportDimensions(width=max(2, w), height=max(2, h))
 
     ratio_val = parse_aspect_ratio(aspect_ratio)
     if ratio_val is None:  # native
@@ -69,6 +83,12 @@ def calculate_export_dimensions(
             # 更高 → 限制宽度
             w = cw
             h = int(w / ratio_val)
+
+    # 分辨率上限（仅缩小，不放大）
+    if max_height is not None and h > max_height:
+        scale = max_height / h
+        w = int(w * scale)
+        h = max_height
 
     w = normalize_even(int(w * quality))
     h = normalize_even(int(h * quality))

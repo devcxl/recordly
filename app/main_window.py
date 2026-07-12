@@ -248,7 +248,16 @@ class MainWindow(FluentWindow):
         dialog = SettingsDialog(self.config, self)
         if dialog.exec_() == SettingsDialog.Accepted:
             self._compositor.fps = self.config.default_fps
-            self._recorder.set_target_fps(self.config.default_fps)
+            # 录制过程中修改帧率会抛出 RuntimeError，捕获并弹窗提示而非闪退
+            if self._is_recording:
+                InfoBar.warning(
+                    title="设置未完全应用",
+                    content="录制过程中无法修改帧率，将在下次录制时生效",
+                    orient=Qt.Horizontal, isClosable=True,
+                    position=InfoBarPosition.TOP_RIGHT, duration=4000, parent=self,
+                )
+            else:
+                self._recorder.set_target_fps(self.config.default_fps)
             self._apply_cursor_config()
             self._compositor.set_preview_quality(self.config.preview_quality)
 
@@ -724,6 +733,17 @@ class MainWindow(FluentWindow):
             return
         is_gif = dialog.export_format == "gif"
         crop_region = self._compositor._crop_region if self._crop_active else None
+
+        # 分辨率设置
+        if dialog.is_custom_resolution:
+            export_width = dialog.custom_width
+            export_height = dialog.custom_height
+            export_max_height = None
+        else:
+            export_width = 0
+            export_height = 0
+            export_max_height = dialog.resolution_max_height
+
         settings = ExportSettings(
             output_path=dialog.output_path,
             format=dialog.export_format,
@@ -732,6 +752,9 @@ class MainWindow(FluentWindow):
             fps=dialog.gif_fps_value if is_gif else self.config.default_fps,
             bitrate=self.config.default_bitrate,
             loop=dialog.gif_loop_value,
+            width=export_width,
+            height=export_height,
+            max_height=export_max_height,
             extra_audio=self._audio_regions if self._audio_regions else None,
             crop_region=crop_region,
         )

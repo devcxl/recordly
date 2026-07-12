@@ -66,8 +66,12 @@ class Compositor:
             self._frame_times = [
                 frame.timestamp - self._base_time for frame in frames
             ]
-            self.width = frames[0].data.shape[1]
-            self.height = frames[0].data.shape[0]
+            try:
+                self.width = frames[0].data.shape[1]
+                self.height = frames[0].data.shape[0]
+            except RuntimeError:
+                # 首帧解码失败时保留已有尺寸，避免闪退
+                pass
         else:
             self._frame_times = []
 
@@ -264,7 +268,14 @@ class Compositor:
     def compose(self, frame: CapturedFrame,
                 timeline_ts: float | None = None,
                 preview: bool = False) -> Image.Image:
-        img = Image.fromarray(frame.data, mode="RGB")
+        try:
+            img = Image.fromarray(frame.data, mode="RGB")
+        except RuntimeError:
+            # 帧解码失败时用黑帧兜底，避免导出/回放过程中闪退
+            import sys
+            print(f"[compositor] 帧 {frame.index} 解码失败，使用黑帧兜底",
+                  file=sys.stderr, flush=True)
+            img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
         source_ts = frame.timestamp - self._base_time
         if timeline_ts is None:
             timeline_ts = source_ts

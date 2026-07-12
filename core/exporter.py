@@ -44,8 +44,9 @@ class ExportSettings:
     format: str = "mp4"            # "mp4" / "gif"
     fps: int = 30
     bitrate: str = "10M"
-    width: int = 0                 # 0 = 原始分辨率
-    height: int = 0
+    width: int = 0                 # 0 = 自动计算；>0 = 自定义精确宽度
+    height: int = 0                # 0 = 自动计算；>0 = 自定义精确高度
+    max_height: int | None = None  # 分辨率上限（仅缩小不放大），None = 不限制
     samplerate: int = 44100
     aspect_ratio: str = "native"
     quality: float = 1.0
@@ -99,12 +100,17 @@ class ExportWorker(QObject):
     def _export_mp4(self):
         s = self._settings
         c = self._compositor
-        # 计算输出尺寸（宽高比/质量优先，explicit width/height 覆盖）
+        src_w, src_h = c.width, c.height
+
+        # 计算输出尺寸
         if s.width and s.height:
-            w, h = s.width, s.height
+            # 自定义精确尺寸：不超过源分辨率
+            w = min(s.width, src_w) if src_w > 0 else s.width
+            h = min(s.height, src_h) if src_h > 0 else s.height
         else:
             dims = calculate_export_dimensions(
-                c.width, c.height, s.aspect_ratio, quality=s.quality)
+                src_w, src_h, s.aspect_ratio, quality=s.quality,
+                max_height=s.max_height)
             w, h = dims.width, dims.height
 
         # 裁剪影响导出尺寸
@@ -255,11 +261,15 @@ class ExportWorker(QObject):
     def _export_gif(self):
         s = self._settings
         c = self._compositor
+        src_w, src_h = c.width, c.height
+
         if s.width and s.height:
-            w, h = s.width, s.height
+            w = min(s.width, src_w) if src_w > 0 else s.width
+            h = min(s.height, src_h) if src_h > 0 else s.height
         else:
             dims = calculate_export_dimensions(
-                c.width, c.height, s.aspect_ratio, quality=s.quality)
+                src_w, src_h, s.aspect_ratio, quality=s.quality,
+                max_height=s.max_height)
             w, h = dims.width, dims.height
 
         if s.crop_region and (s.crop_region.width < 1.0 or s.crop_region.height < 1.0):
