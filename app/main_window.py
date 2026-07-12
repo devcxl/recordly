@@ -175,7 +175,7 @@ class MainWindow(QMainWindow):
         self._btn_play.setText("▶")
         self._btn_play.setToolTip("播放")
         self._btn_step_fwd = QToolButton()
-        self._btn_step_fwd.setText("▶")
+        self._btn_step_fwd.setText("⏭")
         self._btn_step_fwd.setToolTip("下一帧")
         self._btn_ff = QToolButton()
         self._btn_ff.setText("⏩")

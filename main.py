@@ -2,7 +2,6 @@
 
 import sys
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
 
 from app.config import AppConfig
 from app.main_window import MainWindow
