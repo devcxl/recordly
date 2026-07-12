@@ -1,9 +1,13 @@
 """Recordly 主窗口 — Fluent Design 重构"""
 
+import os
+import subprocess
+from uuid import uuid4
+
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QFileDialog, QApplication, QListWidget, QMessageBox,
-    QLabel, QProgressDialog,
+    QLabel, QProgressDialog, QScrollArea,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
@@ -20,9 +24,14 @@ from app.config import AppConfig
 from core.recorder import Recorder
 from core.compositor import Compositor
 from core.exporter import ExportWorker, ExportSettings
-from core.project import Clip, Track
+from core.project import (
+    Clip, Track, AudioRegion, CropRegion,
+    sync_audio_regions_from_clips,
+)
 from ui.preview_widget import PreviewWidget
 from ui.timeline import TimelineWidget
+from ui.crop_overlay import CropOverlay
+from ui.export_dialog import ExportDialog
 
 
 class MainWindow(FluentWindow):
@@ -36,12 +45,16 @@ class MainWindow(FluentWindow):
         super().__init__()
         self.config = config
         self._is_recording = False
-        self._recorder = Recorder()
+        self._recorder = Recorder(target_fps=config.default_fps)
         self._compositor = Compositor(1920, 1080, config.default_fps)
         self._recorded_data = None
+        self._audio_regions = []
         self._export_thread = None
         self._export_worker = None
         self._playback = None
+        self._editing_zoom_clip = None
+        self._crop_overlay = None
+        self._crop_active = False
         self._setup_window()
         self._setup_interfaces()
         self._setup_navigation()
@@ -168,6 +181,9 @@ class MainWindow(FluentWindow):
         self._frame_label = QLabel("0 / 0")
         self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
         hbox.addWidget(self._frame_label)
+        self._time_label = QLabel("00:00.000 / 00:00.000")
+        self._time_label.setStyleSheet("color: #999; font-size: 12px;")
+        hbox.addWidget(self._time_label)
         hbox.addSpacing(16)
 
         # 导出
@@ -176,6 +192,22 @@ class MainWindow(FluentWindow):
         self._btn_export.clicked.connect(self._on_export)
         self._btn_export.setEnabled(False)
         hbox.addWidget(self._btn_export)
+
+        # 裁剪
+        self._btn_crop = ToolButton(FluentIcon.CLIPPING_TOOL)
+        self._btn_crop.setToolTip("裁剪模式")
+        self._btn_crop.setCheckable(True)
+        self._btn_crop.toggled.connect(self._on_crop_toggled)
+        self._btn_crop.setEnabled(False)
+        hbox.addWidget(self._btn_crop)
+
+        # 添加音频
+        self._btn_add_audio = ToolButton(FluentIcon.MUSIC)
+        self._btn_add_audio.setToolTip("添加额外音频")
+        self._btn_add_audio.clicked.connect(self._on_add_audio)
+        self._btn_add_audio.setEnabled(False)
+        hbox.addWidget(self._btn_add_audio)
+
         hbox.addStretch()
 
         layout.addWidget(tb)
@@ -186,9 +218,14 @@ class MainWindow(FluentWindow):
         self._preview.setMinimumSize(640, 480)
 
         self._timeline = TimelineWidget()
+        self._timeline_scroll = QScrollArea()
+        self._timeline_scroll.setWidget(self._timeline)
+        self._timeline_scroll.setWidgetResizable(True)
+        self._timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._timeline_scroll.setFrameShape(QScrollArea.NoFrame)
 
         splitter.addWidget(self._preview)
-        splitter.addWidget(self._timeline)
+        splitter.addWidget(self._timeline_scroll)
         splitter.setSizes([480, 200])
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
@@ -211,11 +248,20 @@ class MainWindow(FluentWindow):
         dialog = SettingsDialog(self.config, self)
         if dialog.exec_() == SettingsDialog.Accepted:
             self._compositor.fps = self.config.default_fps
-            if hasattr(self, '_cursor_effect'):
-                self._cursor_effect.cursor_size = self.config.cursor_size
-                self._cursor_effect.cursor_theme = self.config.cursor_theme
-                self._cursor_effect.enabled["trail"] = self.config.trail_enabled
+            self._recorder.set_target_fps(self.config.default_fps)
+            self._apply_cursor_config()
             self._compositor.set_preview_quality(self.config.preview_quality)
+
+    def _apply_cursor_config(self):
+        if not hasattr(self, '_cursor_effect'):
+            return
+        self._cursor_effect.cursor_size = self.config.cursor_size
+        self._cursor_effect.cursor_theme = self.config.cursor_theme
+        self._cursor_effect.cursor_style = self.config.cursor_style
+        self._cursor_effect.enabled["trail"] = self.config.trail_enabled
+        playback = getattr(self, "_playback", None)
+        if playback:
+            playback.seek(playback.current_frame)
 
     def _setup_project_interface(self):
         self._project_interface = QWidget()
@@ -301,44 +347,86 @@ class MainWindow(FluentWindow):
         self._update_ui_state()
 
     def _on_recording_started(self):
-        self._recorder.start_recording()
+        try:
+            self._recorder.start_recording()
+        except Exception as exc:
+            self.set_recording_state(False)
+            self.update_status("● 录制启动失败")
+            InfoBar.error(
+                title="无法开始录制",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=5000, parent=self,
+            )
+            return
         self.update_status("● 录制中...")
 
     def _on_recording_stopped(self):
-        self._recorded_data = self._recorder.stop_recording()
+        try:
+            self._recorded_data = self._recorder.stop_recording()
+        except Exception as exc:
+            self._recorded_data = None
+            self.set_recording_state(False)
+            self.update_status("● 录制失败")
+            InfoBar.error(
+                title="录制失败",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT,
+                duration=5000, parent=self,
+            )
+            return
         if self._recorded_data and self._recorded_data.get("frames"):
             self._compositor.load_frames(self._recorded_data["frames"])
             self._compositor.load_cursor_events(
                 self._recorded_data.get("cursor_events", []),
                 self._recorded_data.get("clicks", []),
             )
+            offset = self._recorded_data.get("monitor_offset", (0, 0))
+            self._compositor.set_monitor_offset(offset[0], offset[1])
             from core.cursor_effects import CursorEffect
             self._cursor_effect = CursorEffect(
                 cursor_size=self.config.cursor_size,
                 cursor_theme=self.config.cursor_theme,
+                cursor_style=self.config.cursor_style,
             )
             self._compositor.register_effect("cursor", self._cursor_effect)
             if not self.config.trail_enabled:
                 self._cursor_effect.enabled["trail"] = False
             self._btn_export.setEnabled(True)
+            self._btn_crop.setEnabled(True)
+            self._btn_add_audio.setEnabled(True)
             self._enable_playback_controls(True)
             total = len(self._compositor._frames)
             self._frame_label.setText(f"1 / {total}")
-            from ui.preview_widget import PlaybackController
-            self._playback = PlaybackController(self._preview, self._compositor)
-            self._playback.set_on_frame_changed(self._update_frame_counter)
-            self._playback.seek(0)
             self._populate_timeline()
-            self._timeline.playhead_changed.connect(self._on_timeline_seek)
-            self._timeline.zoom_double_clicked.connect(self._on_zoom_double_clicked)
+            self._create_playback_controller()
+            self._playback.seek(0)
+            self._connect_timeline_signals()
         self.update_status("● 录制完成")
+
+    def _connect_timeline_signals(self):
+        """重复录制时保持时间线信号单次连接。"""
+        pairs = (
+            (self._timeline.playhead_changed, self._on_timeline_seek),
+            (self._timeline.zoom_double_clicked, self._on_zoom_double_clicked),
+            (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
+            (self._timeline.clips_changed, self._on_clips_changed),
+        )
+        for signal, slot in pairs:
+            try:
+                signal.disconnect(slot)
+            except TypeError:
+                pass
+            signal.connect(slot)
 
     def _populate_timeline(self):
         """录制结束后在时间线中创建视频、音频、缩放轨道"""
         frames = self._compositor._frames
         if not frames:
             return
-        duration = len(frames) / self._compositor.fps
+        duration = self._get_recording_duration()
         tracks = []
         tracks.append(Track(type="video", name="视频", clips=[
             Clip(type="video", start=0, end=duration,
@@ -356,16 +444,26 @@ class MainWindow(FluentWindow):
         camera = build_camera(clicks, self._compositor.fps,
                               self._compositor.width,
                               self._compositor.height, duration,
-                              cursor_events, base_time)
+                              cursor_events, base_time,
+                              self._compositor._monitor_left,
+                              self._compositor._monitor_top)
         self._compositor.load_camera(camera)
 
-        zoom_segs = camera.zoomed_segments if camera else []
-        zoom_clips = [Clip(type="zoom", start=s, end=e, content="缩放")
-                      for s, e in zoom_segs]
+        zoom_clips = camera.build_zoom_clips() if camera else []
         tracks.append(Track(type="zoom", name="缩放", clips=zoom_clips))
 
         self._timeline.set_tracks(tracks)
         self._timeline.duration = duration
+        self._compositor.load_clips(tracks[0].clips)
+        self._compositor.load_manual_zoom_clips(zoom_clips)
+        if self._audio_regions:
+            self._update_audio_timeline()
+
+    def _get_recording_duration(self) -> float:
+        duration = getattr(self._compositor, "source_duration", 0.0)
+        if duration > 0:
+            return duration
+        return len(self._compositor._frames) / self._compositor.fps
 
     # ── 状态更新 ──────────────────────────────────────────
 
@@ -392,9 +490,7 @@ class MainWindow(FluentWindow):
         if not self._recorded_data:
             return
         if not self._playback:
-            from ui.preview_widget import PlaybackController
-            self._playback = PlaybackController(self._preview, self._compositor)
-            self._playback.set_on_frame_changed(self._update_frame_counter)
+            self._create_playback_controller()
             start_frame = int(self._timeline.playhead * self._compositor.fps)
             self._playback.play(start_frame)
             self._btn_play.setIcon(FluentIcon.CANCEL)
@@ -411,6 +507,24 @@ class MainWindow(FluentWindow):
             self._playback.pause()
             self._btn_play.setIcon(FluentIcon.PLAY)
             self._btn_play.setToolTip("继续播放")
+
+    def _create_playback_controller(self):
+        from ui.preview_widget import PlaybackController
+
+        video_clips = [
+            clip for track in self._timeline.tracks if track.type == "video"
+            for clip in track.clips
+        ]
+        audio_result = (
+            self._recorded_data.get("audio") if self._recorded_data else None
+        )
+        self._playback = PlaybackController(
+            self._preview,
+            self._compositor,
+            audio_result=audio_result,
+            video_clips=video_clips,
+        )
+        self._playback.set_on_frame_changed(self._update_frame_counter)
 
     def _on_rewind(self):
         if self._playback:
@@ -440,6 +554,20 @@ class MainWindow(FluentWindow):
         # 同步时间线播放头
         sec = idx / self._compositor.fps
         self._timeline.playhead = sec
+        self._time_label.setText(
+            f"{MainWindow._format_time(sec)} / "
+            f"{MainWindow._format_time(self._timeline.duration)}"
+        )
+        self._timeline_scroll.ensureVisible(
+            self._timeline._time_to_x(sec), 0, 120, 0
+        )
+
+    @staticmethod
+    def _format_time(seconds: float) -> str:
+        milliseconds = max(0, round(seconds * 1000))
+        minutes, remainder = divmod(milliseconds, 60_000)
+        whole_seconds, milliseconds = divmod(remainder, 1000)
+        return f"{minutes:02d}:{whole_seconds:02d}.{milliseconds:03d}"
 
     def _on_timeline_seek(self, sec: float):
         if not self._playback:
@@ -448,21 +576,33 @@ class MainWindow(FluentWindow):
         self._playback.seek(idx)
         self._update_frame_counter(idx)
 
-    def _on_zoom_double_clicked(self, time_s: float):
+    def _on_zoom_double_clicked(self, time_s: float, existing_clip=None):
         ratio = self.config.zoom_rect_ratio
         w = int(self._compositor.width * ratio)
         h = int(self._compositor.height * ratio)
         cx = self._compositor.width // 2
         cy = self._compositor.height // 2
-        clip = Clip(type="zoom", start=time_s, end=min(time_s + 2.0, self._timeline.duration),
-                    content="手动缩放", rect=[cx - w // 2, cy - h // 2, w, h])
-        for track in self._timeline.tracks:
-            if track.type == "zoom":
-                track.clips.append(clip)
-                break
+        clip = existing_clip
+        if clip is None:
+            clip = Clip(
+                type="zoom", start=time_s,
+                end=min(time_s + 2.0, self._timeline.duration),
+                content="手动缩放",
+                rect=[cx - w // 2, cy - h // 2, w, h],
+            )
+            for track in self._timeline.tracks:
+                if track.type == "zoom":
+                    track.clips.append(clip)
+                    break
+        elif not clip.rect:
+            clip.rect = [cx - w // 2, cy - h // 2, w, h]
+
+        self._editing_zoom_clip = clip
         self._compositor.load_manual_zoom_clips(
             [c for t in self._timeline.tracks if t.type == "zoom"
              for c in t.clips if c.rect])
+        if self._playback:
+            self._playback.seek(self._playback.current_frame)
         self._preview.show_zoom_rect(clip.rect,
                                      self._compositor.width, self._compositor.height)
         try:
@@ -472,14 +612,54 @@ class MainWindow(FluentWindow):
         self._preview.overlay.rect_changed.connect(self._on_zoom_rect_changed)
         self._timeline.update()
 
+    def _on_zoom_clip_selected(self, clip):
+        self._on_zoom_double_clicked(clip.start, clip)
+
     def _on_zoom_rect_changed(self, x, y, w, h):
         """预览框被拖拽后，更新当前 zoom clip 的 rect"""
-        for track in self._timeline.tracks:
-            if track.type == "zoom" and track.clips:
-                track.clips[-1].rect = [x, y, w, h]
+        zoom_clips = [
+            c for track in self._timeline.tracks if track.type == "zoom"
+            for c in track.clips
+        ]
+        if self._editing_zoom_clip not in zoom_clips:
+            self._editing_zoom_clip = None
+            self._preview.hide_zoom_rect()
+            return
+        self._editing_zoom_clip.rect = [x, y, w, h]
         self._compositor.load_manual_zoom_clips(
             [c for t in self._timeline.tracks if t.type == "zoom"
              for c in t.clips if c.rect])
+        if self._playback:
+            self._playback.seek(self._playback.current_frame)
+
+    def _on_clips_changed(self):
+        """时间线 clip 变化后（拖拽/删除/拆分/撤销）同步 zoom clips 到 compositor"""
+        self._compositor.load_manual_zoom_clips(
+            [c for t in self._timeline.tracks if t.type == "zoom"
+             for c in t.clips if c.rect])
+        video_clips = [c for t in self._timeline.tracks if t.type == "video"
+                       for c in t.clips]
+        self._timeline.duration = max(
+            (clip.end for clip in video_clips), default=0.1)
+        self._compositor.load_clips(video_clips)
+        if self._playback:
+            current_frame = self._playback.current_frame
+            self._playback.stop()
+            self._create_playback_controller()
+            self._playback.seek(current_frame)
+        audio_clips = [
+            c for t in self._timeline.tracks if t.type == "audio_extra"
+            for c in t.clips
+        ]
+        self._audio_regions = sync_audio_regions_from_clips(
+            audio_clips, self._audio_regions)
+        zoom_clips = [
+            c for t in self._timeline.tracks if t.type == "zoom"
+            for c in t.clips
+        ]
+        if self._editing_zoom_clip not in zoom_clips:
+            self._editing_zoom_clip = None
+            self._preview.hide_zoom_rect()
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)
@@ -487,6 +667,37 @@ class MainWindow(FluentWindow):
         self._btn_play.setEnabled(enabled)
         self._btn_step_fwd.setEnabled(enabled)
         self._btn_ff.setEnabled(enabled)
+
+    # ── 裁剪 ──────────────────────────────────────────────
+
+    def _on_crop_toggled(self, active: bool):
+        """裁剪模式开关"""
+        if not self._compositor._frames:
+            self._btn_crop.setChecked(False)
+            return
+
+        if active:
+            if not self._crop_overlay:
+                self._crop_overlay = CropOverlay(self._preview._label)
+                self._preview.add_overlay(self._crop_overlay)
+                self._crop_overlay.crop_changed.connect(self._on_crop_changed)
+            self._crop_overlay.set_crop(0.0, 0.0, 1.0, 1.0)
+            self._crop_active = True
+        else:
+            if self._crop_overlay:
+                self._crop_overlay.clear_crop()
+            self._compositor.set_crop(None)
+            self._crop_active = False
+
+    def _on_crop_changed(self, x, y, w, h):
+        """裁剪区域变更时更新合成器"""
+        if w >= 1.0 and h >= 1.0:
+            self._compositor.set_crop(None)
+        else:
+            self._compositor.set_crop(CropRegion(x=x, y=y, width=w, height=h))
+        # 刷新当前帧
+        if self._playback:
+            self._playback.seek(self._playback.current_frame)
 
     # ── 导出 ──────────────────────────────────────────────
 
@@ -499,25 +710,37 @@ class MainWindow(FluentWindow):
                 position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
             )
             return
-        path, fmt = QFileDialog.getSaveFileName(
-            self, "导出视频", self.config.recordings_dir,
-            "MP4 (*.mp4);;GIF (*.gif)")
-        if not path:
+        dialog = ExportDialog(self, self.config.recordings_dir,
+                              self.config.default_fps)
+        if dialog.exec_() != ExportDialog.Accepted:
             return
-        is_gif = path.lower().endswith(".gif")
-        if not path.lower().endswith((".mp4", ".gif")):
-            QMessageBox.warning(self, "导出失败", "请指定文件名并选择 MP4 或 GIF 格式")
+        if not dialog.output_path:
+            InfoBar.warning(
+                title="未选择保存路径",
+                content="请选择文件保存位置",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            )
             return
+        is_gif = dialog.export_format == "gif"
+        crop_region = self._compositor._crop_region if self._crop_active else None
         settings = ExportSettings(
-            output_path=path,
-            format="gif" if is_gif else "mp4",
-            fps=self.config.default_fps,
+            output_path=dialog.output_path,
+            format=dialog.export_format,
+            aspect_ratio=dialog.aspect_ratio,
+            quality=dialog.quality,
+            fps=dialog.gif_fps_value if is_gif else self.config.default_fps,
             bitrate=self.config.default_bitrate,
+            loop=dialog.gif_loop_value,
+            extra_audio=self._audio_regions if self._audio_regions else None,
+            crop_region=crop_region,
         )
         self._btn_export.setEnabled(False)
 
         audio = self._recorded_data.get("audio")
         audio_data = audio.data if audio else None
+        if audio:
+            settings.samplerate = audio.samplerate
 
         # 创建工作线程
         self._export_worker = ExportWorker(self._compositor, audio_data, settings)
@@ -581,6 +804,95 @@ class MainWindow(FluentWindow):
                 position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
             )
 
+    # ── 额外音频 ────────────────────────────────────────────
+
+    def _on_add_audio(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "添加额外音频轨道", "",
+            "音频文件 (*.mp3 *.wav *.aac *.m4a *.flac *.ogg)")
+        if not path:
+            return
+
+        duration_s = self._get_audio_duration(path)
+        if duration_s <= 0:
+            InfoBar.warning(
+                title="无法读取音频",
+                content=f"无法获取文件时长: {os.path.basename(path)}",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+            )
+            return
+
+        playhead_ms = int(self._timeline.playhead * 1000)
+        duration_ms = min(
+            int(duration_s * 1000),
+            max(0, int(self._timeline.duration * 1000) - playhead_ms),
+        )
+        if duration_ms <= 0:
+            return
+
+        region = AudioRegion(
+            id=str(uuid4()),
+            start_ms=playhead_ms,
+            end_ms=playhead_ms + duration_ms,
+            source_start_ms=0,
+            source_end_ms=duration_ms,
+            audio_path=path,
+            volume=1.0,
+            name=os.path.basename(path),
+        )
+        self._audio_regions.append(region)
+        self._update_audio_timeline()
+
+        InfoBar.success(
+            title="已添加音频",
+            content=f"{region.name} ({duration_s:.1f}s)",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=3000, parent=self,
+        )
+
+    def _get_audio_duration(self, filepath: str) -> float:
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'error', '-show_entries',
+                 'format=duration', '-of',
+                 'default=noprint_wrappers=1:nokey=1', filepath],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except Exception:
+            pass
+        return 0.0
+
+    def _update_audio_timeline(self):
+        self._timeline._tracks = [
+            t for t in self._timeline._tracks if t.type != "audio_extra"
+        ]
+
+        if self._audio_regions:
+            clips = []
+            for r in self._audio_regions:
+                clips.append(Clip(
+                    id=r.id,
+                    type="audio_extra",
+                    content=r.name,
+                    start=r.start_ms / 1000.0,
+                    end=r.end_ms / 1000.0,
+                    source_start=r.source_start_ms / 1000.0,
+                    source_end=(
+                        r.source_end_ms / 1000.0
+                        if r.source_end_ms is not None else None
+                    ),
+                    source_path=r.audio_path,
+                    volume=r.volume,
+                ))
+            track = Track(type="audio_extra", name="额外音频", clips=clips)
+            self._timeline._tracks.append(track)
+
+        self._timeline._update_height()
+        self._timeline.update()
+
     # ── 菜单操作 ──────────────────────────────────────────
 
     def _on_new_project(self):
@@ -636,7 +948,6 @@ class MainWindow(FluentWindow):
                 self._timeline.delete_clip(idx, 0)
 
     def _make_track(self, type_: str, content: str):
-        from core.project import Clip, Track
         return Track(type=type_, name=type_, clips=[
             Clip(type=type_, content=content,
                  start=0.0, end=self._timeline.duration),

@@ -1,17 +1,23 @@
 """时间线组件 — 支持多 clip 轨道剪辑"""
 
+import os
+
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
-from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand
+from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand
+from core.project import SPEED_OPTIONS
+from core.speed import plan_clip_speed_change, format_speed_label
 
 
 TRACK_COLORS = {
     "video": QColor("#4A90D9"),
     "audio": QColor("#50C878"),
+    "audio_extra": QColor("#2E8B57"),
     "cursor": QColor("#E8A838"),
     "text": QColor("#A855F7"),
+    "annotation": QColor("#A855F7"),
     "zoom": QColor("#F97316"),
 }
 TRACK_HEADER_WIDTH = 80
@@ -22,7 +28,10 @@ PADDING = 4
 
 class TimelineWidget(QWidget):
     playhead_changed = pyqtSignal(float)
-    zoom_double_clicked = pyqtSignal(float)
+    zoom_double_clicked = pyqtSignal(float, object)
+    zoom_clip_selected = pyqtSignal(object)
+    audio_add_requested = pyqtSignal()
+    clips_changed = pyqtSignal()
 
     SnapDistance = 5
 
@@ -44,6 +53,7 @@ class TimelineWidget(QWidget):
         self._redo_stack = []
 
         self.setMinimumHeight(RULER_HEIGHT + TRACK_HEIGHT + 10)
+        self._update_width()
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
@@ -54,7 +64,8 @@ class TimelineWidget(QWidget):
 
     @duration.setter
     def duration(self, v: float):
-        self._duration = max(v, 5.0)
+        self._duration = max(v, 0.1)
+        self._update_width()
         self.update()
 
     @property
@@ -74,6 +85,8 @@ class TimelineWidget(QWidget):
         self._tracks = tracks
         self._selected_track = -1
         self._selected_clip = -1
+        self._undo_stack.clear()
+        self._redo_stack.clear()
         self._update_height()
         self.update()
 
@@ -81,6 +94,12 @@ class TimelineWidget(QWidget):
         h = RULER_HEIGHT + len(self._tracks) * TRACK_HEIGHT + 10
         self.setMinimumHeight(h)
         self.setMaximumHeight(h)
+
+    def _update_width(self):
+        content_width = TRACK_HEADER_WIDTH + int(
+            self._duration * self._pixels_per_sec
+        ) + PADDING
+        self.setMinimumWidth(content_width)
 
     @property
     def selected_index(self) -> int:
@@ -134,6 +153,7 @@ class TimelineWidget(QWidget):
         self._undo_stack.append(cmd)
         self._redo_stack.clear()
         cmd.execute(self)
+        self.clips_changed.emit()
         self.update()
 
     def undo(self):
@@ -142,6 +162,7 @@ class TimelineWidget(QWidget):
         cmd = self._undo_stack.pop()
         cmd.undo(self)
         self._redo_stack.append(cmd)
+        self.clips_changed.emit()
         self.update()
 
     def redo(self):
@@ -150,6 +171,7 @@ class TimelineWidget(QWidget):
         cmd = self._redo_stack.pop()
         cmd.execute(self)
         self._undo_stack.append(cmd)
+        self.clips_changed.emit()
         self.update()
 
     # ── 鼠标事件 ──────────────────────────────────────────
@@ -159,7 +181,7 @@ class TimelineWidget(QWidget):
             return
         pos = event.localPos()
 
-        self._playhead_s = self._x_to_time(int(pos.x()))
+        self._playhead_s = min(self._x_to_time(int(pos.x())), self._duration)
         self._drag_state = "playhead"
         self.update()
         self.playhead_changed.emit(self._playhead_s)
@@ -185,6 +207,8 @@ class TimelineWidget(QWidget):
                 clip = self._tracks[ti].clips[ci]
                 self._drag_orig_start = clip.start
                 self._drag_orig_end = clip.end
+                if self._tracks[ti].type == "zoom":
+                    self.zoom_clip_selected.emit(clip)
                 self.update()
                 return
 
@@ -197,7 +221,8 @@ class TimelineWidget(QWidget):
             pos = event.localPos()
 
             if self._drag_state == "playhead":
-                self._playhead_s = self._x_to_time(int(pos.x()))
+                self._playhead_s = min(
+                    self._x_to_time(int(pos.x())), self._duration)
                 self.update()
                 self.playhead_changed.emit(self._playhead_s)
                 return
@@ -206,7 +231,11 @@ class TimelineWidget(QWidget):
             dt = (pos.x() - self._drag_start_x) / self._pixels_per_sec
 
             if self._drag_state == "move":
-                new_start = max(0.0, self._drag_orig_start + dt)
+                clip_duration = self._drag_orig_end - self._drag_orig_start
+                new_start = max(0.0, min(
+                    self._drag_orig_start + dt,
+                    max(0.0, self._duration - clip_duration),
+                ))
                 new_end = new_start + (self._drag_orig_end - self._drag_orig_start)
                 clip.start = new_start
                 clip.end = new_end
@@ -214,7 +243,10 @@ class TimelineWidget(QWidget):
                 new_start = max(0.0, min(self._drag_orig_start + dt, clip.end - 0.5))
                 clip.start = new_start
             elif self._drag_state == "resize_right":
-                new_end = max(clip.start + 0.5, self._drag_orig_end + dt)
+                new_end = min(
+                    self._duration,
+                    max(clip.start + 0.5, self._drag_orig_end + dt),
+                )
                 clip.end = new_end
 
             self.update()
@@ -234,6 +266,7 @@ class TimelineWidget(QWidget):
         if cmd:
             self._undo_stack.append(cmd)
             self._redo_stack.clear()
+            self.clips_changed.emit()
 
         self._drag_state = None
         self._drag_track = -1
@@ -243,8 +276,14 @@ class TimelineWidget(QWidget):
     def mouseDoubleClickEvent(self, event):
         pos = event.localPos()
         ti, ci = self._hit_test(pos)
+        if ti < 0 and pos.y() >= RULER_HEIGHT:
+            candidate = int((pos.y() - RULER_HEIGHT) // TRACK_HEIGHT)
+            if 0 <= candidate < len(self._tracks):
+                ti = candidate
         if ti >= 0 and self._tracks[ti].type == "zoom":
-            self.zoom_double_clicked.emit(self._playhead_s)
+            clip = self._tracks[ti].clips[ci] if ci >= 0 else None
+            self.zoom_double_clicked.emit(min(
+                self._x_to_time(int(pos.x())), self._duration), clip)
         super().mouseDoubleClickEvent(event)
 
     def _make_move_cmd(self) -> MoveClipCommand | None:
@@ -264,13 +303,39 @@ class TimelineWidget(QWidget):
         ti, ci = self._hit_test(pos)
         menu = QMenu(self)
         if ti >= 0 and ci >= 0:
+            clip = self._tracks[ti].clips[ci]
             menu.addAction("删除", lambda ti=ti, ci=ci: self.delete_clip(ti, ci))
             menu.addAction("拆分", lambda ti=ti, ci=ci: self._split_clip(ti, ci))
+            if clip.type == "video":
+                speed_menu = menu.addMenu("速度")
+                for spd in SPEED_OPTIONS:
+                    act = speed_menu.addAction(format_speed_label(spd) or "1x")
+                    act.setCheckable(True)
+                    act.setChecked(abs(clip.speed - spd) < 0.001)
+                    act.triggered.connect(
+                        lambda checked, ti=ti, ci=ci, spd=spd: self._change_speed(ti, ci, spd))
             menu.addSeparator()
             menu.addAction("选中", lambda ti=ti, ci=ci: self._select_clip(ti, ci))
         menu.addAction("全选", self._select_all)
         menu.addAction("清除选中", lambda: setattr(self, '_selected_clip', -1) or self.update())
         menu.exec_(self.mapToGlobal(pos))
+
+    def _change_speed(self, track_index: int, clip_index: int, new_speed: float):
+        clip = self._tracks[track_index].clips[clip_index]
+        old_speed = clip.speed
+        if abs(old_speed - new_speed) < 0.001:
+            return
+        next_start = None
+        if clip_index + 1 < len(self._tracks[track_index].clips):
+            next_start = self._tracks[track_index].clips[clip_index + 1].start
+        result = plan_clip_speed_change(clip.start, clip.end, old_speed, new_speed, next_start)
+        if "blocked_reason" in result:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "无法变更速度",
+                                f"变更速度会与下一个 clip 重叠，请先拆分或移动 clip")
+            return
+        cmd = ChangeSpeedCommand(track_index, clip_index, old_speed, new_speed, clip.end)
+        self._push_undo(cmd)
 
     def delete_clip(self, track_index: int, clip_index: int):
         cmd = DeleteClipCommand(track_index=track_index, clip_index=clip_index)
@@ -296,7 +361,7 @@ class TimelineWidget(QWidget):
     # ── 键盘事件 ──────────────────────────────────────────
 
     def keyPressEvent(self, event):
-        if event.matches(Qt.Key_Delete) or event.matches(Qt.Key_Backspace):
+        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
             if self._selected_clip >= 0:
                 self.delete_clip(self._selected_track, self._selected_clip)
                 self._selected_clip = -1
@@ -305,13 +370,16 @@ class TimelineWidget(QWidget):
             if self._selected_clip >= 0:
                 self._split_clip(self._selected_track, self._selected_clip)
             return
-        if event.matches(Qt.Key_Left) and self._selected_clip >= 0:
+        if event.key() == Qt.Key_Left and self._selected_clip >= 0:
             clip = self._tracks[self._selected_track].clips[self._selected_clip]
+            new_start = max(0.0, clip.start - 0.5)
+            shift = new_start - clip.start
             cmd = MoveClipCommand(self._selected_track, self._selected_clip,
-                                  clip.start, clip.start - 0.5, clip.end, clip.end - 0.5)
+                                  clip.start, new_start,
+                                  clip.end, clip.end + shift)
             self._push_undo(cmd)
             return
-        if event.matches(Qt.Key_Right) and self._selected_clip >= 0:
+        if event.key() == Qt.Key_Right and self._selected_clip >= 0:
             clip = self._tracks[self._selected_track].clips[self._selected_clip]
             cmd = MoveClipCommand(self._selected_track, self._selected_clip,
                                   clip.start, clip.start + 0.5, clip.end, clip.end + 0.5)
@@ -411,7 +479,12 @@ class TimelineWidget(QWidget):
         if rect.width() > 40:
             p.setPen(QColor("white"))
             p.setFont(QFont("sans-serif", 8))
-            label = f"{clip.type}: {clip.content[:20]}" if clip.content else clip.type
+            if clip.type == "audio_extra":
+                label = os.path.basename(clip.content) if clip.content else "额外音频"
+            else:
+                base = f"{clip.type}: {clip.content[:20]}" if clip.content else clip.type
+                speed_label = format_speed_label(getattr(clip, 'speed', 1.0))
+                label = f"{base} {speed_label}".strip() if speed_label else base
             p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
                        Qt.AlignLeft | Qt.AlignVCenter, label)
 

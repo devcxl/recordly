@@ -125,6 +125,21 @@ class SettingsDialog(QDialog):
         self._theme_combo.setFixedWidth(120)
         layout.addLayout(self._row("光标主题:", self._theme_combo))
 
+        self._cursor_style_combo = QComboBox()
+        for label, value in (
+            ("圆点", "dot"),
+            ("圆环", "ring"),
+            ("聚光", "spotlight"),
+            ("经典箭头", "arrow"),
+        ):
+            self._cursor_style_combo.addItem(label, value)
+        style_index = self._cursor_style_combo.findData(
+            self._config.cursor_style)
+        self._cursor_style_combo.setCurrentIndex(
+            style_index if style_index >= 0 else 0)
+        self._cursor_style_combo.setFixedWidth(120)
+        layout.addLayout(self._row("光标样式:", self._cursor_style_combo))
+
         self._trail_check = QCheckBox("启用鼠标拖尾")
         self._trail_check.setChecked(self._config.trail_enabled)
         layout.addWidget(self._trail_check)
@@ -203,6 +218,7 @@ class SettingsDialog(QDialog):
         self._config.default_bitrate = self._bitrate_edit.text()
         self._config.cursor_size = self._cursor_slider.value()
         self._config.cursor_theme = self._theme_combo.currentText()
+        self._config.cursor_style = self._cursor_style_combo.currentData() or "dot"
         self._config.trail_enabled = self._trail_check.isChecked()
         self._config.zoom_rect_ratio = self._zoom_ratio_slider.value() / 100.0
         self._config.preview_quality = self._quality_slider.value() / 100.0

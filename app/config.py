@@ -28,6 +28,7 @@ class AppConfig:
     preview_quality: float = 0.5
     cursor_size: int = 32
     cursor_theme: str = "dark"
+    cursor_style: str = "dot"
     trail_enabled: bool = True
     zoom_rect_ratio: float = 0.5
 
@@ -43,6 +44,7 @@ class AppConfig:
         cfg.preview_quality = float(s.value("preview_quality", cls.preview_quality))
         cfg.cursor_size = int(s.value("cursor_size", cls.cursor_size))
         cfg.cursor_theme = s.value("cursor_theme", cls.cursor_theme)
+        cfg.cursor_style = s.value("cursor_style", cls.cursor_style)
         cfg.trail_enabled = s.value("trail_enabled", "true").lower() == "true"
         cfg.zoom_rect_ratio = float(s.value("zoom_rect_ratio", cls.zoom_rect_ratio))
         cfg.recordings_dir = os.path.expanduser(cfg.recordings_dir)
@@ -59,5 +61,6 @@ class AppConfig:
         s.setValue("preview_quality", self.preview_quality)
         s.setValue("cursor_size", self.cursor_size)
         s.setValue("cursor_theme", self.cursor_theme)
+        s.setValue("cursor_style", self.cursor_style)
         s.setValue("trail_enabled", "true" if self.trail_enabled else "false")
         s.setValue("zoom_rect_ratio", self.zoom_rect_ratio)
