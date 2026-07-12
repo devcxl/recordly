@@ -183,9 +183,5 @@ class ProjectGallery(QScrollArea):
             self.project_deleted.emit(project_path)
 
     def _on_rename_requested(self, project_path: str, new_name: str):
-        """重命名 → 更新 ProjectManager 并发射信号"""
-        try:
-            self._manager.rename_project(project_path, new_name)
-            self.project_renamed.emit(project_path, new_name)
-        except Exception:
-            QMessageBox.warning(self, "重命名失败", "无法重命名项目，请重试。")
+        """只发射信号，由 MainWindow 统一处理"""
+        self.project_renamed.emit(project_path, new_name)

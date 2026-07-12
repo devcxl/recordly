@@ -1,12 +1,15 @@
 """Recordly 主窗口 — Fluent Design 重构"""
 
 import os
+import shutil
 import subprocess
+import tempfile
+from datetime import datetime
 from uuid import uuid4
 
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
-    QFileDialog, QApplication, QListWidget, QMessageBox,
+    QFileDialog, QApplication, QMessageBox,
     QLabel, QProgressDialog, QScrollArea,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
@@ -25,13 +28,15 @@ from core.recorder import Recorder
 from core.compositor import Compositor
 from core.exporter import ExportWorker, ExportSettings
 from core.project import (
-    Clip, Track, AudioRegion, CropRegion,
+    Clip, Track, AudioRegion, CropRegion, Project, SourceInfo,
     sync_audio_regions_from_clips,
 )
+from core.project_manager import ProjectManager
 from ui.preview_widget import PreviewWidget
 from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
+from ui.project_gallery import ProjectGallery
 
 
 class MainWindow(FluentWindow):
@@ -55,6 +60,8 @@ class MainWindow(FluentWindow):
         self._editing_zoom_clip = None
         self._crop_overlay = None
         self._crop_active = False
+        os.makedirs(config.projects_dir, exist_ok=True)
+        self._project_manager = ProjectManager(config.projects_dir)
         self._setup_window()
         self._setup_interfaces()
         self._setup_navigation()
@@ -277,21 +284,17 @@ class MainWindow(FluentWindow):
         self._project_interface.setObjectName("projectInterface")
         layout = QVBoxLayout(self._project_interface)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._file_list = QListWidget()
-        self._file_list.setStyleSheet("""
-            QListWidget {
-                background: transparent; border: none;
-                color: white; font-size: 13px;
-            }
-            QListWidget::item { padding: 8px 20px; }
-            QListWidget::item:hover {
-                background: rgba(255,255,255,0.08);
-            }
-            QListWidget::item:selected {
-                background: rgba(255,255,255,0.12);
-            }
-        """)
-        layout.addWidget(self._file_list)
+        self._project_gallery = ProjectGallery(self._project_manager, self)
+        self._project_gallery.project_opened.connect(self._on_open_project)
+        self._project_gallery.project_deleted.connect(self._on_project_deleted)
+        self._project_gallery.project_renamed.connect(self._on_project_renamed)
+        layout.addWidget(self._project_gallery)
+        self._refresh_project_gallery()
+
+    def _refresh_project_gallery(self):
+        """从 ProjectManager 重新加载项目列表并刷新画廊"""
+        summaries = self._project_manager.list_projects()
+        self._project_gallery.set_projects(summaries)
 
     # ── 导航 ──────────────────────────────────────────────
 
@@ -414,6 +417,75 @@ class MainWindow(FluentWindow):
             self._playback.seek(0)
             self._connect_timeline_signals()
         self.update_status("● 录制完成")
+        self._auto_create_project()
+
+    def _auto_create_project(self):
+        """录制完成后后台导出源视频并自动创建项目"""
+        if not self._recorded_data or not self._recorded_data.get("frames"):
+            return
+
+        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        tmp_dir = tempfile.mkdtemp(prefix="recordly_export_")
+        tmp_path = os.path.join(tmp_dir, "source.mp4")
+
+        settings = ExportSettings(
+            output_path=tmp_path,
+            format="mp4",
+            fps=self.config.default_fps,
+            bitrate="5M",
+            max_height=720,
+        )
+        audio = self._recorded_data.get("audio")
+        audio_data = audio.data if audio else None
+        if audio:
+            settings.samplerate = audio.samplerate
+
+        worker = ExportWorker(self._compositor, audio_data, settings)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(lambda result: self._on_auto_export_finished(
+            result, name, tmp_dir, worker, thread))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _on_auto_export_finished(self, result, name, tmp_dir, worker, thread):
+        """自动导出完成后创建项目"""
+        if not result.success:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            InfoBar.warning(
+                title="自动创建项目失败",
+                content="源视频导出失败，可手动导出后创建项目",
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+            return
+
+        try:
+            project = Project()
+            project.name = name
+            project.duration = self._get_recording_duration()
+            project.source = SourceInfo(
+                video=result.path,
+                duration=project.duration,
+                fps=self.config.default_fps,
+                width=self._compositor.width,
+                height=self._compositor.height,
+            )
+            self._project_manager.create_project(name, project, result.path)
+            self._refresh_project_gallery()
+        except Exception as exc:
+            InfoBar.error(
+                title="创建项目失败",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _connect_timeline_signals(self):
         """重复录制时保持时间线信号单次连接。"""
@@ -921,8 +993,91 @@ class MainWindow(FluentWindow):
     def _on_new_project(self):
         self.update_status("● 新建项目...")
 
-    def _on_open_project(self):
-        self.update_status("● 打开项目...")
+    def _on_open_project(self, path: str):
+        """打开项目 → 加载到 compositor → 切换到编辑器界面"""
+        # 清理旧状态
+        self._recorded_data = None
+        self._playback = None
+        self._compositor._frames = []
+        self._compositor._frame_times = []
+        self._compositor._cursor_events = []
+        self._compositor._click_events = []
+        self._compositor._crop_region = None
+        self._crop_active = False
+        self._audio_regions = []
+
+        try:
+            project = self._project_manager.open_project(path)
+        except Exception as exc:
+            InfoBar.error(
+                title="打开项目失败",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+            return
+
+        # TODO: 从 project.source.video 解码帧到 compositor
+        # 当前视频帧解码到 Compositor（load_video 方法）是独立功能，本次不实现。
+        InfoBar.info(
+            title="项目已加载",
+            content="项目已加载，但视频帧解码功能尚未实现",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+        )
+
+        # 加载时间线
+        self._timeline.set_tracks(project.timeline)
+        self._timeline.duration = project.duration
+
+        # 加载音频区域
+        self._audio_regions = project.audio_regions[:]
+        if self._audio_regions:
+            self._update_audio_timeline()
+
+        # 加载裁剪区域
+        if project.crop_region:
+            self._compositor.set_crop(project.crop_region)
+            self._crop_active = True
+            self._btn_crop.setChecked(True)
+
+        # 启用编辑器控件
+        self._btn_export.setEnabled(True)
+        self._btn_crop.setEnabled(True)
+        self._btn_add_audio.setEnabled(True)
+        self._enable_playback_controls(True)
+        total = int(project.duration * project.source.fps) if project.source else 0
+        self._frame_label.setText(f"1 / {max(total, 1)}")
+
+        # 切换到编辑器界面
+        self.switchTo(self._editor_interface)
+        self.update_status(f"● 已打开项目: {project.name}")
+
+    def _on_project_deleted(self, path: str):
+        """删除项目目录并刷新画廊"""
+        try:
+            self._project_manager.delete_project(path)
+            self._refresh_project_gallery()
+        except Exception as exc:
+            InfoBar.error(
+                title="删除项目失败",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
+
+    def _on_project_renamed(self, path: str, new_name: str):
+        """重命名项目并刷新画廊"""
+        try:
+            self._project_manager.rename_project(path, new_name)
+            self._refresh_project_gallery()
+        except Exception as exc:
+            InfoBar.error(
+                title="重命名项目失败",
+                content=str(exc),
+                orient=Qt.Horizontal, isClosable=True,
+                position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+            )
 
     def _on_save_project(self):
         self.update_status("● 保存项目...")
