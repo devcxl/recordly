@@ -3,10 +3,10 @@
 import os
 
 from PyQt5.QtWidgets import (
-    QFrame, QVBoxLayout, QLabel, QLineEdit, QMenu, QHBoxLayout, QWidget,
+    QFrame, QVBoxLayout, QLabel, QLineEdit, QMenu, QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize
-from PyQt5.QtGui import QPixmap, QFont, QMouseEvent, QPainter, QColor, QBrush
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QPixmap, QFont, QMouseEvent, QPainter, QColor
 
 from core.project_manager import ProjectSummary
 
@@ -102,12 +102,17 @@ class ProjectCard(QFrame):
     # ── 缩略图 ─────────────────────────────────────────────
 
     def _load_thumbnail(self):
-        thumb_path = self._summary.thumbnail_path
-        if thumb_path and os.path.isfile(thumb_path):
-            pixmap = QPixmap(thumb_path)
-            if not pixmap.isNull():
-                self._thumb.setPixmap(pixmap)
-                return
+        try:
+            thumb_path = self._summary.thumbnail_path
+            if thumb_path and os.path.isfile(thumb_path):
+                pixmap = QPixmap(thumb_path)
+                if not pixmap.isNull():
+                    self._thumb.setPixmap(
+                        pixmap.scaled(self.CARD_WIDTH, self.THUMB_HEIGHT,
+                                      Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    return
+        except Exception:
+            pass
 
         # 加载失败 → 占位图
         self._draw_fallback_thumbnail()
@@ -125,7 +130,7 @@ class ProjectCard(QFrame):
     # ── 事件 ───────────────────────────────────────────────
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and not self._editing:
             self.clicked.emit(self._summary.path)
         super().mousePressEvent(event)
 
@@ -182,7 +187,16 @@ class ProjectCard(QFrame):
         self._editing = False
 
         if new_name != self._summary.name:
+            old_name = self._summary.name
+            self._summary.name = new_name
             self.rename_requested.emit(self._summary.path, new_name)
+
+    def update_summary(self, summary: ProjectSummary):
+        """重命名后由外部调用，更新卡片显示"""
+        self._summary = summary
+        self._name_label.setText(summary.name)
+        self._name_edit.setText(summary.name)
+        self._load_thumbnail()
 
     def focusOutEvent(self, event):
         if self._editing:
