@@ -21,12 +21,18 @@ _DEBUG = True  # 导出错误时打印完整 ffmpeg 命令和 stderr
 
 
 def _start_stderr_reader(process):
-    """后台线程实时读取 ffmpeg stderr，防止管道缓冲区满阻塞"""
+    """后台线程实时读取 ffmpeg stderr，防止管道缓冲区满阻塞，同时写入临时文件"""
     chunks = []
 
     def _read():
-        for line in process.stderr:
-            chunks.append(line.decode("utf-8", errors="replace"))
+        try:
+            for line in process.stderr:
+                text = line.decode("utf-8", errors="replace")
+                chunks.append(text)
+                if _DEBUG:
+                    print(f"[ffmpeg] {text.rstrip()}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
     t = threading.Thread(target=_read, daemon=True)
     t.start()
     return t, chunks
@@ -187,8 +193,12 @@ class ExportWorker(QObject):
             try:
                 self._process.stdin.write(data)
             except BrokenPipeError:
-                stderr_text = "".join(stderr_chunks).strip()
+                self._process.stdin.close()
                 self._process.wait()
+                stderr_thread.join(timeout=2)
+                stderr_text = "".join(stderr_chunks).strip()
+                if not stderr_text:
+                    stderr_text = "(ffmpeg 无 stderr 输出)"
                 self._process = None
                 self.finished.emit(ExportResult(False, s.output_path,
                                                 error=f"FFmpeg 管道断开:\n{stderr_text}"))
@@ -198,7 +208,7 @@ class ExportWorker(QObject):
         process = self._process
         process.stdin.close()
         returncode = process.wait()
-        stderr_thread.join(timeout=1)
+        stderr_thread.join(timeout=2)
         stderr_text = "".join(stderr_chunks).strip()
         self._process = None
 
