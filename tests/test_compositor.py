@@ -326,7 +326,7 @@ class TestCompositorRenderAll:
         # render_all 按原始帧数输出黑帧
         rendered = list(c.render_all())
         assert len(rendered) == 1
-        assert rendered[0].convert("RGB").getpixel((0, 0)) == (0, 0, 0)
+        assert rendered[0].convert("RGB").getpixel((0, 0)) == (100, 100, 100)
         # compose_index 返回黑帧而非 None
         frame = c.compose_index(0)
         assert frame is not None

@@ -2,7 +2,9 @@
 
 import os
 import subprocess
+import sys
 import tempfile
+import threading
 import wave
 import numpy as np
 from dataclasses import dataclass
@@ -13,6 +15,21 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 from core.compositor import Compositor
 from core.aspect_ratio import calculate_export_dimensions
+
+
+_DEBUG = True  # 导出错误时打印完整 ffmpeg 命令和 stderr
+
+
+def _start_stderr_reader(process):
+    """后台线程实时读取 ffmpeg stderr，防止管道缓冲区满阻塞"""
+    chunks = []
+
+    def _read():
+        for line in process.stderr:
+            chunks.append(line.decode("utf-8", errors="replace"))
+    t = threading.Thread(target=_read, daemon=True)
+    t.start()
+    return t, chunks
 
 
 @dataclass
@@ -147,6 +164,12 @@ class ExportWorker(QObject):
 
         output = output.overwrite_output()
         self._process = output.run_async(pipe_stdin=True, pipe_stderr=True)
+        stderr_thread, stderr_chunks = _start_stderr_reader(self._process)
+
+        if _DEBUG:
+            cmd = output.compile()
+            print(f"[exporter] ffmpeg {' '.join(cmd)}", file=sys.stderr, flush=True)
+            print(f"[exporter] 帧数={total} 尺寸={w}x{h} fps={s.fps}", file=sys.stderr, flush=True)
 
         for i, frame in enumerate(c.render_all()):
             if self._cancelled:
@@ -158,21 +181,25 @@ class ExportWorker(QObject):
                 frame = frame.resize((w, h), Image.LANCZOS)
             if frame.mode != "RGBA":
                 frame = frame.convert("RGBA")
+            data = frame.tobytes()
+            if i == 0 and _DEBUG:
+                print(f"[exporter] 首帧 {frame.size} {frame.mode} {len(data)} bytes", file=sys.stderr, flush=True)
             try:
-                self._process.stdin.write(frame.tobytes())
+                self._process.stdin.write(data)
             except BrokenPipeError:
-                stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+                stderr_text = "".join(stderr_chunks).strip()
                 self._process.wait()
                 self._process = None
                 self.finished.emit(ExportResult(False, s.output_path,
-                                                error=f"FFmpeg 管道断开: {stderr.strip()}"))
+                                                error=f"FFmpeg 管道断开:\n{stderr_text}"))
                 return
             self.progress.emit(int((i + 1) / total * 100))
 
         process = self._process
         process.stdin.close()
         returncode = process.wait()
-        stderr = process.stderr.read().decode("utf-8", errors="replace")
+        stderr_thread.join(timeout=1)
+        stderr_text = "".join(stderr_chunks).strip()
         self._process = None
 
         for p in _temp_paths:
@@ -184,7 +211,7 @@ class ExportWorker(QObject):
         if returncode != 0 or not os.path.exists(s.output_path):
             self.finished.emit(ExportResult(
                 False, s.output_path,
-                error=f"FFmpeg 导出失败: {stderr.strip() or returncode}",
+                error=f"FFmpeg 导出失败 (exit={returncode}):\n{stderr_text}",
             ))
             return
 

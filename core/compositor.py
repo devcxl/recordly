@@ -379,7 +379,7 @@ class Compositor:
 
     def render_all(self, start: int = 0, end: int = None
                    ) -> Generator[Image.Image, None, None]:
-        if self._clips is None:
+        if not self._clips:
             frames = self._frames[start:end]
             for offset, frame in enumerate(frames, start=start):
                 yield self.compose(frame, offset / self.fps)
