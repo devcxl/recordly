@@ -97,6 +97,53 @@ class TestProject:
         finally:
             os.unlink(path)
 
+    def test_new_fields_roundtrip(self):
+        """新字段 name/modified_at/duration/thumbnail_path 保存/加载后正确保留"""
+        p = Project()
+        p.name = "My Project"
+        p.duration = 120.5
+        p.thumbnail_path = "/thumbnails/proj.png"
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            p.save(path)
+            loaded = Project.load(path)
+            assert loaded.name == "My Project"
+            assert loaded.duration == 120.5
+            assert loaded.thumbnail_path == "/thumbnails/proj.png"
+            # modified_at 在 save() 中被设为当前时间，非空即可
+            assert loaded.modified_at != ""
+        finally:
+            os.unlink(path)
+
+    def test_load_legacy_json_without_new_fields(self):
+        """加载旧版 JSON（无新字段）不报错，默认值生效"""
+        legacy = {
+            "version": "1.0",
+            "created_at": "2024-01-01T00:00:00",
+            "source": None,
+            "timeline": [],
+            "cursor": {},
+            "frame_style": {},
+            "annotations": [],
+            "audio_regions": [],
+            "crop_region": None,
+            "aspect_ratio": "native",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w",
+                                         delete=False) as f:
+            json.dump(legacy, f)
+            path = f.name
+        try:
+            loaded = Project.load(path)
+            assert loaded.name == ""
+            assert loaded.modified_at == ""
+            assert loaded.duration == 0.0
+            assert loaded.thumbnail_path == ""
+        finally:
+            os.unlink(path)
+
 
 class TestTrack:
     def test_default_values(self):
