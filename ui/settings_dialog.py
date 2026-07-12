@@ -95,6 +95,18 @@ class SettingsDialog(QDialog):
         self._bitrate_edit.setFixedWidth(100)
         layout.addLayout(self._row("默认码率:", self._bitrate_edit))
 
+        # ── 项目目录 ──
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel("项目目录:"))
+        self._projects_dir_edit = QLineEdit(self._config.projects_dir)
+        self._projects_dir_edit.setReadOnly(True)
+        dir_row.addWidget(self._projects_dir_edit, 1)
+        browse_btn = QPushButton("浏览...")
+        browse_btn.setFixedWidth(80)
+        browse_btn.clicked.connect(self._on_browse_projects_dir)
+        dir_row.addWidget(browse_btn)
+        layout.addLayout(dir_row)
+
         layout.addStretch()
         return w
 
@@ -211,11 +223,20 @@ class SettingsDialog(QDialog):
         layout.addStretch()
         return w
 
+    # ── 事件 ───────────────────────────────────────────────
+
+    def _on_browse_projects_dir(self):
+        path = QFileDialog.getExistingDirectory(
+            self, "选择项目目录", self._config.projects_dir)
+        if path:
+            self._projects_dir_edit.setText(path)
+
     # ── 保存 ───────────────────────────────────────────────
 
     def _on_save(self):
         self._config.default_fps = self._fps_spin.value()
         self._config.default_bitrate = self._bitrate_edit.text()
+        self._config.projects_dir = self._projects_dir_edit.text()
         self._config.cursor_size = self._cursor_slider.value()
         self._config.cursor_theme = self._theme_combo.currentText()
         self._config.cursor_style = self._cursor_style_combo.currentData() or "dot"
