@@ -995,6 +995,17 @@ class MainWindow(FluentWindow):
 
     def _on_open_project(self, path: str):
         """打开项目 → 加载到 compositor → 切换到编辑器界面"""
+        # 清理旧状态
+        self._recorded_data = None
+        self._playback = None
+        self._compositor._frames = []
+        self._compositor._frame_times = []
+        self._compositor._cursor_events = []
+        self._compositor._click_events = []
+        self._compositor._crop_region = None
+        self._crop_active = False
+        self._audio_regions = []
+
         try:
             project = self._project_manager.open_project(path)
         except Exception as exc:
@@ -1005,6 +1016,15 @@ class MainWindow(FluentWindow):
                 position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
             )
             return
+
+        # TODO: 从 project.source.video 解码帧到 compositor
+        # 当前视频帧解码到 Compositor（load_video 方法）是独立功能，本次不实现。
+        InfoBar.info(
+            title="项目已加载",
+            content="项目已加载，但视频帧解码功能尚未实现",
+            orient=Qt.Horizontal, isClosable=True,
+            position=InfoBarPosition.TOP_RIGHT, duration=5000, parent=self,
+        )
 
         # 加载时间线
         self._timeline.set_tracks(project.timeline)
@@ -1019,6 +1039,7 @@ class MainWindow(FluentWindow):
         if project.crop_region:
             self._compositor.set_crop(project.crop_region)
             self._crop_active = True
+            self._btn_crop.setChecked(True)
 
         # 启用编辑器控件
         self._btn_export.setEnabled(True)
