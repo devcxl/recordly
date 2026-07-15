@@ -1057,6 +1057,7 @@ class MainWindow(QMainWindow):
             max_height=export_max_height,
             extra_audio=self._audio_regions if self._audio_regions else None,
             crop_region=crop_region,
+            use_gpu=dialog.use_gpu,
         )
         self._btn_export.setEnabled(False)
 

@@ -19,6 +19,27 @@ from core.aspect_ratio import calculate_export_dimensions
 
 logger = logging.getLogger(__name__)
 
+_gpu_available_cache: bool | None = None
+
+
+def is_gpu_available() -> bool:
+    """检测 CUDA NVENC 是否可用（结果缓存）"""
+    global _gpu_available_cache
+    if _gpu_available_cache is not None:
+        return _gpu_available_cache
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-init_hw_device", "cuda=cuda:0",
+             "-f", "lavfi", "-i", "testsrc=duration=0.1:size=320x240:rate=10",
+             "-vf", "hwupload_cuda,scale_cuda=320:240", "-c:v", "h264_nvenc",
+             "-b:v", "1M", "-f", "null", "-"],
+            capture_output=True, timeout=10,
+        )
+        _gpu_available_cache = result.returncode == 0
+    except Exception:
+        _gpu_available_cache = False
+    return _gpu_available_cache
+
 
 def _start_stderr_reader(process):
     """后台线程实时读取 ffmpeg stderr，防止管道缓冲区满阻塞，同时写入临时文件"""
@@ -51,6 +72,8 @@ class ExportSettings:
     aspect_ratio: str = "native"
     quality: float = 1.0
     loop: bool = True              # GIF 是否循环
+    preset: str = "veryfast"       # x264 preset: ultrafast/superfast/veryfast/faster/fast/medium/slow/slower/veryslow
+    use_gpu: bool = False          # 使用 GPU (NVENC CUDA) 硬件编码
     clip_speeds: list[tuple[float, float, float]] | None = None  # (start_ms, end_ms, speed)
     extra_audio: list | None = None  # list[AudioRegion]
     crop_region: 'CropRegion | None' = None
@@ -103,6 +126,15 @@ class ExportWorker(QObject):
 
     def _export_mp4(self):
         s = self._settings
+        if s.use_gpu and is_gpu_available():
+            self._export_mp4_nvenc()
+            return
+        self._export_mp4_cpu()
+
+    # ── MP4 (CPU: libx264) ──────────────────────────────
+
+    def _export_mp4_cpu(self):
+        s = self._settings
         c = self._compositor
         src_w, src_h = c.width, c.height
 
@@ -129,7 +161,7 @@ class ExportWorker(QObject):
             return
 
         video = ffmpeg.input("pipe:", format="rawvideo",
-                              pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
+                              pix_fmt="rgb24", s=f"{w}x{h}", r=c.fps)
 
         # ── 速度滤镜 ────────────────────────────────────────
         # ── 音频处理 ────────────────────────────────────────
@@ -168,14 +200,14 @@ class ExportWorker(QObject):
             output = ffmpeg.output(
                 video, audio_input, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=s.bitrate,
+                video_bitrate=s.bitrate, preset=s.preset,
                 acodec="aac", audio_bitrate="192k",
             )
         else:
             output = ffmpeg.output(
                 video, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=s.bitrate,
+                video_bitrate=s.bitrate, preset=s.preset,
             )
 
         output = output.overwrite_output()
@@ -195,8 +227,8 @@ class ExportWorker(QObject):
                 return
             if frame.size != (w, h):
                 frame = frame.resize((w, h), Image.LANCZOS)
-            if frame.mode != "RGBA":
-                frame = frame.convert("RGBA")
+            if frame.mode != "RGB":
+                frame = frame.convert("RGB")
             data = frame.tobytes()
             if i == 0 and logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"首帧 {frame.size} {frame.mode} {len(data)} bytes")
@@ -232,6 +264,134 @@ class ExportWorker(QObject):
             self.finished.emit(ExportResult(
                 False, s.output_path,
                 error=f"FFmpeg 导出失败 (exit={returncode}):\n{stderr_text}",
+            ))
+            return
+
+        result = ExportResult(
+            success=True, path=s.output_path,
+            size_bytes=os.path.getsize(s.output_path),
+            duration=total / c.fps,
+        )
+        self.finished.emit(result)
+
+    # ── MP4 (GPU: NVENC CUDA) ───────────────────────────
+
+    def _export_mp4_nvenc(self):
+        s = self._settings
+        c = self._compositor
+        src_w, src_h = c.width, c.height
+
+        if s.width and s.height:
+            w = min(s.width, src_w) if src_w > 0 else s.width
+            h = min(s.height, src_h) if src_h > 0 else s.height
+        else:
+            dims = calculate_export_dimensions(
+                src_w, src_h, s.aspect_ratio, quality=s.quality,
+                max_height=s.max_height)
+            w, h = dims.width, dims.height
+
+        if s.crop_region and (s.crop_region.width < 1.0 or s.crop_region.height < 1.0):
+            w = int(w * s.crop_region.width)
+            h = int(h * s.crop_region.height)
+
+        total = c.total_output_frames
+        if total == 0:
+            self.finished.emit(ExportResult(False, s.output_path,
+                                            error="没有帧可以导出"))
+            return
+
+        # 音频处理（与 CPU 路径共用临时 WAV 逻辑）
+        _temp_paths = []
+        orig_wav = None
+        if self._audio_data is not None and len(self._audio_data) > 0:
+            orig_wav = self._save_temp_wav(self._audio_data, s.samplerate)
+            _temp_paths.append(orig_wav)
+
+        mixed_wav = None
+        extra = s.extra_audio or []
+        if extra:
+            mixed_wav = self._build_audio_filtergraph(
+                extra, orig_wav, s.samplerate,
+                video_duration=total / c.fps,
+            )
+            if mixed_wav:
+                _temp_paths.append(mixed_wav)
+        elif orig_wav and c._clips:
+            mixed_wav = self._build_audio_filtergraph(
+                [], orig_wav, s.samplerate,
+                video_duration=total / c.fps,
+            )
+            if mixed_wav:
+                _temp_paths.append(mixed_wav)
+
+        final_wav = mixed_wav or orig_wav
+
+        # 视频输入：rgba（NVENC 原生支持，无需 yuv 转换）
+        video = ffmpeg.input("pipe:", format="rawvideo",
+                              pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
+        video = video.filter("hwupload_cuda")
+
+        if final_wav:
+            audio_input = ffmpeg.input(final_wav)
+            output = ffmpeg.output(
+                video, audio_input, s.output_path,
+                vcodec="h264_nvenc", video_bitrate=s.bitrate,
+                acodec="aac", audio_bitrate="192k",
+            )
+        else:
+            output = ffmpeg.output(
+                video, s.output_path,
+                vcodec="h264_nvenc", video_bitrate=s.bitrate,
+            )
+
+        output = output.overwrite_output()
+        cmd = output.compile()
+        cmd.insert(1, "-init_hw_device")
+        cmd.insert(2, "cuda=cuda:0")
+        self._process = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        stderr_thread, stderr_chunks = _start_stderr_reader(self._process)
+
+        for i, frame in enumerate(c.render_all()):
+            if self._cancelled:
+                self._process.terminate()
+                self.finished.emit(ExportResult(False, s.output_path,
+                                                error="已取消"))
+                return
+            if frame.size != (w, h):
+                frame = frame.resize((w, h), Image.LANCZOS)
+            if frame.mode != "RGBA":
+                frame = frame.convert("RGBA")
+            try:
+                self._process.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                self._process.stdin.close()
+                self._process.wait()
+                stderr_thread.join(timeout=2)
+                stderr_text = "".join(stderr_chunks).strip()
+                self._process = None
+                self.finished.emit(ExportResult(False, s.output_path,
+                                                error=f"NVENC 管道断开:\n{stderr_text}"))
+                return
+            self.progress.emit(int((i + 1) / total * 100))
+
+        process = self._process
+        process.stdin.close()
+        returncode = process.wait()
+        stderr_thread.join(timeout=2)
+        stderr_text = "".join(stderr_chunks).strip()
+        self._process = None
+
+        for p in _temp_paths:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+        if returncode != 0 or not os.path.exists(s.output_path):
+            self.finished.emit(ExportResult(
+                False, s.output_path,
+                error=f"NVENC 导出失败 (exit={returncode}):\n{stderr_text}",
             ))
             return
 
