@@ -20,6 +20,8 @@ class HomePage(QWidget):
     record_requested = pyqtSignal()
     open_project_requested = pyqtSignal()
     project_opened = pyqtSignal(str)
+    project_deleted = pyqtSignal(str)
+    project_renamed = pyqtSignal(str, str)
 
     def __init__(self, project_manager: ProjectManager, parent=None):
         super().__init__(parent)
@@ -124,6 +126,8 @@ class HomePage(QWidget):
         self._record_btn.clicked.connect(self.record_requested.emit)
         self._open_btn.clicked.connect(self.open_project_requested.emit)
         self._gallery.project_opened.connect(self.project_opened.emit)
+        self._gallery.project_deleted.connect(self.project_deleted.emit)
+        self._gallery.project_renamed.connect(self.project_renamed.emit)
 
     def refresh_projects(self):
         """刷新项目画廊"""

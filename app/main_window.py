@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
     QLabel, QProgressDialog, QScrollArea,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QThread
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
 
 from app.config import AppConfig
@@ -29,7 +29,7 @@ from ui.preview_widget import PreviewWidget
 from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
-from ui.project_gallery import ProjectGallery
+from ui.home_page import HomePage
 
 
 class MainWindow(QMainWindow):
@@ -128,7 +128,7 @@ class MainWindow(QMainWindow):
 
     def _setup_interfaces(self):
         self._setup_editor_interface()
-        self._setup_project_interface()
+        self._setup_home_page()
 
     def _setup_editor_interface(self):
         self._editor_interface = QWidget()
@@ -201,22 +201,14 @@ class MainWindow(QMainWindow):
         if playback:
             playback.seek(playback.current_frame)
 
-    def _setup_project_interface(self):
-        self._project_interface = QWidget()
-        self._project_interface.setObjectName("projectInterface")
-        layout = QVBoxLayout(self._project_interface)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._project_gallery = ProjectGallery(self._project_manager, self)
-        self._project_gallery.project_opened.connect(self._on_open_project)
-        self._project_gallery.project_deleted.connect(self._on_project_deleted)
-        self._project_gallery.project_renamed.connect(self._on_project_renamed)
-        layout.addWidget(self._project_gallery)
-        self._refresh_project_gallery()
-
-    def _refresh_project_gallery(self):
-        """从 ProjectManager 重新加载项目列表并刷新画廊"""
-        summaries = self._project_manager.list_projects()
-        self._project_gallery.set_projects(summaries)
+    def _setup_home_page(self):
+        self._home_page = HomePage(self._project_manager, self)
+        self._home_page.record_requested.connect(self._on_home_record)
+        self._home_page.open_project_requested.connect(self._on_home_open_project)
+        self._home_page.project_opened.connect(self._on_open_project)
+        self._home_page.project_deleted.connect(self._on_project_deleted)
+        self._home_page.project_renamed.connect(self._on_project_renamed)
+        self._refresh_home_page()
 
     # ── 导航 ──────────────────────────────────────────────
 
@@ -224,26 +216,27 @@ class MainWindow(QMainWindow):
         # ── 菜单栏 ──
         menubar = self.menuBar()
 
+        # 文件菜单
         file_menu = menubar.addMenu("文件")
-        file_menu.addAction("设置", self._on_open_settings)
+
+        # 仅编辑器页显示
+        self._menu_save = file_menu.addAction("保存", self._on_save_project)
+        self._menu_export = file_menu.addAction("导出", self._on_export)
+        self._menu_back_home = file_menu.addAction("返回首页", self._switch_to_home)
+        file_menu.addSeparator()
+
+        # 仅首页显示
+        self._menu_settings = file_menu.addAction("设置", self._on_open_settings)
+
         file_menu.addSeparator()
         file_menu.addAction("退出", QApplication.quit)
 
-        view_menu = menubar.addMenu("视图")
-        self._nav_edit_action = QAction("编辑", self, checkable=True)
-        self._nav_edit_action.setChecked(True)
-        self._nav_edit_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._editor_interface))
-        view_menu.addAction(self._nav_edit_action)
+        # 帮助菜单
+        help_menu = menubar.addMenu("帮助")
+        help_menu.addAction("关于", lambda: QMessageBox.about(
+            self, "关于 Recordly", "Recordly v1.0\n屏幕录制与编辑工具"))
 
-        self._nav_project_action = QAction("项目文件", self, checkable=True)
-        self._nav_project_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._project_interface))
-        view_menu.addAction(self._nav_project_action)
-
-        # 互斥勾选
-        self._nav_edit_action.triggered.connect(lambda: self._nav_project_action.setChecked(False))
-        self._nav_project_action.triggered.connect(lambda: self._nav_edit_action.setChecked(False))
-
-        # ── 工具栏 ──
+        # ── 工具栏（编辑器页显示）──
         self._toolbar = QToolBar("工具")
         self._toolbar.setObjectName("mainToolbar")
         self._toolbar.setMovable(False)
@@ -337,21 +330,43 @@ class MainWindow(QMainWindow):
 
         # ── 堆叠页面 ──
         self._stacked_widget = QStackedWidget()
-        self._stacked_widget.addWidget(self._editor_interface)
-        self._stacked_widget.addWidget(self._project_interface)
+        self._stacked_widget.addWidget(self._home_page)          # index 0
+        self._stacked_widget.addWidget(self._editor_interface)   # index 1
         self.setCentralWidget(self._stacked_widget)
 
         # 状态栏
         self.setStatusBar(QStatusBar())
 
-        # 页面切换时同步导航状态
-        self._stacked_widget.currentChanged.connect(self._on_nav_page_changed)
+        # 默认首页，工具栏隐藏
+        self._toolbar.setVisible(False)
+        self._update_menu_visibility()
 
-    def _on_nav_page_changed(self, index):
-        """页面切换时更新导航按钮状态"""
-        is_editor = (self._stacked_widget.currentWidget() == self._editor_interface)
-        self._nav_edit_action.setChecked(is_editor)
-        self._nav_project_action.setChecked(not is_editor)
+    # ── 页面管理 ──────────────────────────────────────────
+
+    def _switch_to_home(self):
+        """切换到首页"""
+        self._toolbar.setVisible(False)
+        self._home_page.refresh_projects()
+        self._stacked_widget.setCurrentWidget(self._home_page)
+        self._update_menu_visibility()
+
+    def _switch_to_editor(self):
+        """切换到编辑器"""
+        self._toolbar.setVisible(True)
+        self._stacked_widget.setCurrentWidget(self._editor_interface)
+        self._update_menu_visibility()
+
+    def _update_menu_visibility(self):
+        """按当前页面显示/隐藏菜单项"""
+        is_editor = self._stacked_widget.currentWidget() == self._editor_interface
+        self._menu_save.setVisible(is_editor)
+        self._menu_export.setVisible(is_editor)
+        self._menu_back_home.setVisible(is_editor)
+        self._menu_settings.setVisible(not is_editor)
+
+    def _refresh_home_page(self):
+        """刷新首页项目列表"""
+        self._home_page.refresh_projects()
 
     # ── 系统托盘 ──────────────────────────────────────────
 
@@ -387,6 +402,29 @@ class MainWindow(QMainWindow):
         if reason == QSystemTrayIcon.DoubleClick:
             self.showNormal()
             self.raise_()
+
+    # ── 首页交互 ──────────────────────────────────────────
+
+    def _on_home_record(self):
+        """首页点击'开始录制' → 确认弹窗 → 最小化 → 开始录制"""
+        reply = QMessageBox.question(
+            self, "开始录制",
+            "将开始屏幕录制。录制时窗口会最小化到系统托盘，"
+            "你可以通过托盘图标停止录制。\n\n确定开始？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            self.showMinimized()
+            QTimer.singleShot(500, self._toggle_record)
+
+    def _on_home_open_project(self):
+        """首页点击'打开项目' → 文件选择器"""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择项目文件", self.config.projects_dir,
+            "Recordly 项目 (project.json)",
+        )
+        if path:
+            self._on_open_project(path)
 
     # ── 录制 ──────────────────────────────────────────────
 
@@ -504,7 +542,12 @@ class MainWindow(QMainWindow):
                 height=self._compositor.height,
             )
             self._project_manager.create_project(name, project, result.path)
-            self._refresh_project_gallery()
+            self._refresh_home_page()
+            # 自动切换到编辑器并恢复窗口
+            self._switch_to_editor()
+            self.showNormal()
+            self.raise_()
+            self.update_status("● 录制完成 — 已自动创建项目")
         except Exception as exc:
             self._show_notification("创建项目失败", str(exc), "error")
         finally:
@@ -1045,14 +1088,14 @@ class MainWindow(QMainWindow):
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
         # 切换到编辑器界面
-        self._stacked_widget.setCurrentWidget(self._editor_interface)
+        self._switch_to_editor()
         self.update_status(f"● 已打开项目: {project.name}")
 
     def _on_project_deleted(self, path: str):
         """删除项目目录并刷新画廊"""
         try:
             self._project_manager.delete_project(path)
-            self._refresh_project_gallery()
+            self._refresh_home_page()
         except Exception as exc:
             self._show_notification("删除项目失败", str(exc), "error")
 
@@ -1060,7 +1103,7 @@ class MainWindow(QMainWindow):
         """重命名项目并刷新画廊"""
         try:
             self._project_manager.rename_project(path, new_name)
-            self._refresh_project_gallery()
+            self._refresh_home_page()
         except Exception as exc:
             self._show_notification("重命名项目失败", str(exc), "error")
 
