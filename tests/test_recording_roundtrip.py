@@ -129,6 +129,11 @@ class TestGifFps:
         from PIL import Image
         gif = Image.open(str(tmp_path / "test.gif"))
         assert getattr(gif, "n_frames", 1) == 10
+        duration_ms = 0
+        for frame_index in range(gif.n_frames):
+            gif.seek(frame_index)
+            duration_ms += gif.info.get("duration", 0)
+        assert duration_ms == 1000
 
 
 class TestControlState:
