@@ -212,3 +212,39 @@ class TestAudioRegionSync:
 
         after_delete = sync_audio_regions_from_clips([split], synced)
         assert [region.id for region in after_delete] == ["audio-2"]
+
+
+class TestAtomicSave:
+    def test_atomic_save_preserves_original_on_failure(self, monkeypatch):
+        project = Project()
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            # 先保存一次
+            project.save(path)
+            with open(path) as f:
+                original = f.read()
+
+            # 模拟写入中途磁盘满
+            monkeypatch.setattr("json.dump", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+
+            try:
+                project.save(path)
+            except OSError:
+                pass
+
+            # 原文件内容不变
+            with open(path) as f:
+                assert f.read() == original
+        finally:
+            os.unlink(path)
+
+    def test_atomic_save_no_temp_leftover(self):
+        project = Project()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "project.json")
+            project.save(path)
+            assert os.path.exists(path)
+            # 临时文件应已通过 os.replace 清理
+            temps = [f for f in os.listdir(tmpdir) if f.startswith(".project-")]
+            assert len(temps) == 0
