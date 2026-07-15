@@ -486,6 +486,10 @@ class MainWindow(QMainWindow):
             self._connect_timeline_signals()
         self.update_status("● 录制完成")
         self._auto_create_project()
+        # 立即切换到编辑器（导出在后台异步进行）
+        self._switch_to_editor()
+        self.showNormal()
+        self.raise_()
 
     def _auto_create_project(self):
         """录制完成后后台导出源视频并自动创建项目"""
