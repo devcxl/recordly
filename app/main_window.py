@@ -481,8 +481,6 @@ class MainWindow(QMainWindow):
             self._show_notification("无法开始录制", str(exc), "error")
             self._cleanup_failed_recording()
             return
-        self._is_recording = True
-        self.recording_started.emit()
         self._update_ui_state()
 
     def _create_project_for_recording(self):
