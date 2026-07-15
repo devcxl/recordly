@@ -85,6 +85,7 @@ def test_recording_duration_prefers_capture_timestamps_over_frame_count():
 
 def test_recording_start_error_restores_idle_state():
     import app.main_window as main_window_module
+    from types import SimpleNamespace
 
     errors = []
 
@@ -93,9 +94,13 @@ def test_recording_start_error_restores_idle_state():
             raise RuntimeError("microphone unavailable")
 
     class FakeWindow:
-        _recorder = FakeRecorder()
+        _project_session = None
+        _recording_controller = SimpleNamespace(recorder=FakeRecorder())
         _is_recording = True
-        _current_project_path = None
+
+        @property
+        def _project_dir(self):
+            return None
 
         def set_recording_state(self, value):
             self._is_recording = value

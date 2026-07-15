@@ -59,6 +59,36 @@ class Compositor:
         self._monitor_left = 0
         self._monitor_top = 0
 
+    @property
+    def frames(self): return self._frames
+    @frames.setter
+    def frames(self, v): self._frames = v
+
+    @property
+    def cursor_events(self): return self._cursor_events
+    @cursor_events.setter
+    def cursor_events(self, v): self._cursor_events = v
+
+    @property
+    def click_events(self): return self._click_events
+    @click_events.setter
+    def click_events(self, v): self._click_events = v
+
+    @property
+    def frame_times(self): return self._frame_times
+    @frame_times.setter
+    def frame_times(self, v): self._frame_times = v
+
+    @property
+    def crop_region(self): return self._crop_region
+    @crop_region.setter
+    def crop_region(self, v): self._crop_region = v
+
+    @property
+    def monitor_left(self): return self._monitor_left
+    @property
+    def monitor_top(self): return self._monitor_top
+
     # ── 输入 ──────────────────────────────────────────────
 
     def load_frames(self, frames: list[CapturedFrame]):
