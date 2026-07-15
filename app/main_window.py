@@ -455,17 +455,16 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        # 立即创建项目目录
+        # 立即创建项目目录和占位 project.json
         name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
         os.makedirs(project_dir, exist_ok=True)
-        self._project_dir = project_dir
 
-        # 保存占位 project.json
         project = Project()
         project.name = name
         project.save(str(Path(project_dir) / "project.json"))
+        self._project_dir = project_dir
 
         self._project_name = name
         self.showMinimized()
@@ -492,11 +491,11 @@ class MainWindow(QMainWindow):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
         os.makedirs(project_dir, exist_ok=True)
-        self._project_dir = project_dir
         self._project_name = name
         project = Project()
         project.name = name
         project.save(str(Path(project_dir) / "project.json"))
+        self._project_dir = project_dir
         self.showMinimized()
 
     def _cleanup_failed_recording(self):
