@@ -150,4 +150,6 @@ class TestExportWorker:
 
         assert "palettegen" in command
         assert "paletteuse" in command
-        assert "-r 30" in command
+        # 输入保持 compositor.fps, split 前有 fps 降采样
+        assert "-r 30" in command, "输入应保持 compositor.fps"
+        assert "fps=fps=15" in command, "fps filter 应降采样到 settings.fps"

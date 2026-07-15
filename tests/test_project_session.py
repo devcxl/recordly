@@ -30,7 +30,7 @@ class TestProjectSessionLoad:
         with tempfile.TemporaryDirectory() as tmpdir:
             session = ProjectSession.create(tmpdir, "demo")
             session2 = ProjectSession.load(session.project_dir)
-            assert session2.project_dir == session.project_dir
+            assert os.path.samefile(session2.project_dir, session.project_dir)
             assert session2.project.name == "demo"
 
     def test_load_missing_dir_raises(self):
@@ -61,9 +61,13 @@ class TestProjectSessionPaths:
 
 class TestProjectSessionNormalize:
     def test_normalize_project_json_file(self):
-        p = ProjectSession.normalize_path("/home/user/projects/demo/project.json")
-        assert p == "/home/user/projects/demo"
+        p = ProjectSession.normalize_path(
+            os.path.join("home", "user", "Recordly", "projects", "test", "project.json"))
+        expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "test"))
+        assert p == expected
 
     def test_normalize_directory_unchanged(self):
-        p = ProjectSession.normalize_path("/home/user/projects/demo")
-        assert p == "/home/user/projects/demo"
+        p = ProjectSession.normalize_path(
+            os.path.join("home", "user", "Recordly", "projects", "demo"))
+        expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "demo"))
+        assert p == expected

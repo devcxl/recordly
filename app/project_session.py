@@ -77,6 +77,7 @@ class ProjectSession:
     @staticmethod
     def normalize_path(input_path: str) -> str:
         """将 project.json 文件路径规范化为项目目录路径"""
-        if input_path.endswith("project.json"):
-            return str(Path(input_path).parent)
-        return input_path
+        path = Path(input_path)
+        if path.name == "project.json":
+            return os.path.normpath(str(path.parent))
+        return os.path.normpath(str(path))

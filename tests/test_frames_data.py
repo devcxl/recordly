@@ -57,6 +57,12 @@ class TestLoadFramesData:
             assert data0 is not None
             assert data0.shape == (240, 320, 3)
 
+            # 释放 compositor 引用的文件句柄，确保 Windows 可清理临时目录
+            del data0, num
+            del comp
+            import gc
+            gc.collect()
+
     def test_load_empty_offsets_raises(self):
         """无 frames.idx 且 frame_count > 0 时报错"""
         comp = Compositor(320, 240, 30)

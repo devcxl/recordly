@@ -54,17 +54,59 @@ def _write_wav(path: str, data, samplerate: int):
 
 
 def _read_wav(path: str):
-    """从 WAV 文件读取为 numpy float32 数组"""
+    """从 WAV 文件读取为 (numpy float32 数组, samplerate, channels)"""
     import numpy as np
     if not os.path.exists(path):
         return None
     with wave.open(path, "r") as wf:
+        samplerate = wf.getframerate()
+        channels = wf.getnchannels()
         frames = wf.readframes(wf.getnframes())
         samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-        channels = wf.getnchannels()
         if channels > 1:
             samples = samples.reshape(-1, channels)
-        return samples
+        return samples, samplerate, channels
+
+
+def _resolve_media_path(project_dir: str, rel_path: str) -> str:
+    """安全解析项目内媒体路径。
+    相对/绝对路径均解析后检查是否位于 project_dir 内；外部绝对路径和 '..' 越界拒绝。
+    """
+    project_real = os.path.realpath(project_dir)
+    candidate = rel_path if os.path.isabs(rel_path) else os.path.join(project_dir, rel_path)
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([resolved, project_real]) != project_real:
+            raise ValueError(f"路径越界: {rel_path}")
+    except ValueError as exc:
+        if "路径越界" in str(exc):
+            raise
+        raise ValueError(f"路径越界: {rel_path}") from exc
+    return resolved
+
+
+def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
+    """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
+    from core.audio_capture import AudioResult, mix_audio_results
+
+    mic_audio = None
+    sys_audio = None
+    if source and source.audio_mic:
+        mic_path = _resolve_media_path(project_dir, source.audio_mic)
+        result = _read_wav(mic_path)
+        if result is not None:
+            data, sr, ch = result
+            mic_audio = AudioResult(data, sr, ch)
+    if source and source.audio_system:
+        sys_path = _resolve_media_path(project_dir, source.audio_system)
+        result = _read_wav(sys_path)
+        if result is not None:
+            data, sr, ch = result
+            sys_audio = AudioResult(data, sr, ch)
+
+    if mic_audio is None and sys_audio is None:
+        return None
+    return mix_audio_results(mic_audio, sys_audio)
 
 
 class MainWindow(QMainWindow):
@@ -641,7 +683,7 @@ class MainWindow(QMainWindow):
             project._frame_count = len(frames)
             # 保存帧偏移索引（供重新打开时定位每帧）
             import json
-            offsets = self.recording_controller.recorder.screen.frame_offsets
+            offsets = self._recording_controller.recorder.screen.frame_offsets
             idx_path = str(Path(self._project_dir) / "frames.idx")
             with open(idx_path, "w") as f:
                 json.dump([[o, l] for o, l in offsets], f)
@@ -708,13 +750,15 @@ class MainWindow(QMainWindow):
     def _collect_project_state(self, project: Project) -> None:
         """将当前 compositor 和编辑器状态写入 Project 对象"""
         comp = self._compositor
-        # 光标轨迹（CursorEvent 对象或 tuple 两种格式）
+        # 光标轨迹（保存为相对 compositor._base_time 的时间戳）
         project.cursor_events = []
+        base_ts = comp._base_time
         for c in comp._cursor_events:
+            ts = c.timestamp - base_ts if hasattr(c, 'timestamp') else c[2] - base_ts
             if hasattr(c, 'x'):
-                project.cursor_events.append([c.x, c.y, c.timestamp])
+                project.cursor_events.append([c.x, c.y, ts])
             else:
-                project.cursor_events.append([c[0], c[1], c[2]])
+                project.cursor_events.append([c[0], c[1], ts])
         # 点击事件
         project.click_events = []
         for c in comp._click_events:
@@ -1189,27 +1233,49 @@ class MainWindow(QMainWindow):
         # 加载视频帧
         if project.source and project.source.video:
             video_path = project.source.video
-            if not os.path.isabs(video_path):
-                video_path = str(Path(path) / video_path)
             try:
-                if video_path.endswith(".frames.data") or project.source.video == "frames.data":
-                    num_frames = comp.load_frames_data(
-                        video_path, getattr(project, '_frame_count', 0), project.source.fps)
-                else:
-                    num_frames = comp.load_video(video_path, project.source.fps)
-                if num_frames > 0:
-                    # 注册光标效果
-                    from core.cursor_effects import CursorEffect
-                    self._cursor_effect = CursorEffect(
-                        cursor_size=self.config.cursor_size,
-                        cursor_theme=self.config.cursor_theme,
-                        cursor_style=self.config.cursor_style,
-                    )
-                    comp.register_effect("cursor", self._cursor_effect)
-                    if not self.config.trail_enabled:
-                        self._cursor_effect.enabled["trail"] = False
-            except Exception as exc:
-                self._show_notification("视频解码失败", str(exc), "warning")
+                video_path = _resolve_media_path(project_dir, video_path)
+            except ValueError:
+                self._show_notification(
+                    "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
+                video_path = ""
+            if video_path:
+                try:
+                    if video_path.endswith(".frames.data") or project.source.video == "frames.data":
+                        num_frames = comp.load_frames_data(
+                            video_path, getattr(project, '_frame_count', 0), project.source.fps)
+                    else:
+                        num_frames = comp.load_video(video_path, project.source.fps)
+                    if num_frames > 0:
+                        # 注册光标效果
+                        from core.cursor_effects import CursorEffect
+                        self._cursor_effect = CursorEffect(
+                            cursor_size=self.config.cursor_size,
+                            cursor_theme=self.config.cursor_theme,
+                            cursor_style=self.config.cursor_style,
+                        )
+                        comp.register_effect("cursor", self._cursor_effect)
+                        if not self.config.trail_enabled:
+                            self._cursor_effect.enabled["trail"] = False
+                except Exception as exc:
+                    self._show_notification("视频解码失败", str(exc), "warning")
+
+        # 恢复音频（从 project.json 声明的 WAV 文件读取，失败时继续无音频打开）
+        try:
+            mixed_audio = _load_project_audio(project_dir, project.source)
+        except Exception as exc:
+            self._show_notification("音频加载失败", str(exc), "warning")
+            mixed_audio = None
+
+        # 仅在存在帧或音频时构造 _recorded_data
+        has_content = bool(comp._frames) or mixed_audio is not None
+        if has_content:
+            self._recorded_data = {
+                "audio": mixed_audio,
+                "frames": comp._frames,
+                "cursor_events": comp._cursor_events,
+                "clicks": comp._click_events,
+            }
 
         # 加载时间线并同步到 compositor
         self._timeline.set_tracks(project.timeline)
@@ -1237,11 +1303,12 @@ class MainWindow(QMainWindow):
             self._crop_active = True
             self._btn_crop.setChecked(True)
 
-        # 启用编辑器控件
-        self._btn_export.setEnabled(True)
-        self._btn_crop.setEnabled(True)
-        self._btn_add_audio.setEnabled(True)
-        self._enable_playback_controls(True)
+        # 启用编辑器控件（仅当存在有效帧时）
+        has_frames = len(comp._frames) > 0
+        self._btn_export.setEnabled(has_frames)
+        self._btn_crop.setEnabled(has_frames)
+        self._btn_add_audio.setEnabled(has_frames)
+        self._enable_playback_controls(has_frames)
         total = len(comp._frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
