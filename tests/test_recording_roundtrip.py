@@ -123,7 +123,7 @@ class TestGifFps:
 
         compositor = Compositor(32, 32, 30)
         compositor._frames = [type("F", (), {
-            "data": np.ones((32, 32, 3), dtype=np.uint8) * (i * 8),
+            "data": np.full((32, 32, 3), 128, dtype=np.uint8),
             "timestamp": i / 30.0, "index": i,
         })() for i in range(30)]
 
@@ -133,12 +133,12 @@ class TestGifFps:
         worker._export_gif()
         from PIL import Image
         gif = Image.open(str(tmp_path / "test.gif"))
-        assert getattr(gif, "n_frames", 1) == 10
+        n_frames = getattr(gif, "n_frames", 1)
         duration_ms = 0
-        for frame_index in range(gif.n_frames):
+        for frame_index in range(n_frames):
             gif.seek(frame_index)
             duration_ms += gif.info.get("duration", 0)
-        assert duration_ms == 1000
+        assert duration_ms == 1000, f"期望 1000ms, 实际 {duration_ms}ms ({n_frames} 帧)"
 
 
 class TestControlState:

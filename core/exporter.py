@@ -51,6 +51,7 @@ class ExportSettings:
     aspect_ratio: str = "native"
     quality: float = 1.0
     loop: bool = True              # GIF 是否循环
+    preset: str = "veryfast"       # x264 preset: ultrafast/superfast/veryfast/faster/fast/medium/slow/slower/veryslow
     clip_speeds: list[tuple[float, float, float]] | None = None  # (start_ms, end_ms, speed)
     extra_audio: list | None = None  # list[AudioRegion]
     crop_region: 'CropRegion | None' = None
@@ -129,7 +130,7 @@ class ExportWorker(QObject):
             return
 
         video = ffmpeg.input("pipe:", format="rawvideo",
-                              pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
+                              pix_fmt="rgb24", s=f"{w}x{h}", r=c.fps)
 
         # ── 速度滤镜 ────────────────────────────────────────
         # ── 音频处理 ────────────────────────────────────────
@@ -168,14 +169,14 @@ class ExportWorker(QObject):
             output = ffmpeg.output(
                 video, audio_input, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=s.bitrate,
+                video_bitrate=s.bitrate, preset=s.preset,
                 acodec="aac", audio_bitrate="192k",
             )
         else:
             output = ffmpeg.output(
                 video, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
-                video_bitrate=s.bitrate,
+                video_bitrate=s.bitrate, preset=s.preset,
             )
 
         output = output.overwrite_output()
@@ -195,8 +196,8 @@ class ExportWorker(QObject):
                 return
             if frame.size != (w, h):
                 frame = frame.resize((w, h), Image.LANCZOS)
-            if frame.mode != "RGBA":
-                frame = frame.convert("RGBA")
+            if frame.mode != "RGB":
+                frame = frame.convert("RGB")
             data = frame.tobytes()
             if i == 0 and logger.isEnabledFor(logging.DEBUG):
                 logger.debug(f"首帧 {frame.size} {frame.mode} {len(data)} bytes")
