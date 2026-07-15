@@ -115,12 +115,18 @@ class Compositor:
             for i in range(frame_count):
                 offsets.append([0, 0])  # fallback
 
-        # 保持文件句柄打开，避免每帧重复 open/close
+        # 保持文件句柄打开 + LRU 缓存（与 CompressedFrameStore 一致）
         import cv2
         import numpy as np
+        from collections import OrderedDict
         fh = open(store_path, "rb")
+        cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        cache_size = 12
 
         def loader(_i):
+            if _i in cache:
+                cache.move_to_end(_i)
+                return cache[_i]
             off, length = offsets[_i]
             fh.seek(off)
             payload = fh.read(length)
@@ -131,7 +137,12 @@ class Compositor:
             if frame_bgr is None:
                 raise RuntimeError(
                     f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
-            return np.ascontiguousarray(frame_bgr[:, :, ::-1])
+            rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
+            cache[_i] = rgb
+            cache.move_to_end(_i)
+            while len(cache) > cache_size:
+                cache.popitem(last=False)
+            return rgb
 
         frames: list = []
         frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
