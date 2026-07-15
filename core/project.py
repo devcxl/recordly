@@ -195,6 +195,10 @@ class Project:
         self.audio_regions: list[AudioRegion] = []
         self.crop_region: Optional[CropRegion] = None
         self.aspect_ratio: AspectRatio = "native"
+        # 录制原始数据
+        self.cursor_events: list = []          # [[x, y, timestamp], ...]
+        self.click_events: list = []           # [[x, y, timestamp], ...]
+        self.monitor_offset: list = [0, 0]     # [left, top]
 
     def save(self, path: str):
         data = {
@@ -212,6 +216,9 @@ class Project:
             "audio_regions": [asdict(a) for a in self.audio_regions],
             "crop_region": asdict(self.crop_region) if self.crop_region else None,
             "aspect_ratio": self.aspect_ratio,
+            "cursor_events": self.cursor_events,
+            "click_events": self.click_events,
+            "monitor_offset": self.monitor_offset,
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -240,6 +247,9 @@ class Project:
         if data.get("crop_region"):
             proj.crop_region = CropRegion(**data["crop_region"])
         proj.aspect_ratio = data.get("aspect_ratio", "native")
+        proj.cursor_events = data.get("cursor_events", [])
+        proj.click_events = data.get("click_events", [])
+        proj.monitor_offset = data.get("monitor_offset", [0, 0])
         return proj
 
 
