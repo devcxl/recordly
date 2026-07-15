@@ -8,6 +8,9 @@ import os
 import tempfile
 import numpy as np
 import pytest
+
+pytest.importorskip("cv2", reason="需要 OpenCV for JPEG 帧编解码测试")
+
 from core.compositor import Compositor
 
 
