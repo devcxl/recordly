@@ -52,21 +52,38 @@ class Recorder:
         self._perf_start = time.perf_counter()
         self._wall_start = time.time()
         self.screen.clear()
+
+        started = []
         try:
             self.screen.start()
+            started.append("screen")
             self._screen_session_started = True
             self.mic.start()
+            started.append("mic")
             self.system_audio.start()
+            started.append("system_audio")
             self.pointer.start()
+            started.append("pointer")
         except Exception:
             self._recording = False
-            try:
-                self.mic.stop()
-            finally:
-                self.system_audio.stop()
-                self.screen.stop()
+            self._stop_resources(started)
             raise
         print("[recorder] 录制开始")
+
+    def _stop_resources(self, started: list[str]):
+        """逆序 best-effort 清理已启动资源，不掩盖原始异常。"""
+        for name in reversed(started):
+            try:
+                if name == "pointer":
+                    self.pointer.stop()
+                elif name == "system_audio":
+                    self.system_audio.stop()
+                elif name == "mic":
+                    self.mic.stop()
+                elif name == "screen":
+                    self.screen.stop()
+            except Exception:
+                pass
 
     def stop_recording(self):
         if not self._recording:
