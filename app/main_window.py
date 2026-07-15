@@ -438,10 +438,59 @@ class MainWindow(QMainWindow):
 
     def _start_recording_from_home(self):
         """从首页触发的录制（帧数据流式写入项目目录）"""
-        self._recorder.start_recording(self._current_project_path)
+        try:
+            self._recorder.start_recording(self._current_project_path)
+        except Exception as exc:
+            self._is_recording = False
+            self.set_recording_state(False)
+            self.update_status("● 录制启动失败")
+            self._show_notification("无法开始录制", str(exc), "error")
+            self._cleanup_failed_recording()
+            return
         self._is_recording = True
         self.recording_started.emit()
         self._update_ui_state()
+
+    def _create_project_for_recording(self):
+        """托盘录制时自动创建项目目录"""
+        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
+        os.makedirs(project_dir, exist_ok=True)
+        self._current_project_path = project_dir
+        self._project_name = name
+        project = Project()
+        project.name = name
+        project.save(str(Path(project_dir) / "project.json"))
+        self.showMinimized()
+
+    def _cleanup_failed_recording(self):
+        """录制启动失败：删除占位项目，恢复窗口"""
+        if self._current_project_path:
+            try:
+                shutil.rmtree(self._current_project_path, ignore_errors=True)
+            except Exception:
+                pass
+        self._current_project_path = None
+        self.showNormal()
+        self.raise_()
+
+    def _handle_stop_failure(self):
+        """录制停止失败：恢复窗口，处理失败项目"""
+        self.showNormal()
+        self.raise_()
+        project_dir = self._current_project_path
+        if not project_dir:
+            return
+        frames_file = Path(project_dir) / "frames.data"
+        if frames_file.exists() and frames_file.stat().st_size > 0:
+            self.update_status("⚠ 录制异常结束，项目已保留")
+        else:
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._current_project_path = None
 
     def _on_home_open_project(self):
         """首页点击'打开项目' → 文件选择器"""
@@ -464,12 +513,16 @@ class MainWindow(QMainWindow):
         self._update_ui_state()
 
     def _on_recording_started(self):
+        # 托盘录制：自动创建项目目录
+        if not self._current_project_path:
+            self._create_project_for_recording()
         try:
-            self._recorder.start_recording()
+            self._recorder.start_recording(self._current_project_path)
         except Exception as exc:
             self.set_recording_state(False)
             self.update_status("● 录制启动失败")
             self._show_notification("无法开始录制", str(exc), "error")
+            self._cleanup_failed_recording()
             return
         self.update_status("● 录制中...")
 
@@ -481,6 +534,7 @@ class MainWindow(QMainWindow):
             self.set_recording_state(False)
             self.update_status("● 录制失败")
             self._show_notification("录制失败", str(exc), "error")
+            self._handle_stop_failure()
             return
         if self._recorded_data and self._recorded_data.get("frames"):
             self._compositor.load_frames(self._recorded_data["frames"])

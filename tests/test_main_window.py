@@ -89,12 +89,13 @@ def test_recording_start_error_restores_idle_state():
     errors = []
 
     class FakeRecorder:
-        def start_recording(self):
+        def start_recording(self, project_dir=None):
             raise RuntimeError("microphone unavailable")
 
     class FakeWindow:
         _recorder = FakeRecorder()
         _is_recording = True
+        _current_project_path = None
 
         def set_recording_state(self, value):
             self._is_recording = value
@@ -104,6 +105,12 @@ def test_recording_start_error_restores_idle_state():
 
         def _show_notification(self, title, content, level):
             errors.append({"title": title, "content": content, "level": level})
+
+        def _create_project_for_recording(self):
+            pass
+
+        def _cleanup_failed_recording(self):
+            pass
 
     window = FakeWindow()
 
