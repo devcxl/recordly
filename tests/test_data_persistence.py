@@ -5,6 +5,9 @@
 import json
 import os
 import tempfile
+
+import pytest
+
 from core.project import Project, SourceInfo
 
 
@@ -59,8 +62,8 @@ class TestDataPersistenceRoundtrip:
         finally:
             os.unlink(path)
 
-    def test_default_values_for_legacy_project(self):
-        """旧版 project.json 缺少新字段时使用默认值"""
+    def test_unknown_fields_rejected(self):
+        """含未知 cursor/frame_style 字段的 JSON 被拒绝"""
         legacy = {
             "version": "1.1",
             "created_at": "2026-01-01",
@@ -70,10 +73,8 @@ class TestDataPersistenceRoundtrip:
             "thumbnail_path": "",
             "source": None,
             "timeline": [],
-            "cursor": {"smooth": True, "trail": True, "size": 24,
-                        "theme": "macos-dark", "style": "macos-dark", "color": "#ffffff"},
-            "frame_style": {"background": "solid", "margin": 40,
-                            "padding": 40, "radius": 0, "bg_color": "#1e1e1e"},
+            "cursor": {"smooth": True, "size": 24, "theme": "macos-dark"},
+            "frame_style": {"background": "solid", "margin": 40},
             "annotations": [],
             "audio_regions": [],
             "crop_region": None,
@@ -81,6 +82,33 @@ class TestDataPersistenceRoundtrip:
         }
         with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
             json.dump(legacy, f)
+            path = f.name
+        try:
+            with pytest.raises(ValueError, match="未知"):
+                Project.load(path)
+        finally:
+            os.unlink(path)
+
+    def test_missing_optional_fields_use_defaults(self):
+        """缺失 optional 字段的当前格式 JSON 使用默认值"""
+        current_format = {
+            "version": "1.1",
+            "created_at": "2026-01-01",
+            "name": "minimal_project",
+            "modified_at": "2026-01-01",
+            "duration": 10.0,
+            "thumbnail_path": "",
+            "source": None,
+            "timeline": [],
+            "cursor": {},
+            "frame_style": {"background": "solid"},
+            "annotations": [],
+            "audio_regions": [],
+            "crop_region": None,
+            "aspect_ratio": "native",
+        }
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
+            json.dump(current_format, f)
             path = f.name
         try:
             p = Project.load(path)

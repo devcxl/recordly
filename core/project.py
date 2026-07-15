@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional, Literal
@@ -201,6 +202,11 @@ class Project:
         self.monitor_offset: list = [0, 0]     # [left, top]
 
     def save(self, path: str):
+        frame_style_dict = asdict(self.frame_style)
+        bg = self.frame_style.bg_color
+        if isinstance(bg, tuple) and len(bg) == 3:
+            frame_style_dict["bg_color"] = f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"
+
         data = {
             "version": self.version,
             "created_at": self.created_at,
@@ -211,7 +217,7 @@ class Project:
             "source": asdict(self.source) if self.source else None,
             "timeline": [asdict(t) for t in self.timeline],
             "cursor": asdict(self.cursor),
-            "frame_style": asdict(self.frame_style),
+            "frame_style": frame_style_dict,
             "annotations": [asdict(a) for a in self.annotations],
             "audio_regions": [asdict(a) for a in self.audio_regions],
             "crop_region": asdict(self.crop_region) if self.crop_region else None,
@@ -230,6 +236,9 @@ class Project:
     def load(cls, path: str) -> "Project":
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+
+        _validate_schema(data)
+
         proj = cls()
         proj.version = data.get("version", "1.0")
         proj.created_at = data.get("created_at", "")
@@ -240,7 +249,8 @@ class Project:
         if data.get("source"):
             proj.source = SourceInfo(**data["source"])
         proj.timeline = [Track(**t) for t in data.get("timeline", [])]
-        proj.cursor = CursorSettings(**data.get("cursor", {}))
+        cursor_data = data.get("cursor")
+        proj.cursor = CursorSettings(**cursor_data) if isinstance(cursor_data, dict) else CursorSettings()
         proj.frame_style = _load_frame_style(data.get("frame_style", {}))
         proj.filepath = path
         proj.annotations = [AnnotationRegion(**a) for a in data.get("annotations", [])]
@@ -255,9 +265,62 @@ class Project:
         return proj
 
 
+_HEX_COLOR_RE = re.compile(r'^#[0-9A-Fa-f]{6}$')
+
+_KNOWN_TOP_KEYS = {
+    "version", "created_at", "name", "modified_at", "duration",
+    "thumbnail_path", "source", "timeline", "cursor", "frame_style",
+    "annotations", "audio_regions", "crop_region", "aspect_ratio",
+    "cursor_events", "click_events", "monitor_offset", "frame_count",
+}
+
+_KNOWN_CURSOR_KEYS = {"smooth", "trail", "ripple", "sway", "blur", "style"}
+
+_KNOWN_FRAMESTYLE_KEYS = {
+    "background", "bg_color", "bg_gradient", "bg_wallpaper",
+    "padding", "corner_radius", "shadow", "shadow_offset",
+    "shadow_blur", "shadow_opacity",
+}
+
+
+def _validate_schema(data: dict):
+    unknown_top = set(data.keys()) - _KNOWN_TOP_KEYS
+    if unknown_top:
+        raise ValueError(
+            f"project.json 包含未知字段: {', '.join(sorted(unknown_top))}。"
+            f"项目格式不兼容，请使用支持的 Recordly 版本打开。"
+        )
+
+    cursor_data = data.get("cursor")
+    if isinstance(cursor_data, dict):
+        unknown_cursor = set(cursor_data.keys()) - _KNOWN_CURSOR_KEYS
+        if unknown_cursor:
+            raise ValueError(
+                f"project.json cursor 字段包含未知键: {', '.join(sorted(unknown_cursor))}"
+            )
+
+    frame_data = data.get("frame_style")
+    if isinstance(frame_data, dict):
+        unknown_frame = set(frame_data.keys()) - _KNOWN_FRAMESTYLE_KEYS
+        if unknown_frame:
+            raise ValueError(
+                f"project.json frame_style 字段包含未知键: {', '.join(sorted(unknown_frame))}"
+            )
+
+
 def _load_frame_style(data: dict) -> FrameStyle:
-    """兼容旧版 FrameStyle，处理 bg_color 从 tuple 到 str 的迁移"""
+    """从 JSON 数据加载 FrameStyle。bg_color 编码: JSON #RRGGBB → 运行时 tuple"""
+    data = dict(data)
     bg_color = data.get("bg_color")
-    if isinstance(bg_color, (list, tuple)) and len(bg_color) == 3:
-        data["bg_color"] = f"#{bg_color[0]:02x}{bg_color[1]:02x}{bg_color[2]:02x}"
+    if isinstance(bg_color, str):
+        if not _HEX_COLOR_RE.match(bg_color):
+            raise ValueError(f"无效的 bg_color 格式: '{bg_color}'，需要 #RRGGBB")
+        r = int(bg_color[1:3], 16)
+        g = int(bg_color[3:5], 16)
+        b = int(bg_color[5:7], 16)
+        data["bg_color"] = (r, g, b)
+    elif isinstance(bg_color, (list, tuple)):
+        data["bg_color"] = tuple(bg_color)
+    else:
+        data.pop("bg_color", None)
     return FrameStyle(**data)
