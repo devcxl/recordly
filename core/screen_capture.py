@@ -50,6 +50,10 @@ class _CompressedFrameStore:
         self._lock = Lock()
         atexit.register(self.cleanup)
 
+    @property
+    def frame_count(self) -> int:
+        return len(self._offsets)
+
     def append(self, rgb: np.ndarray) -> int:
         result = cv2.imencode(
             ".jpg", np.ascontiguousarray(rgb[:, :, ::-1]),
@@ -162,6 +166,11 @@ class ScreenCapture(Thread):
     @property
     def latest_frame(self) -> CapturedFrame | None:
         return self._latest_frame
+
+    @property
+    def frame_meta(self) -> tuple[list[float], list[int]]:
+        """返回 (timestamps, indices) 用于保存帧元数据"""
+        return (self._timestamps.copy(), self._indices.copy())
 
     @property
     def all_frames(self) -> list[CapturedFrame]:

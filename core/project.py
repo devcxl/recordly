@@ -219,6 +219,7 @@ class Project:
             "cursor_events": self.cursor_events,
             "click_events": self.click_events,
             "monitor_offset": self.monitor_offset,
+            "frame_count": getattr(self, "_frame_count", 0),
         }
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -250,6 +251,7 @@ class Project:
         proj.cursor_events = data.get("cursor_events", [])
         proj.click_events = data.get("click_events", [])
         proj.monitor_offset = data.get("monitor_offset", [0, 0])
+        proj._frame_count = data.get("frame_count", 0)
         return proj
 
 

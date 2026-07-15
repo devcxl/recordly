@@ -100,6 +100,22 @@ class Compositor:
             self.load_frames(frames)
         return len(frames)
 
+    def load_frames_data(self, store_path: str, frame_count: int, fps: float) -> int:
+        """从 CompressedFrameStore 文件加载帧。返回帧数。"""
+        from core.screen_capture import _CompressedFrameStore
+        store = _CompressedFrameStore(store_path=store_path)
+        frames: list[CapturedFrame] = []
+        frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
+        for i in range(frame_count):
+            timestamp = i * frame_interval
+            frames.append(CapturedFrame(
+                data=None, timestamp=timestamp, index=i,
+                _loader=store.read,
+            ))
+        if frames:
+            self.load_frames(frames)
+        return len(frames)
+
     @property
     def source_duration(self) -> float:
         if not self._frame_times:
