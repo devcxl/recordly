@@ -95,7 +95,9 @@ def test_recording_start_error_restores_idle_state():
 
     class FakeWindow:
         _project_session = None
-        _recording_controller = SimpleNamespace(recorder=FakeRecorder())
+        _recording_controller = SimpleNamespace(
+            start=lambda project_dir: (_ for _ in ()).throw(RuntimeError("microphone unavailable")),
+        )
         _is_recording = True
 
         @property

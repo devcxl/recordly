@@ -19,7 +19,7 @@ from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
 
 from app.config import AppConfig
 from core.compositor import Compositor
-from core.exporter import ExportWorker, ExportSettings
+from core.exporter import ExportSettings
 from core.project import (
     Clip, Track, AudioRegion, CropRegion, Project, SourceInfo,
     sync_audio_regions_from_clips,
@@ -83,7 +83,6 @@ class MainWindow(QMainWindow):
         self._recorded_data = None
         self._audio_regions = []
         self._export_controller = ExportController(self)
-        self._export_worker = None
         self._playback = None
         self._editing_zoom_clip = None
         self._crop_overlay = None
@@ -475,7 +474,7 @@ class MainWindow(QMainWindow):
     def _start_recording_from_home(self):
         """从首页触发的录制（帧数据流式写入项目目录）"""
         try:
-            self._recording_controller.recorder.start_recording(self._project_dir)
+            self._recording_controller.start(self._project_dir)
         except Exception as exc:
             self._is_recording = False
             self.set_recording_state(False)
@@ -553,7 +552,7 @@ class MainWindow(QMainWindow):
         if not self._project_dir:
             self._create_project_for_recording()
         try:
-            self._recording_controller.recorder.start_recording(self._project_dir)
+            self._recording_controller.start(self._project_dir)
         except Exception as exc:
             self.set_recording_state(False)
             self.update_status("● 录制启动失败")
@@ -564,7 +563,7 @@ class MainWindow(QMainWindow):
 
     def _on_recording_stopped(self):
         try:
-            self._recorded_data = self._recording_controller.recorder.stop_recording()
+            self._recorded_data = self._recording_controller.stop()
         except Exception as exc:
             self._recorded_data = None
             self.set_recording_state(False)
@@ -1026,8 +1025,6 @@ class MainWindow(QMainWindow):
         if audio:
             settings.samplerate = audio.samplerate
 
-        self._export_worker = ExportWorker(self._compositor, audio_data, settings)
-
         # 进度对话框
         self._progress = QProgressDialog("正在导出视频...", "取消", 0, 100, self)
         self._progress.setWindowTitle("导出")
@@ -1035,9 +1032,9 @@ class MainWindow(QMainWindow):
         self._progress.setAutoClose(True)
         self._progress.setAutoReset(True)
         self._progress.canceled.connect(self._cancel_export)
-        self._export_worker.progress.connect(self._progress.setValue)
+        self._export_controller.export_progress.connect(self._progress.setValue)
 
-        self._export_controller.start_export(self._export_worker)
+        self._export_controller.start_export(self._compositor, audio_data, settings)
 
     def _cancel_export(self):
         self._export_controller.cancel()
@@ -1045,7 +1042,6 @@ class MainWindow(QMainWindow):
     def _on_export_finished(self, result):
         self._progress.close()
         self._btn_export.setEnabled(True)
-        self._export_worker = None
 
         if result.success:
             self.update_status("● 导出完成")
