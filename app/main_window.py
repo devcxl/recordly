@@ -1020,7 +1020,8 @@ class MainWindow(QMainWindow):
         )
         self._btn_export.setEnabled(False)
 
-        audio = self._recorded_data.get("audio")
+        recorded = self._recorded_data or {}
+        audio = recorded.get("audio")
         audio_data = audio.data if audio else None
         if audio:
             settings.samplerate = audio.samplerate

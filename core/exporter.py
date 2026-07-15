@@ -125,7 +125,7 @@ class ExportWorker(QObject):
             return
 
         video = ffmpeg.input("pipe:", format="rawvideo",
-                             pix_fmt="rgba", s=f"{w}x{h}", r=s.fps)
+                              pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
 
         # ── 速度滤镜 ────────────────────────────────────────
         # ── 音频处理 ────────────────────────────────────────
@@ -254,7 +254,7 @@ class ExportWorker(QObject):
             dither="bayer", bayer_scale=5, diff_mode="rectangle",
         )
         return ffmpeg.output(
-            gif_video, s.output_path, r=s.fps,
+            gif_video, s.output_path, r=self._compositor.fps,
             loop=0 if s.loop else -1,
         ).overwrite_output()
 
@@ -360,8 +360,9 @@ class ExportWorker(QObject):
             if video_clips:
                 for clip_no, clip in enumerate(video_clips):
                     label = f'[v{clip_no}]'
+                    source_end = clip.source_end if clip.source_end is not None else clip.source_start + (clip.end - clip.start)
                     chain = (
-                        f'[0:a]atrim=start={clip.start}:end={clip.end},'
+                        f'[0:a]atrim=start={clip.source_start}:end={source_end},'
                         'asetpts=PTS-STARTPTS'
                     )
                     if abs(clip.speed - 1.0) > 0.0001:
@@ -379,8 +380,8 @@ class ExportWorker(QObject):
         for idx, r in region_inputs:
             delay = int(r.start_ms)
             label = f'[m{idx}]'
-            source_start = r.start_ms / 1000.0
-            source_end = r.end_ms / 1000.0
+            source_start = r.source_start_ms / 1000.0
+            source_end = (r.source_end_ms / 1000.0) if r.source_end_ms is not None else (r.end_ms / 1000.0)
             vol = f',volume={r.volume}' if r.volume != 1.0 else ''
             parts.append(
                 f'[{idx}:a]atrim=start={source_start}:end={source_end},'
