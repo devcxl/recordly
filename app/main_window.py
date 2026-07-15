@@ -873,9 +873,9 @@ class MainWindow(QMainWindow):
     # ── 导出 ──────────────────────────────────────────────
 
     def _on_export(self):
-        if not self._recorded_data:
+        if not self._recorded_data and not self._compositor._frames:
             self._show_notification(
-                "无法导出", "请先录制一段视频", "warning",
+                "无法导出", "请先录制一段视频或打开一个项目", "warning",
             )
             return
         dialog = ExportDialog(self, self.config.recordings_dir,
@@ -1120,8 +1120,6 @@ class MainWindow(QMainWindow):
                     comp.register_effect("cursor", self._cursor_effect)
                     if not self.config.trail_enabled:
                         self._cursor_effect.enabled["trail"] = False
-                    self._create_playback_controller()
-                    self._playback.seek(0)
             except Exception as exc:
                 self._show_notification("视频解码失败", str(exc), "warning")
 
@@ -1133,7 +1131,12 @@ class MainWindow(QMainWindow):
                 comp.load_clips(track.clips)
             elif track.type == "zoom":
                 comp.load_manual_zoom_clips(track.clips)
-        self._connect_timeline_signals()
+
+        # 创建播放控制器（必须在时间线设置之后）
+        if comp._frames:
+            self._create_playback_controller()
+            self._playback.seek(0)
+            self._connect_timeline_signals()
 
         # 加载音频区域
         self._audio_regions = project.audio_regions[:]
