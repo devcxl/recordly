@@ -4,9 +4,22 @@ import pytest
 
 
 def _stub_recording_engines(recorder, monkeypatch):
-    monkeypatch.setattr(recorder.screen, "clear", lambda: None)
-    monkeypatch.setattr(recorder.screen, "start", lambda: None)
-    monkeypatch.setattr(recorder.screen, "stop", lambda: None)
+    import core.recorder as recorder_module
+
+    class StubScreen:
+        def __init__(self, monitor_id=1, target_fps=30, store_path=None):
+            self.monitor_id = monitor_id
+            self.target_fps = target_fps
+            self.store_path = store_path
+            self.all_frames = []
+            self.monitor_offset = (0, 0)
+            self.error = None
+
+        def clear(self): pass
+        def start(self): pass
+        def stop(self): pass
+
+    monkeypatch.setattr(recorder_module, "ScreenCapture", StubScreen)
     monkeypatch.setattr(recorder.mic, "start", lambda: None)
     monkeypatch.setattr(recorder.mic, "stop", lambda: None)
     monkeypatch.setattr(recorder.system_audio, "start", lambda: False)
@@ -22,9 +35,10 @@ class TestRecorder:
         created = []
 
         class FakeScreen:
-            def __init__(self, monitor_id=1, target_fps=30):
+            def __init__(self, monitor_id=1, target_fps=30, store_path=None):
                 self.monitor_id = monitor_id
                 self.target_fps = target_fps
+                self.store_path = store_path
                 self.all_frames = []
                 self.monitor_offset = (0, 0)
                 self.error = None
@@ -34,9 +48,9 @@ class TestRecorder:
             def start(self): pass
             def stop(self): pass
 
-        monkeypatch.setattr(recorder_module, "ScreenCapture", FakeScreen)
         recorder = recorder_module.Recorder(target_fps=60)
         _stub_recording_engines(recorder, monkeypatch)
+        monkeypatch.setattr(recorder_module, "ScreenCapture", FakeScreen)
 
         recorder.start_recording()
         first_result = recorder.stop_recording()
@@ -105,9 +119,10 @@ class TestRecorder:
         created = []
 
         class FakeScreen:
-            def __init__(self, monitor_id=1, target_fps=30):
+            def __init__(self, monitor_id=1, target_fps=30, store_path=None):
                 self.monitor_id = monitor_id
                 self.target_fps = target_fps
+                self.store_path = store_path
                 self.started = False
                 self.all_frames = []
                 self.monitor_offset = (0, 0)
@@ -162,6 +177,7 @@ class TestRecorder:
         monkeypatch.setattr(recorder_module, "PointerTracker", FakePointer)
 
         recorder = recorder_module.Recorder()
+        created.clear()
         recorder.start_recording()
         recorder.stop_recording()
         recorder.start_recording()
@@ -174,7 +190,9 @@ class TestRecorder:
         import core.recorder as recorder_module
 
         class FakeScreen:
-            def __init__(self, monitor_id=1, target_fps=30):
+            def __init__(self, monitor_id=1, target_fps=30, store_path=None):
+                self.monitor_id = monitor_id
+                self.store_path = store_path
                 self.all_frames = []
                 self.monitor_offset = (0, 0)
                 self.error = RuntimeError("capture failed")

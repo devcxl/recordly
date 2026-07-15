@@ -55,8 +55,8 @@ def test_playback_receives_recorded_audio_and_video_edit_map(monkeypatch):
     audio = object()
     video_clip = Clip(type="video", start=0, end=2)
     window = SimpleNamespace(
-        _preview=object(),
-        _compositor=object(),
+        _preview=SimpleNamespace(set_fps=lambda fps: None),
+            _compositor=SimpleNamespace(fps=30),
         _recorded_data={"audio": audio},
         _timeline=SimpleNamespace(tracks=[Track(type="video", clips=[video_clip])]),
         _update_frame_counter=lambda _idx: None,
