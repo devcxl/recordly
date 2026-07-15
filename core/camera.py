@@ -1,5 +1,6 @@
 """智能镜头系统 — 速度感知缩放：快速移动缩回全景，停止/点击时放大跟随"""
 
+import bisect
 import math
 
 
@@ -29,7 +30,9 @@ class CameraSynthesizer:
     def __init__(self, clicks: list, cursor_events: list,
                  w: int, h: int, fps: int, duration_s: float):
         self.clicks = sorted(clicks, key=lambda c: c[0]) if clicks else []
+        self._click_times = [c[0] for c in self.clicks]
         self.events = sorted(cursor_events, key=lambda c: c[0]) if cursor_events else []
+        self._event_times = [e[0] for e in self.events]
         self.w = w
         self.h = h
         self.fps = fps
@@ -59,20 +62,15 @@ class CameraSynthesizer:
     def _interpolate(self, ts: float) -> tuple[float, float]:
         if not self.events:
             return (self.w * 0.5, self.h * 0.5)
-        prev = self.events[0]
-        for e in self.events:
-            if e[0] > ts:
-                break
-            prev = e
-        if prev[0] >= ts:
-            return (prev[1], prev[2])
-        nxt = None
-        for e in self.events:
-            if e[0] > ts:
-                nxt = e
-                break
-        if nxt is None:
-            return (prev[1], prev[2])
+        idx = bisect.bisect_left(self._event_times, ts)
+        if idx == 0:
+            e = self.events[0]
+            return (e[1], e[2])
+        if idx >= len(self.events):
+            e = self.events[-1]
+            return (e[1], e[2])
+        prev = self.events[idx - 1]
+        nxt = self.events[idx]
         t = (ts - prev[0]) / (nxt[0] - prev[0])
         return (prev[1] + (nxt[1] - prev[1]) * t,
                 prev[2] + (nxt[2] - prev[2]) * t)
@@ -92,9 +90,13 @@ class CameraSynthesizer:
         return (dx * dx + dy * dy) ** 0.5 / dt
 
     def _has_click(self, ts: float):
-        for c in self.clicks:
-            if abs(c[0] - ts) < 0.05:
-                return c
+        if not self.clicks:
+            return None
+        idx = bisect.bisect_left(self._click_times, ts - 0.05)
+        while idx < len(self.clicks) and self.clicks[idx][0] <= ts + 0.05:
+            if abs(self.clicks[idx][0] - ts) < 0.05:
+                return self.clicks[idx]
+            idx += 1
         return None
 
     def _advance(self, ts: float) -> tuple[float, float, float]:
