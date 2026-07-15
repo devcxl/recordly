@@ -246,7 +246,7 @@ class MainWindow(QMainWindow):
         # 录制
         self._btn_record = QPushButton("● 录制")
         self._btn_record.clicked.connect(self._toggle_record)
-        self._toolbar.addWidget(self._btn_record)
+        # 录制按钮已从工具栏移除，保留对象避免 AttributeError
 
         self._btn_stop_rec = QPushButton("■ 停止")
         self._btn_stop_rec.clicked.connect(self._toggle_record)
@@ -256,8 +256,7 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background: #e53935; }"
             "QPushButton:disabled { background: #3a3a3a; color: #666; }"
         )
-        self._toolbar.addWidget(self._btn_stop_rec)
-        self._toolbar.addSeparator()
+        # 停止按钮已从工具栏移除，保留对象避免 AttributeError
 
         # 播放控制
         self._btn_rewind = QToolButton()
