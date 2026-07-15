@@ -51,7 +51,9 @@ class _CompressedFrameStore:
         self._offsets: list[tuple[int, int]] = []
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
         self._lock = Lock()
-        atexit.register(self.cleanup)
+        if store_path is None:
+            # 临时文件退出时自动清理；项目文件不注册
+            atexit.register(self.cleanup)
 
     @property
     def frame_count(self) -> int:
