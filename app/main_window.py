@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QFileDialog, QApplication, QMessageBox, QToolBar, QAction,
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
-    QLabel, QProgressDialog, QScrollArea,
+    QLabel, QProgressDialog, QScrollArea, QSizePolicy,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
@@ -340,8 +340,7 @@ class MainWindow(QMainWindow):
 
         # 设置按钮放在右侧
         spacer = QWidget()
-        spacer.setSizePolicy(QWidget().sizePolicy().horizontalPolicy().Expanding,
-                            QWidget().sizePolicy().verticalPolicy().Preferred)
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._nav_toolbar.addWidget(spacer)
         settings_action = QAction("⚙ 设置", self)
         settings_action.triggered.connect(self._on_open_settings)
