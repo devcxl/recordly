@@ -228,18 +228,22 @@ class Compositor:
         elif target >= events[-1].timestamp:
             x, y = events[-1].x, events[-1].y
         else:
-            for i in range(1, len(events)):
-                if events[i].timestamp >= target:
-                    e0, e1 = events[i - 1], events[i]
-                    if e1.timestamp == e0.timestamp:
-                        x, y = e1.x, e1.y
-                    else:
-                        t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
-                        x = int(e0.x + (e1.x - e0.x) * t)
-                        y = int(e0.y + (e1.y - e0.y) * t)
-                    break
+            # 二分查找目标时间戳
+            lo, hi = 0, len(events) - 1
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if events[mid].timestamp < target:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            i = lo
+            e0, e1 = events[i - 1], events[i]
+            if e1.timestamp == e0.timestamp:
+                x, y = e1.x, e1.y
             else:
-                x, y = events[-1].x, events[-1].y
+                t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
+                x = int(e0.x + (e1.x - e0.x) * t)
+                y = int(e0.y + (e1.y - e0.y) * t)
         return x - self._monitor_left, y - self._monitor_top
 
     def _interpolate_cursor_raw(self, rel_ts: float) -> tuple[int, int]:
