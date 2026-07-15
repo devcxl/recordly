@@ -290,6 +290,7 @@ class MainWindow(QMainWindow):
 
         for btn in [self._btn_rewind, self._btn_step_back, self._btn_play,
                      self._btn_step_fwd, self._btn_ff]:
+            btn.setStyleSheet("font-size: 16px;")
             self._toolbar.addWidget(btn)
         self._toolbar.addSeparator()
 
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
         self._btn_export.setToolTip("导出")
         self._btn_export.clicked.connect(self._on_export)
         self._btn_export.setEnabled(False)
+        self._btn_export.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_export)
 
         # 裁剪
@@ -318,6 +320,7 @@ class MainWindow(QMainWindow):
         self._btn_crop.setCheckable(True)
         self._btn_crop.toggled.connect(self._on_crop_toggled)
         self._btn_crop.setEnabled(False)
+        self._btn_crop.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_crop)
 
         # 添加音频
@@ -326,6 +329,7 @@ class MainWindow(QMainWindow):
         self._btn_add_audio.setToolTip("添加额外音频")
         self._btn_add_audio.clicked.connect(self._on_add_audio)
         self._btn_add_audio.setEnabled(False)
+        self._btn_add_audio.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_add_audio)
 
         # ── 堆叠页面 ──
