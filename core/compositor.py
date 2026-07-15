@@ -146,6 +146,7 @@ class Compositor:
                 _loader=make_loader(store_path, offsets),
             ))
         if frames:
+            self.fps = fps
             self.load_frames(frames)
         return len(frames)
 
