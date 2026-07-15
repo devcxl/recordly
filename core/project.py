@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional, Literal
@@ -202,6 +203,8 @@ class Project:
         self.monitor_offset: list = [0, 0]     # [left, top]
 
     def save(self, path: str):
+        """原子保存 project.json：写临时文件 → os.replace 原子替换。
+        写入失败时原 project.json 不受影响。"""
         frame_style_dict = asdict(self.frame_style)
         bg = self.frame_style.bg_color
         if isinstance(bg, tuple) and len(bg) == 3:
@@ -227,9 +230,19 @@ class Project:
             "monitor_offset": self.monitor_offset,
             "frame_count": getattr(self, "_frame_count", 0),
         }
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        dir_path = os.path.dirname(path) or "."
+        os.makedirs(dir_path, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=dir_path, prefix=".project-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         self.filepath = path
 
     @classmethod
