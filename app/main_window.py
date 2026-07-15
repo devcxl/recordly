@@ -32,6 +32,7 @@ from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
 from ui.home_page import HomePage
+from app.project_session import ProjectSession
 
 
 def _write_wav(path: str, data, samplerate: int):
@@ -533,7 +534,7 @@ class MainWindow(QMainWindow):
             "Recordly 项目 (project.json)",
         )
         if path:
-            self._on_open_project(self._normalize_project_path(path))
+            self._on_open_project(ProjectSession.normalize_path(path))
 
     # ── 录制 ──────────────────────────────────────────────
 
@@ -1175,7 +1176,7 @@ class MainWindow(QMainWindow):
 
     def _on_open_project(self, path: str):
         """打开项目 → 加载到 compositor → 切换到编辑器界面"""
-        project_dir = self._normalize_project_path(path)
+        project_dir = ProjectSession.normalize_path(path)
 
         # 清理旧状态
         self._recorded_data = None

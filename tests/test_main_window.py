@@ -233,13 +233,13 @@ def test_apply_cursor_config_updates_active_effect():
 
 
 def test_normalize_project_path_converts_file_to_directory():
-    from app.main_window import MainWindow
+    from app.project_session import ProjectSession
 
-    p = MainWindow._normalize_project_path("/home/user/Recordly/projects/test/project.json")
+    p = ProjectSession.normalize_path("/home/user/Recordly/projects/test/project.json")
     assert p == "/home/user/Recordly/projects/test"
 
-    p = MainWindow._normalize_project_path("/home/user/Recordly/projects/test")
+    p = ProjectSession.normalize_path("/home/user/Recordly/projects/test")
     assert p == "/home/user/Recordly/projects/test"
 
-    p = MainWindow._normalize_project_path("relative/project.json")
+    p = ProjectSession.normalize_path("relative/project.json")
     assert p == "relative"
