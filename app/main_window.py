@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
             "Recordly 项目 (project.json)",
         )
         if path:
-            self._on_open_project(path)
+            self._on_open_project(self._normalize_project_path(path))
 
     # ── 录制 ──────────────────────────────────────────────
 
@@ -1059,11 +1059,20 @@ class MainWindow(QMainWindow):
 
     # ── 菜单操作 ──────────────────────────────────────────
 
+    @staticmethod
+    def _normalize_project_path(path: str) -> str:
+        """将 project.json 文件路径规范化为项目目录路径"""
+        if path.endswith("project.json"):
+            return str(Path(path).parent)
+        return path
+
     def _on_new_project(self):
         self.update_status("● 新建项目...")
 
     def _on_open_project(self, path: str):
         """打开项目 → 加载到 compositor → 切换到编辑器界面"""
+        project_dir = self._normalize_project_path(path)
+
         # 清理旧状态
         self._recorded_data = None
         self._playback = None
@@ -1076,13 +1085,13 @@ class MainWindow(QMainWindow):
         self._audio_regions = []
 
         try:
-            project = self._project_manager.open_project(path)
+            project = self._project_manager.open_project(project_dir)
         except Exception as exc:
             self._show_notification("打开项目失败", str(exc), "error")
             return
 
-        # 存储当前项目路径
-        self._current_project_path = path
+        # 存储当前项目路径（已规范化为目录）
+        self._current_project_path = project_dir
 
         # 恢复录制原始数据（转为带属性的对象，兼容 compositor 读取）
         comp = self._compositor

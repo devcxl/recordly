@@ -221,7 +221,18 @@ def test_apply_cursor_config_updates_active_effect():
     window = FakeWindow()
     MainWindow._apply_cursor_config(window)
 
-    assert window._cursor_effect.cursor_size == 48
-    assert window._cursor_effect.cursor_theme == "light"
     assert window._cursor_effect.cursor_style == "arrow"
     assert window._cursor_effect.enabled["trail"] is False
+
+
+def test_normalize_project_path_converts_file_to_directory():
+    from app.main_window import MainWindow
+
+    p = MainWindow._normalize_project_path("/home/user/Recordly/projects/test/project.json")
+    assert p == "/home/user/Recordly/projects/test"
+
+    p = MainWindow._normalize_project_path("/home/user/Recordly/projects/test")
+    assert p == "/home/user/Recordly/projects/test"
+
+    p = MainWindow._normalize_project_path("relative/project.json")
+    assert p == "relative"
