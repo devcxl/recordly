@@ -3,7 +3,6 @@
 import os
 import shutil
 import subprocess
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -492,16 +491,18 @@ class MainWindow(QMainWindow):
         self.raise_()
 
     def _auto_create_project(self):
-        """录制完成后后台导出源视频并自动创建项目"""
+        """录制完成后创建项目目录 → 导出到项目目录 → 保存"""
         if not self._recorded_data or not self._recorded_data.get("frames"):
             return
 
         name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        tmp_dir = tempfile.mkdtemp(prefix="recordly_export_")
-        tmp_path = os.path.join(tmp_dir, "source.mp4")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_dir = Path(self.config.projects_dir) / f"{timestamp}_{name}"
+        project_dir.mkdir(parents=True, exist_ok=True)
 
+        output_path = str(project_dir / "source.mp4")
         settings = ExportSettings(
-            output_path=tmp_path,
+            output_path=output_path,
             format="mp4",
             fps=self.config.default_fps,
             bitrate="5M",
@@ -518,16 +519,15 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.finished.connect(lambda result: self._on_auto_export_finished(
-            result, name, tmp_dir, worker, thread))
+            result, name, str(project_dir), worker, thread))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_auto_export_finished(self, result, name, tmp_dir, worker, thread):
-        """自动导出完成后创建项目"""
+    def _on_auto_export_finished(self, result, name, project_dir, worker, thread):
+        """导出完成后生成缩略图 → 保存 project.json"""
         if not result.success:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
             self._show_notification(
                 "自动创建项目失败",
                 "源视频导出失败，可手动导出后创建项目",
@@ -536,31 +536,34 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            # 生成缩略图
+            thumb_path = str(Path(project_dir) / "thumbnail.png")
+            try:
+                self._project_manager.generate_thumbnail(result.path, thumb_path)
+            except Exception:
+                pass  # 缩略图非必需
+
+            # 保存 project.json
             project = Project()
             project.name = name
             project.duration = self._get_recording_duration()
+            project.thumbnail_path = "thumbnail.png"
             project.source = SourceInfo(
-                video=result.path,
+                video="source.mp4",
                 duration=project.duration,
                 fps=self.config.default_fps,
                 width=self._compositor.width,
                 height=self._compositor.height,
             )
-            summary = self._project_manager.create_project(name, project, result.path)
-            # 收集录制数据并二次保存（create_project 已内部保存一次）
             self._collect_project_state(project)
-            self._current_project_path = summary.path
-            project.save(str(Path(summary.path) / "project.json"))
+            self._current_project_path = project_dir
+            project.save(str(Path(project_dir) / "project.json"))
             self._refresh_home_page()
-            # 自动切换到编辑器并恢复窗口
-            self._switch_to_editor()
-            self.showNormal()
-            self.raise_()
-            self.update_status("● 录制完成 — 已自动创建项目")
+
+            # 切换到编辑器
+            self.update_status("● 录制完成 — 已创建项目")
         except Exception as exc:
             self._show_notification("创建项目失败", str(exc), "error")
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def _connect_timeline_signals(self):
         """重复录制时保持时间线信号单次连接。"""
@@ -1102,8 +1105,12 @@ class MainWindow(QMainWindow):
 
         # 解码视频帧
         if project.source and project.source.video:
+            # 解析相对路径为绝对路径
+            video_path = project.source.video
+            if not os.path.isabs(video_path):
+                video_path = str(Path(path) / video_path)
             try:
-                num_frames = comp.load_video(project.source.video, project.source.fps)
+                num_frames = comp.load_video(video_path, project.source.fps)
                 if num_frames > 0:
                     # 注册光标效果
                     from core.cursor_effects import CursorEffect
