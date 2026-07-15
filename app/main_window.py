@@ -546,16 +546,11 @@ class MainWindow(QMainWindow):
                 width=self._compositor.width,
                 height=self._compositor.height,
             )
-            self._project_manager.create_project(name, project, result.path)
-            # 收集录制原始数据并保存
+            summary = self._project_manager.create_project(name, project, result.path)
+            # 收集录制数据并二次保存（create_project 已内部保存一次）
             self._collect_project_state(project)
-            summary = self._project_manager.list_projects()
-            # 找到刚创建的项目路径
-            for s in summary:
-                if s.name == name:
-                    self._current_project_path = s.path
-                    project.save(str(Path(s.path) / "project.json"))
-                    break
+            self._current_project_path = summary.path
+            project.save(str(Path(summary.path) / "project.json"))
             self._refresh_home_page()
             # 自动切换到编辑器并恢复窗口
             self._switch_to_editor()
@@ -1177,13 +1172,14 @@ class MainWindow(QMainWindow):
     def _on_save_project(self):
         """保存当前项目编辑状态"""
         if not self._current_project_path:
-            self.update_status("● 无项目可保存")
+            QMessageBox.warning(self, "保存失败", "当前没有打开的项目。\n请先录制一个新项目，或从首页打开已有项目。")
             return
         try:
             project = self._project_manager.open_project(self._current_project_path)
             self._collect_project_state(project)
             project.save(str(Path(self._current_project_path) / "project.json"))
             self.update_status("✓ 项目已保存")
+            self._show_notification("保存成功", f"已保存到: {self._current_project_path}", "success")
         except Exception as exc:
             self._show_notification("保存项目失败", str(exc), "error")
 
