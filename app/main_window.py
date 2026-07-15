@@ -2,7 +2,9 @@
 
 import os
 import shutil
+import struct
 import subprocess
+import wave
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -30,6 +32,38 @@ from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
 from ui.home_page import HomePage
+
+
+def _write_wav(path: str, data, samplerate: int):
+    """将 numpy float32 音频数据写入 16-bit PCM WAV 文件"""
+    import numpy as np
+    arr = np.asarray(data, dtype=np.float32)
+    arr = np.clip(arr, -1.0, 1.0)
+    if arr.ndim == 1:
+        channels = 1
+        arr = arr.reshape(-1, 1)
+    else:
+        channels = arr.shape[1]
+    samples = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
+
+
+def _read_wav(path: str):
+    """从 WAV 文件读取为 numpy float32 数组"""
+    import numpy as np
+    if not os.path.exists(path):
+        return None
+    with wave.open(path, "r") as wf:
+        frames = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        channels = wf.getnchannels()
+        if channels > 1:
+            samples = samples.reshape(-1, channels)
+        return samples
 
 
 class MainWindow(QMainWindow):
@@ -579,13 +613,28 @@ class MainWindow(QMainWindow):
 
         try:
             frames = self._recorded_data["frames"]
+            project_dir = Path(self._current_project_path)
             project = Project()
             project.name = getattr(self, '_project_name',
                                    f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
             project.duration = self._get_recording_duration()
             project.thumbnail_path = ""
+
+            mic_path = ""
+            system_path = ""
+            mic_audio = self._recorded_data.get("mic_audio")
+            if mic_audio is not None and len(mic_audio.data) > 0:
+                mic_path = "audio_mic.wav"
+                _write_wav(str(project_dir / mic_path), mic_audio.data, mic_audio.samplerate)
+            sys_audio = self._recorded_data.get("system_audio")
+            if sys_audio is not None and len(sys_audio.data) > 0:
+                system_path = "audio_system.wav"
+                _write_wav(str(project_dir / system_path), sys_audio.data, sys_audio.samplerate)
+
             project.source = SourceInfo(
                 video="frames.data",
+                audio_mic=mic_path,
+                audio_system=system_path,
                 duration=project.duration,
                 fps=self.config.default_fps,
                 width=self._compositor.width,
