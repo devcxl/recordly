@@ -621,14 +621,20 @@ class MainWindow(QMainWindow):
     def _collect_project_state(self, project: Project) -> None:
         """将当前 compositor 和编辑器状态写入 Project 对象"""
         comp = self._compositor
-        # 光标轨迹
-        project.cursor_events = [
-            [c[0], c[1], c[2]] for c in comp._cursor_events
-        ]
+        # 光标轨迹（CursorEvent 对象或 tuple 两种格式）
+        project.cursor_events = []
+        for c in comp._cursor_events:
+            if hasattr(c, 'x'):
+                project.cursor_events.append([c.x, c.y, c.timestamp])
+            else:
+                project.cursor_events.append([c[0], c[1], c[2]])
         # 点击事件
-        project.click_events = [
-            [c[0], c[1], c[2]] for c in comp._click_events
-        ]
+        project.click_events = []
+        for c in comp._click_events:
+            if hasattr(c, 'x'):
+                project.click_events.append([c.x, c.y, c.timestamp])
+            else:
+                project.click_events.append([c[0], c[1], c[2]])
         # 显示器偏移
         project.monitor_offset = [comp._monitor_left, comp._monitor_top]
         # 时间线轨道
