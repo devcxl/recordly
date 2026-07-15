@@ -641,7 +641,7 @@ class MainWindow(QMainWindow):
             project._frame_count = len(frames)
             # 保存帧偏移索引（供重新打开时定位每帧）
             import json
-            offsets = self.recording_controller.recorder.screen.frame_offsets
+            offsets = self._recording_controller.recorder.screen.frame_offsets
             idx_path = str(Path(self._project_dir) / "frames.idx")
             with open(idx_path, "w") as f:
                 json.dump([[o, l] for o, l in offsets], f)
