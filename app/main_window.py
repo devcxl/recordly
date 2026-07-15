@@ -658,7 +658,7 @@ class MainWindow(QMainWindow):
         self._preview.show_frame(pixmap)
 
     def _on_play_toggle(self):
-        if not self._recorded_data:
+        if not self._compositor._frames:
             return
         if not self._playback:
             self._create_playback_controller()
