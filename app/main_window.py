@@ -1164,13 +1164,6 @@ class MainWindow(QMainWindow):
 
     # ── 菜单操作 ──────────────────────────────────────────
 
-    @staticmethod
-    def _normalize_project_path(path: str) -> str:
-        """将 project.json 文件路径规范化为项目目录路径"""
-        if path.endswith("project.json"):
-            return str(Path(path).parent)
-        return path
-
     def _on_new_project(self):
         self.update_status("● 新建项目...")
 

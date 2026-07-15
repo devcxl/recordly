@@ -1,5 +1,6 @@
 """FFmpeg 导出引擎"""
 
+import logging
 import os
 import subprocess
 import sys
@@ -16,8 +17,7 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal
 from core.compositor import Compositor
 from core.aspect_ratio import calculate_export_dimensions
 
-
-_DEBUG = True  # 导出错误时打印完整 ffmpeg 命令和 stderr
+logger = logging.getLogger(__name__)
 
 
 def _start_stderr_reader(process):
@@ -29,8 +29,8 @@ def _start_stderr_reader(process):
             for line in process.stderr:
                 text = line.decode("utf-8", errors="replace")
                 chunks.append(text)
-                if _DEBUG:
-                    print(f"[ffmpeg] {text.rstrip()}", file=sys.stderr, flush=True)
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(text.rstrip())
         except Exception:
             pass
     t = threading.Thread(target=_read, daemon=True)
@@ -182,10 +182,10 @@ class ExportWorker(QObject):
         self._process = output.run_async(pipe_stdin=True, pipe_stderr=True)
         stderr_thread, stderr_chunks = _start_stderr_reader(self._process)
 
-        if _DEBUG:
+        if logger.isEnabledFor(logging.DEBUG):
             cmd = output.compile()
-            print(f"[exporter] ffmpeg {' '.join(cmd)}", file=sys.stderr, flush=True)
-            print(f"[exporter] 帧数={total} 尺寸={w}x{h} fps={s.fps}", file=sys.stderr, flush=True)
+            logger.debug("ffmpeg {' '.join(cmd)}")
+            logger.debug("帧数={total} 尺寸={w}x{h} fps={s.fps}")
 
         for i, frame in enumerate(c.render_all()):
             if self._cancelled:
@@ -198,8 +198,8 @@ class ExportWorker(QObject):
             if frame.mode != "RGBA":
                 frame = frame.convert("RGBA")
             data = frame.tobytes()
-            if i == 0 and _DEBUG:
-                print(f"[exporter] 首帧 {frame.size} {frame.mode} {len(data)} bytes", file=sys.stderr, flush=True)
+            if i == 0 and logger.isEnabledFor(logging.DEBUG):
+                logger.debug(f"首帧 {frame.size} {frame.mode} {len(data)} bytes")
             try:
                 self._process.stdin.write(data)
             except BrokenPipeError:
@@ -416,7 +416,7 @@ class ExportWorker(QObject):
         result = subprocess.run(cmd, capture_output=True, timeout=300)
         if result.returncode != 0:
             stderr = result.stderr.decode('utf-8', errors='replace')
-            print(f"[exporter] 音频混合失败: {stderr.strip()}")
+            logger.debug("音频混合失败: {stderr.strip()}")
             try:
                 os.remove(out_path)
             except OSError:

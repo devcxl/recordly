@@ -432,18 +432,6 @@ class Compositor:
         return img
 
     def compose_index(self, idx: int) -> Image.Image | None:
-        # 帧率计数器（调试用）
-        if not hasattr(self, '_fps_counter'):
-            self._fps_counter = 0
-            self._fps_t0 = __import__('time').perf_counter()
-        self._fps_counter += 1
-        if self._fps_counter % 60 == 0:
-            elapsed = __import__('time').perf_counter() - self._fps_t0
-            fps = 60 / elapsed
-            self._fps_t0 = __import__('time').perf_counter()
-            __import__('sys').stderr.write(
-                f"[compositor] 实际播放速度: {fps:.1f} fps\n")
-            __import__('sys').stderr.flush()
         if self._clips is not None:
             if 0 <= idx < self.total_output_frames:
                 source_idx = self._source_index_at(idx / self.fps)
