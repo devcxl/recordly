@@ -1083,14 +1083,19 @@ class MainWindow(QMainWindow):
         # 存储当前项目路径
         self._current_project_path = path
 
-        # 恢复录制原始数据
+        # 恢复录制原始数据（转为带属性的对象，兼容 compositor 读取）
         comp = self._compositor
-        comp._cursor_events = [
-            (c[0], c[1], c[2]) for c in project.cursor_events
-        ]
-        comp._click_events = [
-            (c[0], c[1], c[2]) for c in project.click_events
-        ]
+        EventData = type("EventData", (), {})
+        comp._cursor_events = []
+        for c in project.cursor_events:
+            evt = EventData()
+            evt.x, evt.y, evt.timestamp = int(c[0]), int(c[1]), float(c[2])
+            comp._cursor_events.append(evt)
+        comp._click_events = []
+        for c in project.click_events:
+            evt = EventData()
+            evt.x, evt.y, evt.timestamp = int(c[0]), int(c[1]), float(c[2])
+            comp._click_events.append(evt)
         if project.monitor_offset:
             comp._monitor_left = project.monitor_offset[0]
             comp._monitor_top = project.monitor_offset[1]
