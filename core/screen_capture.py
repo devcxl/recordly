@@ -37,7 +37,10 @@ class _CompressedFrameStore:
         if store_path:
             self.path = store_path
             os.makedirs(os.path.dirname(store_path), exist_ok=True)
-            self._file = open(store_path, "wb")
+            if os.path.exists(store_path):
+                self._file = open(store_path, "r+b")
+            else:
+                self._file = open(store_path, "w+b")
         else:
             handle = tempfile.NamedTemporaryFile(
                 prefix="recordly-", suffix=".frames", delete=False)

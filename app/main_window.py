@@ -538,6 +538,12 @@ class MainWindow(QMainWindow):
                 height=self._compositor.height,
             )
             project._frame_count = len(frames)
+            # 保存帧偏移索引（供重新打开时定位每帧）
+            import json
+            offsets = self._recorder.screen._store._offsets
+            idx_path = str(Path(self._current_project_path) / "frames.idx")
+            with open(idx_path, "w") as f:
+                json.dump([[o, l] for o, l in offsets], f)
             self._collect_project_state(project)
             project.save(str(Path(self._current_project_path) / "project.json"))
             self._refresh_home_page()

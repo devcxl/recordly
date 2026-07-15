@@ -1,7 +1,9 @@
 """帧合成器 — 统一合成管线"""
 
 import bisect
+import json
 import math
+import os
 from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -102,15 +104,39 @@ class Compositor:
 
     def load_frames_data(self, store_path: str, frame_count: int, fps: float) -> int:
         """从 CompressedFrameStore 文件加载帧。返回帧数。"""
-        from core.screen_capture import _CompressedFrameStore
-        store = _CompressedFrameStore(store_path=store_path)
-        frames: list[CapturedFrame] = []
+        import json
+        # 读取帧偏移索引
+        idx_path = store_path.rsplit(".", 1)[0] + ".idx"
+        if os.path.exists(idx_path):
+            with open(idx_path) as f:
+                offsets = json.load(f)
+        else:
+            offsets = []
+            for i in range(frame_count):
+                offsets.append([0, 0])  # fallback
+
+        # 创建 loader 函数
+        def make_loader(store, off_list, idx):
+            def loader(_i):
+                off, length = off_list[_i]
+                with open(store, "rb") as fh:
+                    fh.seek(off)
+                    payload = fh.read(length)
+                import cv2
+                import numpy as np
+                arr = np.frombuffer(payload, dtype=np.uint8)
+                return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            return loader
+
+        frames: list = []
         frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
-        for i in range(frame_count):
+        actual_count = max(frame_count, len(offsets))
+        for i in range(actual_count):
             timestamp = i * frame_interval
+            from core.screen_capture import CapturedFrame
             frames.append(CapturedFrame(
                 data=None, timestamp=timestamp, index=i,
-                _loader=store.read,
+                _loader=make_loader(store_path, offsets, i),
             ))
         if frames:
             self.load_frames(frames)
