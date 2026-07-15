@@ -88,6 +88,14 @@ class ExportDialog(QDialog):
         self.gif_loop.setChecked(True)
         layout.addWidget(self.gif_loop)
 
+        # GPU 硬件编码（仅 MP4）
+        from core.exporter import is_gpu_available
+        self.gpu_check = QCheckBox("GPU 硬件编码 (NVENC)")
+        self.gpu_check.setEnabled(is_gpu_available())
+        if not is_gpu_available():
+            self.gpu_check.setToolTip("未检测到可用 GPU 或 NVENC 编码器")
+        layout.addWidget(self.gpu_check)
+
         # 按钮
         btn_layout = QHBoxLayout()
         self.browse_btn = QPushButton("选择保存路径...")
@@ -112,6 +120,7 @@ class ExportDialog(QDialog):
         self.gif_fps.setVisible(is_gif)
         self.gif_loop.setVisible(is_gif)
         self.quality_combo.setVisible(not is_gif)
+        self.gpu_check.setVisible(not is_gif)
 
     def _on_resolution_changed(self, text: str):
         self._custom_widget.setVisible(text == _CUSTOM_RESOLUTION)
@@ -179,3 +188,7 @@ class ExportDialog(QDialog):
     @property
     def export_format(self) -> str:
         return "gif" if self.format_combo.currentText() == "GIF" else "mp4"
+
+    @property
+    def use_gpu(self) -> bool:
+        return self.gpu_check.isEnabled() and self.gpu_check.isChecked()
