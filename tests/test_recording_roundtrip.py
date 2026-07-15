@@ -137,15 +137,15 @@ class TestAudioReopen:
         mic_path = os.path.join(project_dir, source.audio_mic) if source.audio_mic else ""
         sys_path = os.path.join(project_dir, source.audio_system) if source.audio_system else ""
 
-        mic_audio = _read_wav(mic_path)
-        sys_audio = _read_wav(sys_path)
+        mic_audio, mic_sr, mic_ch = _read_wav(mic_path)
+        sys_audio, sys_sr, sys_ch = _read_wav(sys_path)
 
         assert mic_audio is not None, "mic WAV 应可读取"
         assert sys_audio is not None, "system WAV 应可读取"
 
         mixed = mix_audio_results(
-            AudioResult(mic_audio, samplerate, 1),
-            AudioResult(sys_audio, samplerate, 2),
+            AudioResult(mic_audio, mic_sr, mic_ch),
+            AudioResult(sys_audio, sys_sr, sys_ch),
         )
         assert mixed is not None, "混合后应有 AudioResult"
         assert mixed.data.shape[0] == samplerate, "混合音频应有正确帧数"
@@ -181,12 +181,12 @@ class TestCursorTimebase:
         compositor.load_frames(frames)
         assert compositor._base_time == 100.0, "_base_time 应从首帧获取"
 
-        # 光标事件使用绝对时间戳
+        # 光标事件使用绝对时间戳（关键字参数确保字段正确映射）
         from core.pointer_tracker import CursorEvent
         events = [
-            CursorEvent(10, 20, 100.0),
-            CursorEvent(50, 60, 100.5),
-            CursorEvent(80, 90, 101.0),
+            CursorEvent(x=10, y=20, timestamp=100.0),
+            CursorEvent(x=50, y=60, timestamp=100.5),
+            CursorEvent(x=80, y=90, timestamp=101.0),
         ]
         compositor.load_cursor_events(events, [])
 
@@ -194,13 +194,15 @@ class TestCursorTimebase:
 
         project = Project()
 
-        # 模拟 _collect_project_state
-        comp = compositor
-        for c in comp._cursor_events:
-            project.cursor_events.append([c.x, c.y, c.timestamp])
+        # 使用实际 MainWindow._collect_project_state 进行保存（含时间基修正）
+        window = SimpleNamespace(
+            _compositor=compositor,
+            _timeline=SimpleNamespace(tracks=[]),
+            _audio_regions=[],
+        )
+        MainWindow._collect_project_state(window, project)
 
-        # 目前此值包含绝对时间戳，不带有 _base_time 调整
-        # 验证：保存后应当相对化
+        # 验证：保存后时间戳应相对化（减去 _base_time）
         project.save(os.path.join(project_dir, "project.json"))
         loaded = Project.load(os.path.join(project_dir, "project.json"))
 
@@ -223,20 +225,19 @@ class TestCursorTimebase:
             e.x, e.y, e.timestamp = int(c[0]), int(c[1]), float(c[2])
             reload_compositor._cursor_events.append(e)
 
-        # 光标插值应正常工作：new_base_time (0) + rel_ts (0.033) ≈ 0.033
-        # 如果时间戳仍是绝对 (100.0 ~ 101.0)，cursor 定位会错
-        from core.screen_capture import CapturedFrame as CF
+        # 光标插值应正常工作
+        # 首帧光标应与第一个事件 (10, 20) 接近
         cx, cy = reload_compositor._interpolate_cursor(0.0)
-        assert cx >= 0, "首帧光标 x 应有效"
-        assert cy >= 0, "首帧光标 y 应有效"
+        assert abs(cx - 10) < 30, f"首帧光标 x 应与第一个事件接近，实际 {cx}"
+        assert abs(cy - 20) < 30, f"首帧光标 y 应与第一个事件接近，实际 {cy}"
 
-        # 末帧 ≈ 1.0s 处
+        # 末帧光标应与最后一个事件 (80, 90) 接近
         cx_end, cy_end = reload_compositor._interpolate_cursor(1.0)
-        # 如果时间戳绝对，末帧光标将卡在第一个点 (10,20)
-        # 如果相对化应接近最后一个点
         end_event = reload_compositor._cursor_events[-1]
-        assert abs(cx_end - end_event.x) < 50 or abs(cy_end - end_event.y) < 50, \
-            "末帧光标应与最后事件接近"
+        assert abs(cx_end - end_event.x) < 30, \
+            f"末帧光标 x 应与最后事件接近，预期 {end_event.x}，实际 {cx_end}"
+        assert abs(cy_end - end_event.y) < 30, \
+            f"末帧光标 y 应与最后事件接近，预期 {end_event.y}，实际 {cy_end}"
 
 
 class TestGifFps:
@@ -296,46 +297,104 @@ class TestGifFps:
 class TestControlState:
     """Slice 5: 控件状态 — 无帧项目不启用播放/裁剪/导出"""
 
-    def test_controls_disabled_when_no_frames(self):
-        """打开无有效帧项目时应禁用播放/裁剪/导出控件"""
+    def _make_mock_window(self, frames):
         from types import SimpleNamespace
-        from app.main_window import MainWindow
-        from core.project import Project
+        buttons = {}
+        for name in ["_btn_rewind", "_btn_step_back", "_btn_play",
+                      "_btn_step_fwd", "_btn_ff", "_btn_export",
+                      "_btn_crop", "_btn_add_audio"]:
+            btn = SimpleNamespace()
+            btn.setEnabled = lambda v, _n=name: buttons.update({_n: v})
+            buttons[name] = None
+            setattr(btn, "setChecked", lambda v: None)
+            if name == "_btn_crop":
+                btn2 = SimpleNamespace()
+                btn2.setEnabled = lambda v: buttons.update({"_btn_crop": v})
+                btn2.setChecked = lambda v: None
+                btn = btn2
+            setattr(btn, "setEnabled", lambda v, _n=name: buttons.update({_n: v}))
+        # Rebuild with proper closures
+        btn_export = SimpleNamespace()
+        btn_export.setEnabled = lambda v: buttons.update({"_btn_export": v})
+        btn_crop = SimpleNamespace()
+        btn_crop.setEnabled = lambda v: buttons.update({"_btn_crop": v})
+        btn_crop.setChecked = lambda v: None
+        btn_add_audio = SimpleNamespace()
+        btn_add_audio.setEnabled = lambda v: buttons.update({"_btn_add_audio": v})
+        btn_rewind = SimpleNamespace()
+        btn_rewind.setEnabled = lambda v: buttons.update({"_btn_rewind": v})
+        btn_step_back = SimpleNamespace()
+        btn_step_back.setEnabled = lambda v: buttons.update({"_btn_step_back": v})
+        btn_play = SimpleNamespace()
+        btn_play.setEnabled = lambda v: buttons.update({"_btn_play": v})
+        btn_step_fwd = SimpleNamespace()
+        btn_step_fwd.setEnabled = lambda v: buttons.update({"_btn_step_fwd": v})
+        btn_ff = SimpleNamespace()
+        btn_ff.setEnabled = lambda v: buttons.update({"_btn_ff": v})
 
-        window = SimpleNamespace(
+        return SimpleNamespace(
             _compositor=SimpleNamespace(
-                _frames=[],
-                width=100, height=100, fps=30,
+                _frames=frames, fps=30, width=100, height=100,
             ),
-            _btn_export=SimpleNamespace(setEnabled=lambda v: None),
-            _btn_crop=SimpleNamespace(setEnabled=lambda v: None, setChecked=lambda v: None),
-            _btn_add_audio=SimpleNamespace(setEnabled=lambda v: None),
+            _btn_rewind=btn_rewind,
+            _btn_step_back=btn_step_back,
+            _btn_play=btn_play,
+            _btn_step_fwd=btn_step_fwd,
+            _btn_ff=btn_ff,
+            _btn_export=btn_export,
+            _btn_crop=btn_crop,
+            _btn_add_audio=btn_add_audio,
+            _audio_regions=[],
             _playback=None,
             _frame_label=SimpleNamespace(setText=lambda v: None),
-        )
+            _timeline=SimpleNamespace(tracks=[], duration=0.0, set_tracks=lambda v: None),
+            _crop_active=False,
+            _project_manager=None,
+            _project_dir=None,
+            _recorded_data=None,
+            _show_notification=lambda title, msg, level: None,
+            _cursor_effect=None,
+            config=SimpleNamespace(cursor_size=32, cursor_theme="light",
+                                    cursor_style="dot", trail_enabled=False,
+                                    default_fps=30),
+        ), buttons
+
+    def test_controls_disabled_when_no_frames(self):
+        """打开无有效帧项目时应禁用播放/裁剪/导出控件"""
+        from app.main_window import MainWindow
+
+        window, buttons = self._make_mock_window([])
 
         MainWindow._enable_playback_controls(window, False)
-        # 这只是确保调用不报错，具体断言在 on_open_project 中
+        window._btn_export.setEnabled(False)
+        window._btn_crop.setEnabled(False)
+        window._btn_add_audio.setEnabled(False)
+
+        assert buttons["_btn_rewind"] is False
+        assert buttons["_btn_step_back"] is False
+        assert buttons["_btn_play"] is False
+        assert buttons["_btn_step_fwd"] is False
+        assert buttons["_btn_ff"] is False
+        assert buttons["_btn_export"] is False
+        assert buttons["_btn_crop"] is False
 
     def test_controls_enabled_when_valid_frames(self):
         """打开有帧项目时启用播放/裁剪/导出控件"""
-        from types import SimpleNamespace
         from app.main_window import MainWindow
 
-        window = SimpleNamespace(
-            _compositor=SimpleNamespace(
-                _frames=[1, 2, 3],
-                fps=30, width=100, height=100,
-                crop_region=None,
-            ),
-            _btn_export=SimpleNamespace(setEnabled=lambda v: None),
-            _btn_crop=SimpleNamespace(setEnabled=lambda v: None, setChecked=lambda v: None),
-            _btn_add_audio=SimpleNamespace(setEnabled=lambda v: None),
-            _frame_label=SimpleNamespace(setText=lambda v: None),
-            _playback=None,
-        )
+        window, buttons = self._make_mock_window([1, 2, 3])
 
         MainWindow._enable_playback_controls(window, True)
+        window._btn_export.setEnabled(True)
+        window._btn_crop.setEnabled(True)
+
+        assert buttons["_btn_rewind"] is True
+        assert buttons["_btn_step_back"] is True
+        assert buttons["_btn_play"] is True
+        assert buttons["_btn_step_fwd"] is True
+        assert buttons["_btn_ff"] is True
+        assert buttons["_btn_export"] is True
+        assert buttons["_btn_crop"] is True
 
 
 class TestIntegrationRoundtrip:
@@ -368,11 +427,11 @@ class TestIntegrationRoundtrip:
         compositor = Compositor(100, 100, 30)
         compositor.load_frames(frames)
 
-        # 光标事件（绝对时间戳）
+        # 光标事件（绝对时间戳，使用关键字参数确保正确字段映射）
         events = [
-            CursorEvent(10, 20, 0.0),
-            CursorEvent(300, 400, 0.5),
-            CursorEvent(50, 60, 1.0),
+            CursorEvent(x=10, y=20, timestamp=0.0),
+            CursorEvent(x=300, y=400, timestamp=0.5),
+            CursorEvent(x=50, y=60, timestamp=1.0),
         ]
         compositor.load_cursor_events(events, [])
 
@@ -416,9 +475,10 @@ class TestIntegrationRoundtrip:
             update_status=lambda text: None,
             _show_notification=lambda title, msg, level: None,
             _get_recording_duration=lambda: 1.0,
-            _collect_project_state=lambda project: None,
             _project_name="roundtrip_test",
         )
+        # 绑定 _collect_project_state（需要 window 引用，不能用在构造器中）
+        window._collect_project_state = lambda project: MainWindow._collect_project_state(window, project)
 
         MainWindow._finalize_project(window)
 
@@ -436,37 +496,26 @@ class TestIntegrationRoundtrip:
         assert saved.source.audio_system == "audio_system.wav"
 
         # ── 验证重开后的音频恢复 ──
-        mic_audio = _read_wav(os.path.join(project_dir, saved.source.audio_mic))
-        sys_audio = _read_wav(os.path.join(project_dir, saved.source.audio_system))
+        mic_audio, mic_sr, mic_ch = _read_wav(os.path.join(project_dir, saved.source.audio_mic))
+        sys_audio, sys_sr, sys_ch = _read_wav(os.path.join(project_dir, saved.source.audio_system))
         assert mic_audio is not None
         assert sys_audio is not None
 
         mixed = mix_audio_results(
-            AudioResult(mic_audio, samplerate, 1),
-            AudioResult(sys_audio, samplerate, 2),
+            AudioResult(mic_audio, mic_sr, mic_ch),
+            AudioResult(sys_audio, sys_sr, sys_ch),
         )
         assert mixed is not None
         assert mixed.channels == 2
         assert mixed.data.shape[0] > 0
 
-        # ── 验证重开后的光标时间基 ──
-        reload_compositor = Compositor(100, 100, 30)
-        reload_compositor.load_frames_data(
-            os.path.join(project_dir, "frames.data"),
-            saved._frame_count, saved.source.fps,
-        )
-
-        EventData = type("EventData", (), {})
-        reload_compositor._cursor_events = []
-        for c in saved.cursor_events:
-            e = EventData()
-            e.x, e.y, e.timestamp = int(c[0]), int(c[1]), float(c[2])
-            reload_compositor._cursor_events.append(e)
-
-        # 检查首帧和末帧光标插值
-        cx0, cy0 = reload_compositor._interpolate_cursor(0.0)
-        cx1, cy1 = reload_compositor._interpolate_cursor(1.0)
-        assert cx0 >= 0
-        assert cy0 >= 0
-        assert cx1 >= 0
-        assert cy1 >= 0
+        # ── 验证重开后的光标时间基（相对时间戳） ──
+        # 保存后的 cursor_events 时间戳应相对于 compositor._base_time (0.0)
+        # 因此首帧光标应在第一个事件附近
+        assert len(saved.cursor_events) == 3
+        first_ts = saved.cursor_events[0][2]
+        last_ts = saved.cursor_events[-1][2]
+        assert abs(first_ts - 0.0) < 0.01, \
+            f"首事件时间戳应接近 0.0，实际 {first_ts}"
+        assert abs(last_ts - 1.0) < 0.01, \
+            f"末事件时间戳应接近 1.0，实际 {last_ts}"

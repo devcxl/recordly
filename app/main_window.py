@@ -54,17 +54,18 @@ def _write_wav(path: str, data, samplerate: int):
 
 
 def _read_wav(path: str):
-    """从 WAV 文件读取为 numpy float32 数组"""
+    """从 WAV 文件读取为 (numpy float32 数组, samplerate, channels)"""
     import numpy as np
     if not os.path.exists(path):
         return None
     with wave.open(path, "r") as wf:
+        samplerate = wf.getframerate()
+        channels = wf.getnchannels()
         frames = wf.readframes(wf.getnframes())
         samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-        channels = wf.getnchannels()
         if channels > 1:
             samples = samples.reshape(-1, channels)
-        return samples
+        return samples, samplerate, channels
 
 
 class MainWindow(QMainWindow):
@@ -708,13 +709,15 @@ class MainWindow(QMainWindow):
     def _collect_project_state(self, project: Project) -> None:
         """将当前 compositor 和编辑器状态写入 Project 对象"""
         comp = self._compositor
-        # 光标轨迹（CursorEvent 对象或 tuple 两种格式）
+        # 光标轨迹（保存为相对 compositor._base_time 的时间戳）
         project.cursor_events = []
+        base_ts = comp._base_time
         for c in comp._cursor_events:
+            ts = c.timestamp - base_ts if hasattr(c, 'timestamp') else c[2] - base_ts
             if hasattr(c, 'x'):
-                project.cursor_events.append([c.x, c.y, c.timestamp])
+                project.cursor_events.append([c.x, c.y, ts])
             else:
-                project.cursor_events.append([c[0], c[1], c[2]])
+                project.cursor_events.append([c[0], c[1], ts])
         # 点击事件
         project.click_events = []
         for c in comp._click_events:
@@ -1211,6 +1214,36 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._show_notification("视频解码失败", str(exc), "warning")
 
+        # 恢复音频（从 project.json 声明的 WAV 文件读取）
+        if project.source:
+            from core.audio_capture import AudioResult, mix_audio_results
+            mic_data = None
+            sys_data = None
+            mic_sr = 44100
+            sys_sr = 44100
+            mic_ch = 1
+            sys_ch = 2
+            if project.source.audio_mic:
+                result = _read_wav(os.path.join(project_dir, project.source.audio_mic))
+                if result is not None:
+                    mic_data, mic_sr, mic_ch = result
+            if project.source.audio_system:
+                result = _read_wav(os.path.join(project_dir, project.source.audio_system))
+                if result is not None:
+                    sys_data, sys_sr, sys_ch = result
+            mixed = mix_audio_results(
+                AudioResult(mic_data, mic_sr, mic_ch) if mic_data is not None else None,
+                AudioResult(sys_data, sys_sr, sys_ch) if sys_data is not None else None,
+            )
+            self._recorded_data = {
+                "audio": mixed,
+                "frames": comp._frames,
+                "cursor_events": comp._cursor_events,
+                "clicks": comp._click_events,
+                "mic_audio": AudioResult(mic_data, mic_sr, mic_ch) if mic_data is not None else None,
+                "system_audio": AudioResult(sys_data, sys_sr, sys_ch) if sys_data is not None else None,
+            }
+
         # 加载时间线并同步到 compositor
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
@@ -1237,11 +1270,12 @@ class MainWindow(QMainWindow):
             self._crop_active = True
             self._btn_crop.setChecked(True)
 
-        # 启用编辑器控件
-        self._btn_export.setEnabled(True)
-        self._btn_crop.setEnabled(True)
-        self._btn_add_audio.setEnabled(True)
-        self._enable_playback_controls(True)
+        # 启用编辑器控件（仅当存在有效帧时）
+        has_frames = len(comp._frames) > 0
+        self._btn_export.setEnabled(has_frames)
+        self._btn_crop.setEnabled(has_frames)
+        self._btn_add_audio.setEnabled(has_frames)
+        self._enable_playback_controls(has_frames)
         total = len(comp._frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
 

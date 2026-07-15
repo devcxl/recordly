@@ -258,7 +258,7 @@ class ExportWorker(QObject):
             dither="bayer", bayer_scale=5, diff_mode="rectangle",
         )
         return ffmpeg.output(
-            gif_video, s.output_path, r=self._compositor.fps,
+            gif_video, s.output_path, r=s.fps,
             loop=0 if s.loop else -1,
         ).overwrite_output()
 
