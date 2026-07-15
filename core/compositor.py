@@ -75,6 +75,31 @@ class Compositor:
         else:
             self._frame_times = []
 
+    def load_video(self, video_path: str, fps: float) -> int:
+        """从 mp4/视频文件解码帧到 compositor。返回帧数。"""
+        import cv2
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise FileNotFoundError(f"无法打开视频文件: {video_path}")
+
+        frames: list[CapturedFrame] = []
+        index = 0
+        frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
+        while True:
+            ret, frame_bgr = cap.read()
+            if not ret:
+                break
+            timestamp = index * frame_interval
+            frames.append(CapturedFrame(
+                data=frame_bgr, timestamp=timestamp, index=index,
+            ))
+            index += 1
+        cap.release()
+
+        if frames:
+            self.load_frames(frames)
+        return len(frames)
+
     @property
     def source_duration(self) -> float:
         if not self._frame_times:

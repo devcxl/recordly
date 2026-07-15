@@ -1099,15 +1099,27 @@ class MainWindow(QMainWindow):
             comp._monitor_left = project.monitor_offset[0]
             comp._monitor_top = project.monitor_offset[1]
 
-        # TODO: 从 project.source.video 解码帧到 compositor
-        # 当前视频帧解码到 Compositor（load_video 方法）是独立功能，本次不实现。
-        self._show_notification(
-            "项目已加载",
-            "项目已加载，但视频帧解码功能尚未实现",
-            "info",
-        )
+        # 解码视频帧
+        if project.source and project.source.video:
+            try:
+                num_frames = comp.load_video(project.source.video, project.source.fps)
+                if num_frames > 0:
+                    # 注册光标效果
+                    from core.cursor_effects import CursorEffect
+                    self._cursor_effect = CursorEffect(
+                        cursor_size=self.config.cursor_size,
+                        cursor_theme=self.config.cursor_theme,
+                        cursor_style=self.config.cursor_style,
+                    )
+                    comp.register_effect("cursor", self._cursor_effect)
+                    if not self.config.trail_enabled:
+                        self._cursor_effect.enabled["trail"] = False
+                    self._create_playback_controller()
+                    self._playback.seek(0)
+            except Exception as exc:
+                self._show_notification("视频解码失败", str(exc), "warning")
 
-        # 加载时间线
+        # 加载时间线（如有保存则恢复，否则为空）
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
 
@@ -1127,7 +1139,7 @@ class MainWindow(QMainWindow):
         self._btn_crop.setEnabled(True)
         self._btn_add_audio.setEnabled(True)
         self._enable_playback_controls(True)
-        total = int(project.duration * project.source.fps) if project.source else 0
+        total = len(comp._frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
         # 切换到编辑器界面
