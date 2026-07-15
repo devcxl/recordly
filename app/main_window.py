@@ -769,7 +769,7 @@ class MainWindow(QMainWindow):
             self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif not self._playback._playing:
-            self._playback.play(self._playback._current_frame)
+            self._playback.play(self._playback.current_frame)
             self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif self._playback.is_paused:
