@@ -73,9 +73,19 @@ class HomePage(QWidget):
         self._record_btn.setStyleSheet(
             """
             QPushButton {
+                background-color: #4A90D9;
+                color: #fff;
+                border: 1px solid #357ABD;
+                border-radius: 4px;
                 font-size: 15px;
                 padding: 8px 24px;
                 font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #5A9EE5;
+            }
+            QPushButton:pressed {
+                background-color: #357ABD;
             }
             """
         )
