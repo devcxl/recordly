@@ -1093,9 +1093,7 @@ class MainWindow(QMainWindow):
             comp._cursor_events.append(evt)
         comp._click_events = []
         for c in project.click_events:
-            evt = EventData()
-            evt.x, evt.y, evt.timestamp = int(c[0]), int(c[1]), float(c[2])
-            comp._click_events.append(evt)
+            comp._click_events.append((int(c[0]), int(c[1]), float(c[2])))
         if project.monitor_offset:
             comp._monitor_left = project.monitor_offset[0]
             comp._monitor_top = project.monitor_offset[1]
