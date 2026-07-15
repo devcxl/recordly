@@ -69,12 +69,13 @@ def _read_wav(path: str):
 
 
 def _resolve_media_path(project_dir: str, rel_path: str) -> str:
-    """安全解析项目内媒体路径，拒绝绝对路径和 '..' 越界。"""
-    if os.path.isabs(rel_path):
-        raise ValueError(f"拒绝绝对路径: {rel_path}")
-    resolved = os.path.realpath(os.path.join(project_dir, rel_path))
+    """安全解析项目内媒体路径。
+    相对/绝对路径均解析后检查是否位于 project_dir 内；外部绝对路径和 '..' 越界拒绝。
+    """
     project_real = os.path.realpath(project_dir)
-    if not resolved.startswith(project_real + os.sep) and resolved != project_real:
+    candidate = rel_path if os.path.isabs(rel_path) else os.path.join(project_dir, rel_path)
+    resolved = os.path.realpath(candidate)
+    if os.path.commonpath([resolved, project_real]) != project_real:
         raise ValueError(f"路径越界: {rel_path}")
     return resolved
 
@@ -1227,16 +1228,11 @@ class MainWindow(QMainWindow):
         # 加载视频帧
         if project.source and project.source.video:
             video_path = project.source.video
-            if not os.path.isabs(video_path):
-                try:
-                    video_path = _resolve_media_path(project_dir, video_path)
-                except ValueError:
-                    self._show_notification(
-                        "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
-                    video_path = ""
-            else:
+            try:
+                video_path = _resolve_media_path(project_dir, video_path)
+            except ValueError:
                 self._show_notification(
-                    "视频路径不安全", f"拒绝绝对路径: {video_path}", "error")
+                    "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
                 video_path = ""
             if video_path:
                 try:
@@ -1259,8 +1255,12 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self._show_notification("视频解码失败", str(exc), "warning")
 
-        # 恢复音频（从 project.json 声明的 WAV 文件读取）
-        mixed_audio = _load_project_audio(project_dir, project.source)
+        # 恢复音频（从 project.json 声明的 WAV 文件读取，失败时继续无音频打开）
+        try:
+            mixed_audio = _load_project_audio(project_dir, project.source)
+        except Exception as exc:
+            self._show_notification("音频加载失败", str(exc), "warning")
+            mixed_audio = None
 
         # 仅在存在帧或音频时构造 _recorded_data
         has_content = bool(comp._frames) or mixed_audio is not None
