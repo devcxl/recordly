@@ -189,6 +189,12 @@ class ScreenCapture(Thread):
             for timestamp, index in zip(self._timestamps, self._indices)
         ]
 
+    @property
+    def frame_offsets(self) -> list:
+        if self._store is None:
+            return []
+        return self._store._offsets
+
     def _store_frame(self, data: np.ndarray,
                      timestamp: float, index: int):
         if self._store is None:
