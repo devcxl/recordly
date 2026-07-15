@@ -1,5 +1,7 @@
 """主窗口生命周期的纯逻辑回归测试。"""
 
+import os
+
 
 def test_frame_update_shows_time_and_follows_playhead():
     from types import SimpleNamespace
@@ -242,11 +244,16 @@ def test_apply_cursor_config_updates_active_effect():
 def test_normalize_project_path_converts_file_to_directory():
     from app.project_session import ProjectSession
 
-    p = ProjectSession.normalize_path("/home/user/Recordly/projects/test/project.json")
-    assert p == "/home/user/Recordly/projects/test"
+    p = ProjectSession.normalize_path(
+        os.path.join("home", "user", "Recordly", "projects", "test", "project.json"))
+    expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "test"))
+    assert p == expected
 
-    p = ProjectSession.normalize_path("/home/user/Recordly/projects/test")
-    assert p == "/home/user/Recordly/projects/test"
+    p = ProjectSession.normalize_path(
+        os.path.join("home", "user", "Recordly", "projects", "test"))
+    expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "test"))
+    assert p == expected
 
-    p = ProjectSession.normalize_path("relative/project.json")
-    assert p == "relative"
+    p = ProjectSession.normalize_path(os.path.join("relative", "project.json"))
+    expected = os.path.normpath("relative")
+    assert p == expected

@@ -113,6 +113,11 @@ class TestGifFps:
         assert "round=near" in command
 
     def test_gif_real_export_has_correct_fps_and_duration(self, tmp_path):
+        import shutil
+        if not shutil.which("ffmpeg"):
+            import pytest
+            pytest.skip("ffmpeg 不可用")
+
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
 
@@ -189,14 +194,16 @@ class TestMediaPathResolution:
     def test_rejects_outside_absolute_path(self, tmp_path):
         from app.main_window import _resolve_media_path
         import pytest
+        outside = str(tmp_path / ".." / "outside_file")
+        open(outside, "w").close()
         with pytest.raises(ValueError, match="路径越界"):
-            _resolve_media_path(str(tmp_path), "/etc/passwd")
+            _resolve_media_path(str(tmp_path), outside)
 
     def test_rejects_escape_via_dotdot(self, tmp_path):
         from app.main_window import _resolve_media_path
         import pytest
         with pytest.raises(ValueError, match="路径越界"):
-            _resolve_media_path(str(tmp_path / "sub"), "../../etc/passwd")
+            _resolve_media_path(str(tmp_path), "../outside_file")
 
     def test_accepts_normal_relative_path(self, tmp_path):
         from app.main_window import _resolve_media_path
@@ -210,6 +217,28 @@ class TestMediaPathResolution:
         result = _resolve_media_path(str(tmp_path), inside)
         assert result == os.path.realpath(inside)
 
+    def test_rejects_outside_sibling_dir(self, tmp_path):
+        """与 project_dir 同级的目录内文件也应拒绝"""
+        from app.main_window import _resolve_media_path
+        import pytest
+        sibling_dir = str(tmp_path / ".." / "other_project")
+        os.makedirs(sibling_dir, exist_ok=True)
+        with pytest.raises(ValueError, match="路径越界"):
+            _resolve_media_path(str(tmp_path),
+                                os.path.join(sibling_dir, "some_file"))
+
+    def test_commonpath_different_drive_raises_valueerror(self, tmp_path, monkeypatch):
+        """Windows 不同盘符时 os.path.commonpath 抛 ValueError, 统一重抛为'路径越界'"""
+        from app.main_window import _resolve_media_path
+        import pytest
+        import os as os_mod
+
+        def fake_commonpath(paths):
+            raise ValueError("Paths don't have the same drive")
+        monkeypatch.setattr(os_mod.path, "commonpath", fake_commonpath)
+        with pytest.raises(ValueError, match="路径越界"):
+            _resolve_media_path(str(tmp_path), "audio.wav")
+
     def test_notifications_on_video_path_violation(self, tmp_path):
         """_on_open_project 在视频路径越界时通知但不崩溃"""
         from types import SimpleNamespace
@@ -219,7 +248,7 @@ class TestMediaPathResolution:
         project_dir = str(tmp_path / "violation")
         os.makedirs(project_dir)
         project = Project()
-        project.source = SourceInfo(video="/etc/passwd")
+        project.source = SourceInfo(video=str(tmp_path / ".." / "outside.mp4"))
         project.save(os.path.join(project_dir, "project.json"))
 
         notified = []

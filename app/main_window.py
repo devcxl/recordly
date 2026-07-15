@@ -75,8 +75,13 @@ def _resolve_media_path(project_dir: str, rel_path: str) -> str:
     project_real = os.path.realpath(project_dir)
     candidate = rel_path if os.path.isabs(rel_path) else os.path.join(project_dir, rel_path)
     resolved = os.path.realpath(candidate)
-    if os.path.commonpath([resolved, project_real]) != project_real:
-        raise ValueError(f"路径越界: {rel_path}")
+    try:
+        if os.path.commonpath([resolved, project_real]) != project_real:
+            raise ValueError(f"路径越界: {rel_path}")
+    except ValueError as exc:
+        if "路径越界" in str(exc):
+            raise
+        raise ValueError(f"路径越界: {rel_path}") from exc
     return resolved
 
 
