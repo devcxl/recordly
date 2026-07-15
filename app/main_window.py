@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QFileDialog, QApplication, QMessageBox, QToolBar, QAction,
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
-    QLabel, QProgressDialog, QScrollArea, QSizePolicy,
+    QLabel, QProgressDialog, QScrollArea,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QThread
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
@@ -77,9 +77,11 @@ class MainWindow(QMainWindow):
             (screen.height() - self.height()) // 2,
         )
         self.setStyleSheet("""
-            #editorToolbar {
+            #mainToolbar {
                 background: #1e1e1e;
                 border-bottom: 1px solid #323232;
+                padding: 4px 12px;
+                spacing: 6px;
             }
             #editorStatusBar {
                 background: #1e1e1e;
@@ -135,108 +137,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._setup_editor_toolbar(layout)
         self._setup_editor_central(layout)
         self._setup_editor_statusbar(layout)
 
         self._timeline.setFocusPolicy(Qt.StrongFocus)
-
-    def _setup_editor_toolbar(self, layout):
-        tb = QWidget()
-        tb.setObjectName("editorToolbar")
-        tb.setFixedHeight(52)
-        hbox = QHBoxLayout(tb)
-        hbox.setContentsMargins(16, 8, 16, 8)
-        hbox.setSpacing(8)
-
-        # 录制控制
-        self._btn_record = QPushButton("● 录制")
-        self._btn_stop_rec = QPushButton("■ 停止")
-        self._btn_record.clicked.connect(self._toggle_record)
-        self._btn_stop_rec.clicked.connect(self._toggle_record)
-        self._btn_stop_rec.setEnabled(False)
-        self._btn_stop_rec.setStyleSheet(
-            "QPushButton { background: #d32f2f; }"
-            "QPushButton:hover { background: #e53935; }"
-            "QPushButton:disabled { background: #3a3a3a; color: #666; }"
-        )
-        hbox.addWidget(self._btn_record)
-        hbox.addWidget(self._btn_stop_rec)
-        hbox.addSpacing(16)
-
-        # 播放控制
-        self._btn_rewind = QToolButton()
-        self._btn_rewind.setText("⏪")
-        self._btn_rewind.setToolTip("后退 10 帧")
-        self._btn_step_back = QToolButton()
-        self._btn_step_back.setText("◀")
-        self._btn_step_back.setToolTip("上一帧")
-        self._btn_play = QToolButton()
-        self._btn_play.setText("▶")
-        self._btn_play.setToolTip("播放")
-        self._btn_step_fwd = QToolButton()
-        self._btn_step_fwd.setText("⏭")
-        self._btn_step_fwd.setToolTip("下一帧")
-        self._btn_ff = QToolButton()
-        self._btn_ff.setText("⏩")
-        self._btn_ff.setToolTip("快进")
-
-        self._btn_rewind.clicked.connect(self._on_rewind)
-        self._btn_step_back.clicked.connect(self._on_step_back)
-        self._btn_play.clicked.connect(self._on_play_toggle)
-        self._btn_step_fwd.clicked.connect(self._on_step_fwd)
-        self._btn_ff.clicked.connect(self._on_fast_forward)
-
-        self._btn_rewind.setEnabled(False)
-        self._btn_step_back.setEnabled(False)
-        self._btn_play.setEnabled(False)
-        self._btn_step_fwd.setEnabled(False)
-        self._btn_ff.setEnabled(False)
-
-        hbox.addWidget(self._btn_rewind)
-        hbox.addWidget(self._btn_step_back)
-        hbox.addWidget(self._btn_play)
-        hbox.addWidget(self._btn_step_fwd)
-        hbox.addWidget(self._btn_ff)
-        hbox.addSpacing(8)
-
-        # 帧计数器
-        self._frame_label = QLabel("0 / 0")
-        self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
-        hbox.addWidget(self._frame_label)
-        self._time_label = QLabel("00:00.000 / 00:00.000")
-        self._time_label.setStyleSheet("color: #999; font-size: 12px;")
-        hbox.addWidget(self._time_label)
-        hbox.addSpacing(16)
-
-        # 导出
-        self._btn_export = QToolButton()
-        self._btn_export.setText("📤")
-        self._btn_export.setToolTip("导出")
-        self._btn_export.clicked.connect(self._on_export)
-        self._btn_export.setEnabled(False)
-        hbox.addWidget(self._btn_export)
-
-        # 裁剪
-        self._btn_crop = QToolButton()
-        self._btn_crop.setText("✂")
-        self._btn_crop.setToolTip("裁剪模式")
-        self._btn_crop.setCheckable(True)
-        self._btn_crop.toggled.connect(self._on_crop_toggled)
-        self._btn_crop.setEnabled(False)
-        hbox.addWidget(self._btn_crop)
-
-        # 添加音频
-        self._btn_add_audio = QToolButton()
-        self._btn_add_audio.setText("🎵")
-        self._btn_add_audio.setToolTip("添加额外音频")
-        self._btn_add_audio.clicked.connect(self._on_add_audio)
-        self._btn_add_audio.setEnabled(False)
-        hbox.addWidget(self._btn_add_audio)
-
-        hbox.addStretch()
-
-        layout.addWidget(tb)
 
     def _setup_editor_central(self, layout):
         splitter = QSplitter(Qt.Vertical)
@@ -317,36 +221,121 @@ class MainWindow(QMainWindow):
     # ── 导航 ──────────────────────────────────────────────
 
     def _setup_navigation(self):
-        # 工具栏
-        self._nav_toolbar = QToolBar("导航")
-        self._nav_toolbar.setMovable(False)
-        self._nav_toolbar.setFloatable(False)
-        self.addToolBar(self._nav_toolbar)
+        # ── 菜单栏 ──
+        menubar = self.menuBar()
 
-        self._nav_edit_action = QAction("编辑", self)
-        self._nav_edit_action.setCheckable(True)
+        file_menu = menubar.addMenu("文件")
+        file_menu.addAction("设置", self._on_open_settings)
+        file_menu.addSeparator()
+        file_menu.addAction("退出", QApplication.quit)
+
+        view_menu = menubar.addMenu("视图")
+        self._nav_edit_action = QAction("编辑", self, checkable=True)
         self._nav_edit_action.setChecked(True)
         self._nav_edit_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._editor_interface))
-        self._nav_toolbar.addAction(self._nav_edit_action)
+        view_menu.addAction(self._nav_edit_action)
 
-        self._nav_project_action = QAction("项目文件", self)
-        self._nav_project_action.setCheckable(True)
+        self._nav_project_action = QAction("项目文件", self, checkable=True)
         self._nav_project_action.triggered.connect(lambda: self._stacked_widget.setCurrentWidget(self._project_interface))
-        self._nav_toolbar.addAction(self._nav_project_action)
+        view_menu.addAction(self._nav_project_action)
 
-        # 互斥切换
+        # 互斥勾选
         self._nav_edit_action.triggered.connect(lambda: self._nav_project_action.setChecked(False))
         self._nav_project_action.triggered.connect(lambda: self._nav_edit_action.setChecked(False))
 
-        # 设置按钮放在右侧
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self._nav_toolbar.addWidget(spacer)
-        settings_action = QAction("⚙ 设置", self)
-        settings_action.triggered.connect(self._on_open_settings)
-        self._nav_toolbar.addAction(settings_action)
+        # ── 工具栏 ──
+        self._toolbar = QToolBar("工具")
+        self._toolbar.setObjectName("mainToolbar")
+        self._toolbar.setMovable(False)
+        self._toolbar.setFloatable(False)
+        self.addToolBar(self._toolbar)
 
-        # 堆叠页面
+        # 录制
+        self._btn_record = QPushButton("● 录制")
+        self._btn_record.clicked.connect(self._toggle_record)
+        self._toolbar.addWidget(self._btn_record)
+
+        self._btn_stop_rec = QPushButton("■ 停止")
+        self._btn_stop_rec.clicked.connect(self._toggle_record)
+        self._btn_stop_rec.setEnabled(False)
+        self._btn_stop_rec.setStyleSheet(
+            "QPushButton { background: #d32f2f; }"
+            "QPushButton:hover { background: #e53935; }"
+            "QPushButton:disabled { background: #3a3a3a; color: #666; }"
+        )
+        self._toolbar.addWidget(self._btn_stop_rec)
+        self._toolbar.addSeparator()
+
+        # 播放控制
+        self._btn_rewind = QToolButton()
+        self._btn_rewind.setText("⏪")
+        self._btn_rewind.setToolTip("后退 10 帧")
+        self._btn_step_back = QToolButton()
+        self._btn_step_back.setText("◀")
+        self._btn_step_back.setToolTip("上一帧")
+        self._btn_play = QToolButton()
+        self._btn_play.setText("▶")
+        self._btn_play.setToolTip("播放")
+        self._btn_step_fwd = QToolButton()
+        self._btn_step_fwd.setText("⏭")
+        self._btn_step_fwd.setToolTip("下一帧")
+        self._btn_ff = QToolButton()
+        self._btn_ff.setText("⏩")
+        self._btn_ff.setToolTip("快进")
+
+        self._btn_rewind.clicked.connect(self._on_rewind)
+        self._btn_step_back.clicked.connect(self._on_step_back)
+        self._btn_play.clicked.connect(self._on_play_toggle)
+        self._btn_step_fwd.clicked.connect(self._on_step_fwd)
+        self._btn_ff.clicked.connect(self._on_fast_forward)
+
+        self._btn_rewind.setEnabled(False)
+        self._btn_step_back.setEnabled(False)
+        self._btn_play.setEnabled(False)
+        self._btn_step_fwd.setEnabled(False)
+        self._btn_ff.setEnabled(False)
+
+        for btn in [self._btn_rewind, self._btn_step_back, self._btn_play,
+                     self._btn_step_fwd, self._btn_ff]:
+            self._toolbar.addWidget(btn)
+        self._toolbar.addSeparator()
+
+        # 帧 / 时间
+        self._frame_label = QLabel("0 / 0")
+        self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
+        self._toolbar.addWidget(self._frame_label)
+
+        self._time_label = QLabel("00:00.000 / 00:00.000")
+        self._time_label.setStyleSheet("color: #999; font-size: 12px;")
+        self._toolbar.addWidget(self._time_label)
+        self._toolbar.addSeparator()
+
+        # 导出
+        self._btn_export = QToolButton()
+        self._btn_export.setText("📤")
+        self._btn_export.setToolTip("导出")
+        self._btn_export.clicked.connect(self._on_export)
+        self._btn_export.setEnabled(False)
+        self._toolbar.addWidget(self._btn_export)
+
+        # 裁剪
+        self._btn_crop = QToolButton()
+        self._btn_crop.setText("✂")
+        self._btn_crop.setToolTip("裁剪模式")
+        self._btn_crop.setCheckable(True)
+        self._btn_crop.toggled.connect(self._on_crop_toggled)
+        self._btn_crop.setEnabled(False)
+        self._toolbar.addWidget(self._btn_crop)
+
+        # 添加音频
+        self._btn_add_audio = QToolButton()
+        self._btn_add_audio.setText("🎵")
+        self._btn_add_audio.setToolTip("添加额外音频")
+        self._btn_add_audio.clicked.connect(self._on_add_audio)
+        self._btn_add_audio.setEnabled(False)
+        self._toolbar.addWidget(self._btn_add_audio)
+
+        # ── 堆叠页面 ──
         self._stacked_widget = QStackedWidget()
         self._stacked_widget.addWidget(self._editor_interface)
         self._stacked_widget.addWidget(self._project_interface)
