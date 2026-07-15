@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
             self._update_audio_timeline()
 
     def _collect_project_state(self, project: Project) -> None:
-        """将当前 compositor 状态写入 Project 对象"""
+        """将当前 compositor 和编辑器状态写入 Project 对象"""
         comp = self._compositor
         # 光标轨迹
         project.cursor_events = [
@@ -633,6 +633,12 @@ class MainWindow(QMainWindow):
         ]
         # 显示器偏移
         project.monitor_offset = [comp._monitor_left, comp._monitor_top]
+        # 时间线轨道
+        project.timeline = self._timeline.tracks
+        # 裁剪区域
+        project.crop_region = comp._crop_region
+        # 音频区域
+        project.audio_regions = self._audio_regions[:]
 
     def _get_recording_duration(self) -> float:
         duration = getattr(self._compositor, "source_duration", 0.0)
@@ -1119,9 +1125,15 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._show_notification("视频解码失败", str(exc), "warning")
 
-        # 加载时间线（如有保存则恢复，否则为空）
+        # 加载时间线并同步到 compositor
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
+        for track in project.timeline:
+            if track.type == "video":
+                comp.load_clips(track.clips)
+            elif track.type == "zoom":
+                comp.load_manual_zoom_clips(track.clips)
+        self._connect_timeline_signals()
 
         # 加载音频区域
         self._audio_regions = project.audio_regions[:]
