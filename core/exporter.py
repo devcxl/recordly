@@ -90,10 +90,14 @@ class ExportWorker(QObject):
                 pass
 
     def run(self):
-        if self._settings.format == "gif":
-            self._export_gif()
-        else:
-            self._export_mp4()
+        try:
+            if self._settings.format == "gif":
+                self._export_gif()
+            else:
+                self._export_mp4()
+        except Exception as exc:
+            self.finished.emit(ExportResult(False, self._settings.output_path,
+                                            error=f"导出异常: {exc}"))
 
     # ── MP4 ────────────────────────────────────────────
 
@@ -285,47 +289,51 @@ class ExportWorker(QObject):
         process = self._build_gif_output(w, h).run_async(
             pipe_stdin=True, pipe_stderr=True)
         self._process = process
-        for i, frame in enumerate(c.render_all()):
-            if self._cancelled:
-                process.terminate()
-                self._process = None
-                self.finished.emit(ExportResult(False, s.output_path,
-                                                error="已取消"))
-                return
-            if frame.size != (w, h):
-                frame = frame.resize((w, h), Image.LANCZOS)
-            if frame.mode != "RGBA":
-                frame = frame.convert("RGBA")
-            try:
-                process.stdin.write(frame.tobytes())
-            except BrokenPipeError:
-                stderr = process.stderr.read().decode(
-                    "utf-8", errors="replace")
-                process.wait()
-                self._process = None
+        stderr_thread, stderr_chunks = _start_stderr_reader(process)
+        gif_cancelled = False
+        try:
+            for i, frame in enumerate(c.render_all()):
+                if self._cancelled:
+                    gif_cancelled = True
+                    process.terminate()
+                    self.finished.emit(ExportResult(False, s.output_path,
+                                                    error="已取消"))
+                    return
+                if frame.size != (w, h):
+                    frame = frame.resize((w, h), Image.LANCZOS)
+                if frame.mode != "RGBA":
+                    frame = frame.convert("RGBA")
+                try:
+                    process.stdin.write(frame.tobytes())
+                except BrokenPipeError:
+                    break
+                self.progress.emit(int((i + 1) / total * 100))
+            if not gif_cancelled:
+                process.stdin.close()
+                returncode = process.wait()
+                stderr_thread.join(timeout=5)
+                stderr_text = "".join(stderr_chunks)
+                output_exists = os.path.exists(s.output_path) and os.path.getsize(s.output_path) > 0
+                if returncode != 0 or not output_exists:
+                    self.finished.emit(ExportResult(
+                        False, s.output_path,
+                        error=f"FFmpeg GIF 导出失败: {stderr_text.strip() or returncode}",
+                    ))
+                    return
                 self.finished.emit(ExportResult(
-                    False, s.output_path,
-                    error=f"FFmpeg GIF 管道断开: {stderr.strip()}",
+                    success=True, path=s.output_path,
+                    size_bytes=os.path.getsize(s.output_path),
+                    duration=total / c.fps,
                 ))
-                return
-            self.progress.emit(int((i + 1) / total * 100))
-
-        process.stdin.close()
-        returncode = process.wait()
-        stderr = process.stderr.read().decode("utf-8", errors="replace")
-        self._process = None
-        if returncode != 0 or not os.path.exists(s.output_path):
-            self.finished.emit(ExportResult(
-                False, s.output_path,
-                error=f"FFmpeg GIF 导出失败: {stderr.strip() or returncode}",
-            ))
-            return
-
-        self.finished.emit(ExportResult(
-            success=True, path=s.output_path,
-            size_bytes=os.path.getsize(s.output_path),
-            duration=total / c.fps,
-        ))
+        finally:
+            self._process = None
+            if not gif_cancelled:
+                stderr_thread.join(timeout=3)
+            if gif_cancelled and os.path.exists(s.output_path):
+                try:
+                    os.remove(s.output_path)
+                except OSError:
+                    pass
 
     # ── 多音频混合 ─────────────────────────────────────────
 
@@ -401,7 +409,8 @@ class ExportWorker(QObject):
         cmd.extend(['-ac', '2', '-ar', str(samplerate),
                      '-acodec', 'pcm_s16le'])
 
-        out_path = tempfile.mktemp(suffix='_mixed.wav')
+        fd, out_path = tempfile.mkstemp(suffix='_mixed.wav')
+        os.close(fd)
         cmd.append(out_path)
 
         result = subprocess.run(cmd, capture_output=True, timeout=300)
@@ -451,7 +460,8 @@ class ExportWorker(QObject):
 
     @staticmethod
     def _save_temp_wav(audio: np.ndarray, samplerate: int) -> str:
-        path = tempfile.mktemp(suffix=".wav")
+        fd, path = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
         with wave.open(path, "wb") as wf:
             wf.setnchannels(2)
             wf.setsampwidth(2)

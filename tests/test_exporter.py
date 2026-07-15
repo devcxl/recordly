@@ -111,8 +111,8 @@ class TestExportWorker:
         captured = {}
 
         monkeypatch.setattr("core.exporter.os.path.exists", lambda _path: True)
-        monkeypatch.setattr("core.exporter.tempfile.mktemp",
-                            lambda **_kwargs: "/tmp/mixed.wav")
+        monkeypatch.setattr("core.exporter.tempfile.mkstemp",
+                            lambda **_kwargs: (0, "/tmp/mixed.wav"))
 
         def fake_run(cmd, **_kwargs):
             captured["cmd"] = cmd
