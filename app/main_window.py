@@ -90,6 +90,17 @@ class MainWindow(QMainWindow):
         os.makedirs(config.projects_dir, exist_ok=True)
         self._project_manager = ProjectManager(config.projects_dir)
 
+        self._setup_window()
+        self._setup_interfaces()
+        self._setup_navigation()
+        self._setup_tray()
+        self._check_deps()
+        self._update_ui_state()
+
+        self.recording_started.connect(self._on_recording_started)
+        self.recording_stopped.connect(self._on_recording_stopped)
+        self._export_controller.export_finished.connect(self._on_export_finished)
+
     @property
     def _project_dir(self) -> str | None:
         return self._project_session.project_dir if self._project_session else None
@@ -105,17 +116,6 @@ class MainWindow(QMainWindow):
     @_is_recording.setter
     def _is_recording(self, value: bool):
         pass  # no-op, state managed by controller
-        self._setup_window()
-        self._setup_interfaces()
-        self._setup_navigation()
-        self._setup_tray()
-        self._check_deps()
-        self._update_ui_state()
-
-        # 信号连接
-        self.recording_started.connect(self._on_recording_started)
-        self.recording_stopped.connect(self._on_recording_stopped)
-        self._export_controller.export_finished.connect(self._on_export_finished)
 
     # ── 窗口 ──────────────────────────────────────────────
 
