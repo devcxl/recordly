@@ -115,25 +115,23 @@ class Compositor:
             for i in range(frame_count):
                 offsets.append([0, 0])  # fallback
 
-        # 创建 loader 函数
-        def make_loader(store, off_list):
-            import cv2
-            import numpy as np
-            def loader(_i):
-                off, length = off_list[_i]
-                with open(store, "rb") as fh:
-                    fh.seek(off)
-                    payload = fh.read(length)
-                if not payload:
-                    raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
-                arr = np.frombuffer(payload, dtype=np.uint8)
-                frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame_bgr is None:
-                    raise RuntimeError(
-                        f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
-                # BGR → RGB（compositor 期望 RGB 格式）
-                return np.ascontiguousarray(frame_bgr[:, :, ::-1])
-            return loader
+        # 保持文件句柄打开，避免每帧重复 open/close
+        import cv2
+        import numpy as np
+        fh = open(store_path, "rb")
+
+        def loader(_i):
+            off, length = offsets[_i]
+            fh.seek(off)
+            payload = fh.read(length)
+            if not payload:
+                raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
+            arr = np.frombuffer(payload, dtype=np.uint8)
+            frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                raise RuntimeError(
+                    f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
+            return np.ascontiguousarray(frame_bgr[:, :, ::-1])
 
         frames: list = []
         frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
@@ -143,7 +141,7 @@ class Compositor:
             from core.screen_capture import CapturedFrame
             frames.append(CapturedFrame(
                 data=None, timestamp=timestamp, index=i,
-                _loader=make_loader(store_path, offsets),
+                _loader=loader,
             ))
         if frames:
             self.fps = fps
