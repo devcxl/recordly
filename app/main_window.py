@@ -29,7 +29,6 @@ from ui.preview_widget import PreviewWidget
 from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
-from ui.project_gallery import ProjectGallery
 from ui.home_page import HomePage
 
 
@@ -1089,7 +1088,7 @@ class MainWindow(QMainWindow):
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
         # 切换到编辑器界面
-        self._stacked_widget.setCurrentWidget(self._editor_interface)
+        self._switch_to_editor()
         self.update_status(f"● 已打开项目: {project.name}")
 
     def _on_project_deleted(self, path: str):
