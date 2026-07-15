@@ -116,16 +116,22 @@ class Compositor:
                 offsets.append([0, 0])  # fallback
 
         # 创建 loader 函数
-        def make_loader(store, off_list, idx):
+        def make_loader(store, off_list):
+            import cv2
+            import numpy as np
             def loader(_i):
                 off, length = off_list[_i]
                 with open(store, "rb") as fh:
                     fh.seek(off)
                     payload = fh.read(length)
-                import cv2
-                import numpy as np
+                if not payload:
+                    raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
                 arr = np.frombuffer(payload, dtype=np.uint8)
-                return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    raise RuntimeError(
+                        f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
+                return frame
             return loader
 
         frames: list = []
@@ -136,7 +142,7 @@ class Compositor:
             from core.screen_capture import CapturedFrame
             frames.append(CapturedFrame(
                 data=None, timestamp=timestamp, index=i,
-                _loader=make_loader(store_path, offsets, i),
+                _loader=make_loader(store_path, offsets),
             ))
         if frames:
             self.load_frames(frames)
