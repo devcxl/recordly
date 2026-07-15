@@ -1,14 +1,17 @@
 """导出控制器 — QObject，管理 QThread + ExportWorker 生命周期"""
 
+import numpy as np
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
-from core.exporter import ExportWorker
+from core.compositor import Compositor
+from core.exporter import ExportWorker, ExportSettings
 
 
 class ExportController(QObject):
     """导出控制器。唯一的 QObject Controller，管理导出线程生命周期。"""
 
     export_finished = pyqtSignal(object)
+    export_progress = pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -19,14 +22,17 @@ class ExportController(QObject):
     def is_exporting(self) -> bool:
         return self._thread is not None and self._thread.isRunning()
 
-    def start_export(self, worker: ExportWorker):
+    def start_export(self, compositor: Compositor,
+                     audio_data: np.ndarray | None,
+                     settings: ExportSettings):
         if self.is_exporting:
             raise RuntimeError("已有导出进行中")
-        self._worker = worker
+        self._worker = ExportWorker(compositor, audio_data, settings)
+        self._worker.progress.connect(self.export_progress)
         self._thread = QThread(self)
-        worker.moveToThread(self._thread)
-        self._thread.started.connect(worker.run)
-        worker.finished.connect(self._on_worker_finished)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_worker_finished)
         self._thread.start()
 
     def cancel(self):
