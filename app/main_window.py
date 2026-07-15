@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from uuid import uuid4
 
 from PyQt5.QtWidgets import (
@@ -43,6 +44,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self._is_recording = False
+        self._current_project_path: str | None = None
         self._recorder = Recorder(target_fps=config.default_fps)
         self._compositor = Compositor(1920, 1080, config.default_fps)
         self._recorded_data = None
@@ -541,6 +543,15 @@ class MainWindow(QMainWindow):
                 height=self._compositor.height,
             )
             self._project_manager.create_project(name, project, result.path)
+            # 收集录制原始数据并保存
+            self._collect_project_state(project)
+            summary = self._project_manager.list_projects()
+            # 找到刚创建的项目路径
+            for s in summary:
+                if s.name == name:
+                    self._current_project_path = s.path
+                    project.save(str(Path(s.path) / "project.json"))
+                    break
             self._refresh_home_page()
             # 自动切换到编辑器并恢复窗口
             self._switch_to_editor()
@@ -604,6 +615,20 @@ class MainWindow(QMainWindow):
         self._compositor.load_manual_zoom_clips(zoom_clips)
         if self._audio_regions:
             self._update_audio_timeline()
+
+    def _collect_project_state(self, project: Project) -> None:
+        """将当前 compositor 状态写入 Project 对象"""
+        comp = self._compositor
+        # 光标轨迹
+        project.cursor_events = [
+            [c[0], c[1], c[2]] for c in comp._cursor_events
+        ]
+        # 点击事件
+        project.click_events = [
+            [c[0], c[1], c[2]] for c in comp._click_events
+        ]
+        # 显示器偏移
+        project.monitor_offset = [comp._monitor_left, comp._monitor_top]
 
     def _get_recording_duration(self) -> float:
         duration = getattr(self._compositor, "source_duration", 0.0)
@@ -1055,6 +1080,21 @@ class MainWindow(QMainWindow):
             self._show_notification("打开项目失败", str(exc), "error")
             return
 
+        # 存储当前项目路径
+        self._current_project_path = path
+
+        # 恢复录制原始数据
+        comp = self._compositor
+        comp._cursor_events = [
+            (c[0], c[1], c[2]) for c in project.cursor_events
+        ]
+        comp._click_events = [
+            (c[0], c[1], c[2]) for c in project.click_events
+        ]
+        if project.monitor_offset:
+            comp._monitor_left = project.monitor_offset[0]
+            comp._monitor_top = project.monitor_offset[1]
+
         # TODO: 从 project.source.video 解码帧到 compositor
         # 当前视频帧解码到 Compositor（load_video 方法）是独立功能，本次不实现。
         self._show_notification(
@@ -1107,7 +1147,17 @@ class MainWindow(QMainWindow):
             self._show_notification("重命名项目失败", str(exc), "error")
 
     def _on_save_project(self):
-        self.update_status("● 保存项目...")
+        """保存当前项目编辑状态"""
+        if not self._current_project_path:
+            self.update_status("● 无项目可保存")
+            return
+        try:
+            project = self._project_manager.open_project(self._current_project_path)
+            self._collect_project_state(project)
+            project.save(str(Path(self._current_project_path) / "project.json"))
+            self.update_status("✓ 项目已保存")
+        except Exception as exc:
+            self._show_notification("保存项目失败", str(exc), "error")
 
     def _toggle_fullscreen(self):
         if self.isFullScreen():
