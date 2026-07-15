@@ -45,10 +45,13 @@ class _CompressedFrameStore:
         atexit.register(self.cleanup)
 
     def append(self, rgb: np.ndarray) -> int:
-        success, encoded = cv2.imencode(
+        result = cv2.imencode(
             ".jpg", np.ascontiguousarray(rgb[:, :, ::-1]),
             [cv2.IMWRITE_JPEG_QUALITY, self._quality],
         )
+        if not result:
+            raise RuntimeError("录制帧压缩失败")
+        success, encoded = result
         if not success:
             raise RuntimeError("录制帧压缩失败")
         payload = encoded.tobytes()
