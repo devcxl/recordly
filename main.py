@@ -1,5 +1,6 @@
 """Recordly 程序入口"""
 
+import logging
 import os
 import sys
 from PyQt5.QtWidgets import QApplication
@@ -18,6 +19,9 @@ def _load_stylesheet() -> str:
 
 
 def main():
+    log_level = logging.DEBUG if os.environ.get("RECORDLY_DEBUG") == "1" else logging.WARNING
+    logging.basicConfig(level=log_level, format="%(levelname)s [%(name)s] %(message)s", stream=sys.stderr)
+
     app = QApplication(sys.argv)
     app.setApplicationName("Recordly")
     app.setOrganizationName("Recordly")
