@@ -695,6 +695,7 @@ class MainWindow(QMainWindow):
             audio_result=audio_result,
             video_clips=video_clips,
         )
+        self._preview.set_fps(int(self._compositor.fps))
         self._playback.set_on_frame_changed(self._update_frame_counter)
 
     def _on_rewind(self):
