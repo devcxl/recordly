@@ -127,11 +127,12 @@ class Compositor:
                 if not payload:
                     raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
                 arr = np.frombuffer(payload, dtype=np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is None:
+                frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame_bgr is None:
                     raise RuntimeError(
                         f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
-                return frame
+                # BGR → RGB（compositor 期望 RGB 格式）
+                return np.ascontiguousarray(frame_bgr[:, :, ::-1])
             return loader
 
         frames: list = []
