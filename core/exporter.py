@@ -245,20 +245,23 @@ class ExportWorker(QObject):
     # ── GIF ────────────────────────────────────────────
 
     def _build_gif_output(self, width: int, height: int):
-        """构建 palettegen 与 paletteuse 显式连接的 GIF 滤镜图。"""
+        """构建 palettegen 与 paletteuse 显式连接的 GIF 滤镜图。
+        在 split 前对 rawvideo 应用 fps 降采样，输入保持 compositor.fps，
+        输出使用 settings.fps 确保总时长不变。"""
         s = self._settings
         source = ffmpeg.input(
             "pipe:", format="rawvideo", pix_fmt="rgba",
             s=f"{width}x{height}", r=self._compositor.fps,
         )
-        split = source.filter_multi_output("split")
+        downsampled = source.filter("fps", fps=s.fps, round="near")
+        split = downsampled.filter_multi_output("split")
         palette = split[0].filter("palettegen", stats_mode="diff")
         gif_video = ffmpeg.filter(
             [split[1], palette], "paletteuse",
             dither="bayer", bayer_scale=5, diff_mode="rectangle",
         )
         return ffmpeg.output(
-            gif_video, s.output_path, r=s.fps,
+            gif_video, s.output_path,
             loop=0 if s.loop else -1,
         ).overwrite_output()
 

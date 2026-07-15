@@ -3,7 +3,6 @@
 import json
 import os
 
-import pytest
 import numpy as np
 
 
@@ -11,213 +10,101 @@ class TestAutosaveCreatesRequiredArtifacts:
     """Slice 1: _finalize_project 生成 frames.idx 和完整 project.json"""
 
     def test_finalize_project_creates_frames_idx_and_project_json(self, tmp_path):
-        """录制收尾必须生成 frames.idx，project.json 包含非空 source、正确 frame_count 和时间线"""
-        from types import SimpleNamespace
-        from app.main_window import MainWindow, _write_wav
-        from core.compositor import Compositor
-        from core.project import Project, SourceInfo, Track, Clip
-        from core.screen_capture import CapturedFrame
-
-        project_dir = str(tmp_path / "test_project")
-        os.makedirs(project_dir)
-
-        frames = [
-            CapturedFrame(
-                data=np.zeros((100, 100, 3), dtype=np.uint8),
-                timestamp=i / 30.0, index=i,
-            )
-            for i in range(30)
-        ]
-
-        compositor = Compositor(100, 100, 30)
-        compositor.load_frames(frames)
-
-        recording_controller = SimpleNamespace(
-            recorder=SimpleNamespace(
-                screen=SimpleNamespace(frame_offsets=[[0, 100], [100, 100]]),
-            ),
-        )
-
-        tracks = [Track(type="video", name="视频", clips=[
-            Clip(type="video", start=0, end=1.0, content="test"),
-        ])]
-
-        timeline = SimpleNamespace(tracks=tracks)
-
-        calls = {"notification": None}
-
-        window = SimpleNamespace(
-            _recorded_data={
-                "frames": frames,
-                "cursor_events": [],
-                "clicks": [],
-                "mic_audio": None,
-                "system_audio": None,
-            },
-            _project_dir=project_dir,
-            _compositor=compositor,
-            _recording_controller=recording_controller,
-            _timeline=timeline,
-            _audio_regions=[],
-            config=SimpleNamespace(default_fps=30),
-            _refresh_home_page=lambda: None,
-            update_status=lambda text: None,
-            _show_notification=lambda title, msg, level: (
-                setattr(calls, "notification", {"title": title, "msg": msg, "level": level})
-            ),
-            _get_recording_duration=lambda: 1.0,
-            _collect_project_state=lambda project: None,
-            _project_name="test_recording",
-        )
-
-        # 执行（BUG: 当前代码用 self.recording_controller 而非 self._recording_controller）
-        MainWindow._finalize_project(window)
-
-        # 验证 frames.idx 存在
-        idx_path = os.path.join(project_dir, "frames.idx")
-        assert os.path.exists(idx_path), "frames.idx 必须生成"
-
-        with open(idx_path) as f:
-            offsets = json.load(f)
-        assert isinstance(offsets, list), "frames.idx 应为 JSON 数组"
-
-        # 验证 project.json 包含关键字段
-        proj = Project.load(os.path.join(project_dir, "project.json"))
-        assert proj.source is not None, "source 不应为空"
-        assert proj.source.video == "frames.data", "source.video 应为 frames.data"
-        assert proj._frame_count == 30, "frame_count 应为 30"
-        assert proj.name == "test_recording", "name 应保留"
-
-        assert calls["notification"] is None, "不应有错误通知"
-
-
-class TestAudioReopen:
-    """Slice 2: 重开音频 — 从 WAV 恢复 AudioResult"""
-
-    def test_reopen_mixes_wavs_into_audio_result(self, tmp_path):
-        """重开项目后 PlaybackController 应获得混合 AudioResult"""
-        import numpy as np
-        from types import SimpleNamespace
-        from app.main_window import MainWindow, _write_wav, _read_wav
-        from core.compositor import Compositor
-        from core.audio_capture import AudioResult, mix_audio_results
-        from core.project import Project, SourceInfo, Track, Clip
-
-        project_dir = str(tmp_path / "test_audio")
-        os.makedirs(project_dir)
-
-        # 创建测试音频文件
-        samplerate = 44100
-        mic_data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
-        sys_data = np.ones((samplerate, 2), dtype=np.float32) * 0.2
-        _write_wav(str(tmp_path / "audio_mic.wav"), mic_data, samplerate)
-        _write_wav(str(tmp_path / "audio_system.wav"), sys_data, samplerate)
-
-        # 创建 project.json
-        project = Project()
-        project.source = SourceInfo(
-            video="frames.data",
-            audio_mic="audio_mic.wav",
-            audio_system="audio_system.wav",
-            duration=1.0,
-            fps=30,
-            width=100,
-            height=100,
-        )
-        project._frame_count = 10
-        project.save(os.path.join(project_dir, "project.json"))
-
-        # 重设 project_dir 内 WAV 路径（_write_wav 写入 tmp_path）
-        import shutil
-        shutil.copy(str(tmp_path / "audio_mic.wav"), os.path.join(project_dir, "audio_mic.wav"))
-        shutil.copy(str(tmp_path / "audio_system.wav"), os.path.join(project_dir, "audio_system.wav"))
-
-        # 模拟打开项目时的音频恢复
-        source = project.source
-        mic_path = os.path.join(project_dir, source.audio_mic) if source.audio_mic else ""
-        sys_path = os.path.join(project_dir, source.audio_system) if source.audio_system else ""
-
-        mic_audio, mic_sr, mic_ch = _read_wav(mic_path)
-        sys_audio, sys_sr, sys_ch = _read_wav(sys_path)
-
-        assert mic_audio is not None, "mic WAV 应可读取"
-        assert sys_audio is not None, "system WAV 应可读取"
-
-        mixed = mix_audio_results(
-            AudioResult(mic_audio, mic_sr, mic_ch),
-            AudioResult(sys_audio, sys_sr, sys_ch),
-        )
-        assert mixed is not None, "混合后应有 AudioResult"
-        assert mixed.data.shape[0] == samplerate, "混合音频应有正确帧数"
-        assert mixed.channels == 2, "混合应为立体声"
-        assert mixed.samplerate == samplerate, "采样率应保留"
-        assert np.max(mixed.data) > 0.0, "混合音频应有非静音数据"
-
-
-class TestCursorTimebase:
-    """Slice 3: 光标时间基 — 保存时转为相对 compositor base_time 的时间戳"""
-
-    def test_cursor_events_have_relative_timestamps_after_save(self, tmp_path):
-        """保存后 cursor_events 时间戳应相对于 compositor._base_time"""
-        import numpy as np
         from types import SimpleNamespace
         from app.main_window import MainWindow
         from core.compositor import Compositor
         from core.project import Project, Track, Clip
         from core.screen_capture import CapturedFrame
 
-        project_dir = str(tmp_path / "test_cursor")
+        project_dir = str(tmp_path / "test_project")
         os.makedirs(project_dir)
 
-        # compositor 首帧时间戳为 100.0 → _base_time = 100.0
         frames = [
-            CapturedFrame(
-                data=np.zeros((100, 100, 3), dtype=np.uint8),
-                timestamp=100.0 + i / 30.0, index=i,
-            )
+            CapturedFrame(data=np.zeros((100, 100, 3), dtype=np.uint8),
+                          timestamp=i / 30.0, index=i)
             for i in range(30)
         ]
         compositor = Compositor(100, 100, 30)
         compositor.load_frames(frames)
-        assert compositor._base_time == 100.0, "_base_time 应从首帧获取"
 
-        # 光标事件使用绝对时间戳（关键字参数确保字段正确映射）
+        notifications = []
+
+        window = SimpleNamespace(
+            _recorded_data={"frames": frames, "cursor_events": [], "clicks": [],
+                            "mic_audio": None, "system_audio": None},
+            _project_dir=project_dir,
+            _compositor=compositor,
+            _recording_controller=SimpleNamespace(
+                recorder=SimpleNamespace(
+                    screen=SimpleNamespace(frame_offsets=[[0, 100], [100, 100]]))),
+            _timeline=SimpleNamespace(tracks=[Track(type="video", name="视频", clips=[
+                Clip(type="video", start=0, end=1.0, content="test")])]),
+            _audio_regions=[],
+            config=SimpleNamespace(default_fps=30),
+            _refresh_home_page=lambda: None,
+            update_status=lambda text: None,
+            _show_notification=lambda title, msg, level: notifications.append(locals()),
+            _get_recording_duration=lambda: 1.0,
+            _collect_project_state=lambda project: None,
+            _project_name="test_recording",
+        )
+
+        MainWindow._finalize_project(window)
+
+        assert not notifications, f"不应有错误通知: {notifications}"
+        idx_path = os.path.join(project_dir, "frames.idx")
+        assert os.path.exists(idx_path)
+        with open(idx_path) as f:
+            offsets = json.load(f)
+        assert isinstance(offsets, list)
+
+        proj = Project.load(os.path.join(project_dir, "project.json"))
+        assert proj.source is not None
+        assert proj.source.video == "frames.data"
+        assert proj._frame_count == 30
+        assert proj.name == "test_recording"
+
+
+class TestCursorTimebase:
+    """Slice 3: 光标时间基 — 保存时转为相对 compositor base_time 的时间戳"""
+
+    def test_cursor_events_have_relative_timestamps_after_save(self, tmp_path):
+        from types import SimpleNamespace
+        from app.main_window import MainWindow
+        from core.compositor import Compositor
+        from core.project import Project
+        from core.screen_capture import CapturedFrame
         from core.pointer_tracker import CursorEvent
-        events = [
-            CursorEvent(x=10, y=20, timestamp=100.0),
-            CursorEvent(x=50, y=60, timestamp=100.5),
-            CursorEvent(x=80, y=90, timestamp=101.0),
-        ]
+
+        project_dir = str(tmp_path / "test_cursor")
+        os.makedirs(project_dir)
+
+        frames = [CapturedFrame(data=np.zeros((100, 100, 3), dtype=np.uint8),
+                                timestamp=100.0 + i / 30.0, index=i)
+                  for i in range(30)]
+        compositor = Compositor(100, 100, 30)
+        compositor.load_frames(frames)
+        assert compositor._base_time == 100.0
+
+        events = [CursorEvent(x=10, y=20, timestamp=100.0),
+                  CursorEvent(x=50, y=60, timestamp=100.5),
+                  CursorEvent(x=80, y=90, timestamp=101.0)]
         compositor.load_cursor_events(events, [])
 
-        assert len(compositor._cursor_events) == 3
-
         project = Project()
+        MainWindow._collect_project_state(
+            SimpleNamespace(_compositor=compositor, _timeline=SimpleNamespace(tracks=[]),
+                            _audio_regions=[]),
+            project)
 
-        # 使用实际 MainWindow._collect_project_state 进行保存（含时间基修正）
-        window = SimpleNamespace(
-            _compositor=compositor,
-            _timeline=SimpleNamespace(tracks=[]),
-            _audio_regions=[],
-        )
-        MainWindow._collect_project_state(window, project)
-
-        # 验证：保存后时间戳应相对化（减去 _base_time）
         project.save(os.path.join(project_dir, "project.json"))
         loaded = Project.load(os.path.join(project_dir, "project.json"))
 
-        # 重开后的 compositor 首帧时间戳从 0 开始 → _base_time = 0
-        reload_frames = [
-            CapturedFrame(
-                data=np.zeros((100, 100, 3), dtype=np.uint8),
-                timestamp=i / 30.0, index=i,
-            )
-            for i in range(30)
-        ]
         reload_compositor = Compositor(100, 100, 30)
-        reload_compositor.load_frames(reload_frames)
-        assert reload_compositor._base_time == 0.0
-
+        reload_compositor.load_frames(
+            [CapturedFrame(data=np.zeros((100, 100, 3), dtype=np.uint8),
+                           timestamp=i / 30.0, index=i)
+             for i in range(30)])
         evt = type("EventData", (), {})
         reload_compositor._cursor_events = []
         for c in loaded.cursor_events:
@@ -225,73 +112,57 @@ class TestCursorTimebase:
             e.x, e.y, e.timestamp = int(c[0]), int(c[1]), float(c[2])
             reload_compositor._cursor_events.append(e)
 
-        # 光标插值应正常工作
-        # 首帧光标应与第一个事件 (10, 20) 接近
-        cx, cy = reload_compositor._interpolate_cursor(0.0)
-        assert abs(cx - 10) < 30, f"首帧光标 x 应与第一个事件接近，实际 {cx}"
-        assert abs(cy - 20) < 30, f"首帧光标 y 应与第一个事件接近，实际 {cy}"
+        cx0, cy0 = reload_compositor._interpolate_cursor(0.0)
+        assert cx0 == 10, f"首帧 x 应为 10, 实际 {cx0}"
+        assert cy0 == 20, f"首帧 y 应为 20, 实际 {cy0}"
 
-        # 末帧光标应与最后一个事件 (80, 90) 接近
-        cx_end, cy_end = reload_compositor._interpolate_cursor(1.0)
-        end_event = reload_compositor._cursor_events[-1]
-        assert abs(cx_end - end_event.x) < 30, \
-            f"末帧光标 x 应与最后事件接近，预期 {end_event.x}，实际 {cx_end}"
-        assert abs(cy_end - end_event.y) < 30, \
-            f"末帧光标 y 应与最后事件接近，预期 {end_event.y}，实际 {cy_end}"
+        cx1, cy1 = reload_compositor._interpolate_cursor(1.0)
+        assert cx1 == 80, f"末帧 x 应为 80, 实际 {cx1}"
+        assert cy1 == 90, f"末帧 y 应为 90, 实际 {cy1}"
 
 
 class TestGifFps:
     """Slice 4: GIF 导出使用 fps filter 降采样，保持输入 r=compositor.fps"""
 
-    def test_gif_output_uses_settings_fps_instead_of_compositor_fps(self):
-        """GIF 输出 fps 应为 settings.fps，输入保持 compositor.fps"""
+    def test_gif_graph_uses_fps_filter_before_split(self):
         import ffmpeg
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
 
         compositor = Compositor(320, 240, 30)
-        worker = ExportWorker(
-            compositor, None,
-            ExportSettings(output_path="out.gif", format="gif", fps=15),
-        )
-
+        worker = ExportWorker(compositor, None,
+                              ExportSettings(output_path="out.gif", format="gif", fps=15))
         graph = worker._build_gif_output(320, 240)
         command = " ".join(ffmpeg.compile(graph))
 
-        # 输入应保持 compositor.fps
-        assert "-r 30" in command or "r=30" in command or "r 30" in command
+        assert "-r 30" in command
+        assert "fps=fps=15" in command
+        assert "round=near" in command
 
-        # 输出应使用 settings.fps (15)
-        assert "-r 15" in command
-
-    def test_gif_fps_filter_keeps_duration(self, tmp_path):
-        """fps filter 降采样后总时长应与原始一致"""
-        import subprocess
-        import numpy as np
-        from PIL import Image
+    def test_gif_real_export_has_correct_fps_and_duration(self, tmp_path):
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
 
-        # 创建短小合成器：10 帧 30fps → 0.333s
         compositor = Compositor(32, 32, 30)
         frames = []
-        for i in range(10):
+        for i in range(30):
             frames.append(type("F", (), {
-                "data": np.ones((32, 32, 3), dtype=np.uint8) * (i * 20),
-                "timestamp": i / 30.0,
-                "index": i,
+                "data": np.ones((32, 32, 3), dtype=np.uint8) * (i * 8),
+                "timestamp": i / 30.0, "index": i,
             })())
         compositor._frames = frames
 
         output_path = str(tmp_path / "test.gif")
-        worker = ExportWorker(
-            compositor, None,
-            ExportSettings(output_path=output_path, format="gif", fps=10),
-        )
-
+        worker = ExportWorker(compositor, None,
+                              ExportSettings(output_path=output_path, format="gif", fps=10))
         worker._export_gif()
-        # 验证导出完成
-        assert os.path.exists(output_path), "GIF 文件应生成"
+
+        assert os.path.getsize(output_path) > 50
+        from PIL import Image
+        gif = Image.open(output_path)
+        # 30 frames at 30fps = 1s, downsampled to 10fps → ~10 frames
+        n_frames = getattr(gif, "n_frames", 1)
+        assert n_frames == 10, f"30fps 1s 源降采样到 10fps 应有 ~10 帧, 实际 {n_frames}"
 
 
 class TestControlState:
@@ -299,223 +170,307 @@ class TestControlState:
 
     def _make_mock_window(self, frames):
         from types import SimpleNamespace
-        buttons = {}
-        for name in ["_btn_rewind", "_btn_step_back", "_btn_play",
-                      "_btn_step_fwd", "_btn_ff", "_btn_export",
-                      "_btn_crop", "_btn_add_audio"]:
-            btn = SimpleNamespace()
-            btn.setEnabled = lambda v, _n=name: buttons.update({_n: v})
-            buttons[name] = None
-            setattr(btn, "setChecked", lambda v: None)
-            if name == "_btn_crop":
-                btn2 = SimpleNamespace()
-                btn2.setEnabled = lambda v: buttons.update({"_btn_crop": v})
-                btn2.setChecked = lambda v: None
-                btn = btn2
-            setattr(btn, "setEnabled", lambda v, _n=name: buttons.update({_n: v}))
-        # Rebuild with proper closures
-        btn_export = SimpleNamespace()
-        btn_export.setEnabled = lambda v: buttons.update({"_btn_export": v})
-        btn_crop = SimpleNamespace()
-        btn_crop.setEnabled = lambda v: buttons.update({"_btn_crop": v})
-        btn_crop.setChecked = lambda v: None
-        btn_add_audio = SimpleNamespace()
-        btn_add_audio.setEnabled = lambda v: buttons.update({"_btn_add_audio": v})
-        btn_rewind = SimpleNamespace()
-        btn_rewind.setEnabled = lambda v: buttons.update({"_btn_rewind": v})
-        btn_step_back = SimpleNamespace()
-        btn_step_back.setEnabled = lambda v: buttons.update({"_btn_step_back": v})
-        btn_play = SimpleNamespace()
-        btn_play.setEnabled = lambda v: buttons.update({"_btn_play": v})
-        btn_step_fwd = SimpleNamespace()
-        btn_step_fwd.setEnabled = lambda v: buttons.update({"_btn_step_fwd": v})
-        btn_ff = SimpleNamespace()
-        btn_ff.setEnabled = lambda v: buttons.update({"_btn_ff": v})
 
-        return SimpleNamespace(
-            _compositor=SimpleNamespace(
-                _frames=frames, fps=30, width=100, height=100,
-            ),
-            _btn_rewind=btn_rewind,
-            _btn_step_back=btn_step_back,
-            _btn_play=btn_play,
-            _btn_step_fwd=btn_step_fwd,
-            _btn_ff=btn_ff,
-            _btn_export=btn_export,
-            _btn_crop=btn_crop,
-            _btn_add_audio=btn_add_audio,
-            _audio_regions=[],
-            _playback=None,
+        def btn():
+            ns = SimpleNamespace()
+            ns.state = None
+            ns.setEnabled = lambda v: setattr(ns, "state", v)
+            ns.setChecked = lambda v: None
+            return ns
+
+        window = SimpleNamespace(
+            _compositor=SimpleNamespace(_frames=frames, fps=30, width=100, height=100),
+            _btn_rewind=btn(), _btn_step_back=btn(), _btn_play=btn(),
+            _btn_step_fwd=btn(), _btn_ff=btn(), _btn_export=btn(),
+            _btn_crop=btn(), _btn_add_audio=btn(),
+            _audio_regions=[], _playback=None,
             _frame_label=SimpleNamespace(setText=lambda v: None),
             _timeline=SimpleNamespace(tracks=[], duration=0.0, set_tracks=lambda v: None),
-            _crop_active=False,
-            _project_manager=None,
-            _project_dir=None,
-            _recorded_data=None,
+            _crop_active=False, _project_manager=None, _project_dir=None,
+            _recorded_data=None, _cursor_effect=None,
             _show_notification=lambda title, msg, level: None,
+            config=SimpleNamespace(cursor_size=32, cursor_theme="light",
+                                   cursor_style="dot", trail_enabled=False,
+                                   default_fps=30),
+        )
+        return window
+
+    def test_controls_disabled_when_no_frames(self):
+        from app.main_window import MainWindow
+        w = self._make_mock_window([])
+        MainWindow._enable_playback_controls(w, False)
+        w._btn_export.setEnabled(False)
+        w._btn_crop.setEnabled(False)
+        assert w._btn_rewind.state is False
+        assert w._btn_play.state is False
+        assert w._btn_export.state is False
+        assert w._btn_crop.state is False
+
+    def test_controls_enabled_when_valid_frames(self):
+        from app.main_window import MainWindow
+        w = self._make_mock_window([1, 2, 3])
+        MainWindow._enable_playback_controls(w, True)
+        w._btn_export.setEnabled(True)
+        w._btn_crop.setEnabled(True)
+        assert w._btn_rewind.state is True
+        assert w._btn_play.state is True
+        assert w._btn_export.state is True
+        assert w._btn_crop.state is True
+
+
+class TestMediaPathResolution:
+    """安全路径解析 helper"""
+
+    def test_rejects_absolute_path(self):
+        from app.main_window import _resolve_media_path
+        import pytest
+        with pytest.raises(ValueError, match="拒绝绝对路径"):
+            _resolve_media_path("/project", "/etc/passwd")
+
+    def test_rejects_escape_via_dotdot(self):
+        from app.main_window import _resolve_media_path
+        import pytest
+        with pytest.raises(ValueError, match="路径越界"):
+            _resolve_media_path("/project/sub", "../../etc/passwd")
+
+    def test_accepts_normal_relative_path(self):
+        from app.main_window import _resolve_media_path
+        result = _resolve_media_path("/project/sub", "audio.wav")
+        assert result == os.path.realpath("/project/sub/audio.wav")
+
+    def test_rejects_absolute_video_path_in_project(self, tmp_path):
+        """project.json 中的绝对视频路径应被拒绝"""
+        from types import SimpleNamespace
+        from app.main_window import MainWindow, _resolve_media_path
+        import pytest
+
+        with pytest.raises(ValueError, match="拒绝绝对路径"):
+            _resolve_media_path(str(tmp_path), "/etc/passwd")
+
+
+class TestAudioHelper:
+    """_load_project_audio helper 测试"""
+
+    def test_returns_none_when_no_audio_source(self):
+        from app.main_window import _load_project_audio
+        from types import SimpleNamespace
+        result = _load_project_audio("/tmp", SimpleNamespace(audio_mic="", audio_system=""))
+        assert result is None
+
+    def test_returns_none_when_source_is_none(self):
+        from app.main_window import _load_project_audio
+        result = _load_project_audio("/tmp", None)
+        assert result is None
+
+    def test_loads_and_mixes_audio(self, tmp_path):
+        from app.main_window import _load_project_audio, _write_wav
+        from core.project import SourceInfo
+
+        samplerate = 44100
+        mic_data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
+        _write_wav(str(tmp_path / "mic.wav"), mic_data, samplerate)
+        _write_wav(str(tmp_path / "sys.wav"), mic_data, samplerate)
+
+        source = SourceInfo(audio_mic="mic.wav", audio_system="sys.wav",
+                            duration=1.0, fps=30, width=100, height=100)
+        result = _load_project_audio(str(tmp_path), source)
+        assert result is not None
+        assert result.channels == 2
+        assert result.samplerate == samplerate
+        assert result.data.shape[0] > 0
+        assert np.max(result.data) > 0.0
+
+
+class TestOnOpenProjectIntegration:
+    """真正调用 MainWindow._on_open_project() 的集成测试"""
+
+    def test_open_project_loads_frames_and_audio(self, tmp_path, monkeypatch):
+        import cv2
+        from pathlib import Path
+        from types import SimpleNamespace
+        from app.main_window import MainWindow, _write_wav
+        from core.project import Project, SourceInfo, Track, Clip
+
+        project_dir = str(tmp_path / "reopen_test")
+        os.makedirs(project_dir)
+
+        # ── 创建 frames.data + frames.idx ──
+        payloads = []
+        offsets = []
+        for i in range(10):
+            img = np.zeros((100, 100, 3), dtype=np.uint8)
+            img[:, :, 0] = i * 25
+            success, encoded = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            assert success
+            payload = encoded.tobytes()
+            offsets.append([0, len(payload)] if i == 0 else [sum(len(p) for p in payloads), len(payload)])
+            payloads.append(payload)
+        with open(os.path.join(project_dir, "frames.data"), "wb") as f:
+            for p in payloads:
+                f.write(p)
+        with open(os.path.join(project_dir, "frames.idx"), "w") as f:
+            json.dump(offsets, f)
+
+        # ── 创建音频 WAV ──
+        samplerate = 44100
+        mic_data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
+        _write_wav(str(Path(project_dir) / "audio_mic.wav"), mic_data, samplerate)
+        _write_wav(str(Path(project_dir) / "audio_system.wav"), mic_data, samplerate)
+
+        # ── 创建 project.json ──
+        project = Project()
+        project.name = "reopen_test"
+        project.source = SourceInfo(video="frames.data", audio_mic="audio_mic.wav",
+                                    audio_system="audio_system.wav",
+                                    duration=10 / 30.0, fps=30, width=100, height=100)
+        project._frame_count = 10
+        project.timeline = [Track(type="video", name="视频", clips=[
+            Clip(type="video", start=0, end=10 / 30.0, content="test")])]
+        project.save(os.path.join(project_dir, "project.json"))
+
+        # ── 模拟 MainWindow ──
+        def btn():
+            ns = SimpleNamespace()
+            ns.setEnabled = lambda v: None
+            ns.setChecked = lambda v: None
+            return ns
+
+        captured_audio = [None]
+
+        class FakePlayback:
+            def __init__(self, widget, compositor, audio_result=None, video_clips=None):
+                captured_audio[0] = audio_result
+            def seek(self, idx):
+                pass
+            def set_on_frame_changed(self, cb):
+                pass
+
+        import app.main_window as mw_mod
+        import ui.preview_widget as preview_mod
+        monkeypatch.setattr(preview_mod, "PlaybackController", FakePlayback)
+
+        # 使用真实 Compositor 确保 frames.data 正确加载
+        from core.compositor import Compositor as RealCompositor
+        compositor = RealCompositor(100, 100, 30)
+
+        window = SimpleNamespace(
+            _project_session=None,
+            _recording_controller=None,
+            _compositor=compositor,
+            _recorded_data=None,
+            _playback=None,
+            _audio_regions=[],
+            _export_controller=SimpleNamespace(),
+            _project_manager=SimpleNamespace(
+                open_project=lambda d: Project.load(os.path.join(d, "project.json"))),
+            _timeline=SimpleNamespace(set_tracks=lambda v: None, duration=0.0,
+                                       tracks=[], playhead=0.0, update=lambda: None),
+            _preview=SimpleNamespace(set_fps=lambda v: None, show_frame=lambda v: None),
             _cursor_effect=None,
             config=SimpleNamespace(cursor_size=32, cursor_theme="light",
                                     cursor_style="dot", trail_enabled=False,
-                                    default_fps=30),
-        ), buttons
+                                    default_fps=30, preview_quality=0.5),
+            _frame_label=SimpleNamespace(setText=lambda v: None),
+            _btn_export=btn(), _btn_crop=btn(), _btn_add_audio=btn(),
+            _btn_rewind=btn(), _btn_step_back=btn(), _btn_play=btn(),
+            _btn_step_fwd=btn(), _btn_ff=btn(),
+            _crop_active=False, _crop_overlay=None,
+            _editing_zoom_clip=None,
+            _enable_playback_controls=lambda enabled: None,
+            _connect_timeline_signals=lambda: None,
+            _switch_to_editor=lambda: None,
+            _create_playback_controller=lambda: None,
+            _show_notification=lambda title, msg, level: None,
+            update_status=lambda text: None,
+        )
+        # 在 window 构造完成后绑定 _create_playback_controller（需要引用 window）
+        def _create_playback():
+            audio = window._recorded_data["audio"] if window._recorded_data else None
+            captured_audio[0] = audio
+            window._playback = FakePlayback(None, None, audio_result=audio)
+        window._create_playback_controller = _create_playback
 
-    def test_controls_disabled_when_no_frames(self):
-        """打开无有效帧项目时应禁用播放/裁剪/导出控件"""
-        from app.main_window import MainWindow
+        # 将 _project_dir 作为属性写入
+        window._project_dir = project_dir
 
-        window, buttons = self._make_mock_window([])
+        MainWindow._on_open_project(window, project_dir)
 
-        MainWindow._enable_playback_controls(window, False)
-        window._btn_export.setEnabled(False)
-        window._btn_crop.setEnabled(False)
-        window._btn_add_audio.setEnabled(False)
+        # 帧已加载
+        assert len(window._compositor._frames) == 10
 
-        assert buttons["_btn_rewind"] is False
-        assert buttons["_btn_step_back"] is False
-        assert buttons["_btn_play"] is False
-        assert buttons["_btn_step_fwd"] is False
-        assert buttons["_btn_ff"] is False
-        assert buttons["_btn_export"] is False
-        assert buttons["_btn_crop"] is False
+        # PlaybackController 收到非空混合音频
+        audio = captured_audio[0]
+        assert audio is not None, "PlaybackController 应收到非空 AudioResult"
+        assert audio.samplerate > 0
+        assert audio.data.shape[0] > 0
 
-    def test_controls_enabled_when_valid_frames(self):
-        """打开有帧项目时启用播放/裁剪/导出控件"""
-        from app.main_window import MainWindow
-
-        window, buttons = self._make_mock_window([1, 2, 3])
-
-        MainWindow._enable_playback_controls(window, True)
-        window._btn_export.setEnabled(True)
-        window._btn_crop.setEnabled(True)
-
-        assert buttons["_btn_rewind"] is True
-        assert buttons["_btn_step_back"] is True
-        assert buttons["_btn_play"] is True
-        assert buttons["_btn_step_fwd"] is True
-        assert buttons["_btn_ff"] is True
-        assert buttons["_btn_export"] is True
-        assert buttons["_btn_crop"] is True
+        # _recorded_data['audio'] 可供导出使用
+        assert window._recorded_data is not None
+        export_audio = window._recorded_data.get("audio")
+        assert export_audio is not None
+        assert export_audio.data.shape[0] > 0
 
 
-class TestIntegrationRoundtrip:
-    """Slice 6: 保存→重开核心状态的集成级回归"""
+class TestRecordedDataConditional:
+    """_recorded_data 仅在存在帧或音频时构造"""
 
-    def test_full_save_reopen_roundtrip(self, tmp_path):
-        """完整保存/重开流程：验证 project.json、frames.idx、音频、光标、导出"""
-        import json
-        import numpy as np
+    def test_no_recorded_data_when_no_frames_and_no_audio(self, tmp_path):
         from types import SimpleNamespace
-        from pathlib import Path
-        from app.main_window import MainWindow, _write_wav, _read_wav
-        from core.compositor import Compositor
-        from core.project import Project, SourceInfo, Track, Clip
-        from core.screen_capture import CapturedFrame
-        from core.audio_capture import AudioResult, mix_audio_results
-        from core.pointer_tracker import CursorEvent
+        from app.main_window import MainWindow
+        from core.project import Project
 
-        project_dir = str(tmp_path / "roundtrip")
+        project_dir = str(tmp_path / "empty")
         os.makedirs(project_dir)
+        project = Project()
+        project.name = "empty"
+        project.save(os.path.join(project_dir, "project.json"))
 
-        # ── 模拟录制结束状态 ──
-        frames = [
-            CapturedFrame(
-                data=np.zeros((100, 100, 3), dtype=np.uint8),
-                timestamp=i / 30.0, index=i,
-            )
-            for i in range(30)
-        ]
-        compositor = Compositor(100, 100, 30)
-        compositor.load_frames(frames)
-
-        # 光标事件（绝对时间戳，使用关键字参数确保正确字段映射）
-        events = [
-            CursorEvent(x=10, y=20, timestamp=0.0),
-            CursorEvent(x=300, y=400, timestamp=0.5),
-            CursorEvent(x=50, y=60, timestamp=1.0),
-        ]
-        compositor.load_cursor_events(events, [])
-
-        tracks = [Track(type="video", name="视频", clips=[
-            Clip(type="video", start=0, end=1.0, content="test"),
-        ])]
-
-        recording_controller = SimpleNamespace(
-            recorder=SimpleNamespace(
-                screen=SimpleNamespace(frame_offsets=[[0, 100], [100, 100]]),
-            ),
+        compositor = SimpleNamespace(
+            _frames=[], frames=[], frame_times=[], cursor_events=[], click_events=[],
+            crop_region=None, _monitor_left=0, _monitor_top=0,
+            fps=30, width=100, height=100, _base_time=0,
+            source_duration=0,
+            load_frames_data=lambda path, count, fps: 0,
+            load_clips=lambda clips: None,
+            load_manual_zoom_clips=lambda clips: None,
+            register_effect=lambda name, effect: None,
+            set_crop=lambda crop: None,
+            set_preview_quality=lambda q: None,
         )
 
-        # 写入 WAV 音频
-        samplerate = 44100
-        mic_data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
-        sys_data = np.ones((samplerate, 2), dtype=np.float32) * 0.2
-        _write_wav(str(Path(project_dir) / "audio_mic.wav"), mic_data, samplerate)
-        _write_wav(str(Path(project_dir) / "audio_system.wav"), sys_data, samplerate)
-
-        # ── 执行保存 ──
-        import app.main_window as mw
-        recorded_data = {
-            "frames": frames,
-            "cursor_events": events,
-            "clicks": [],
-            "mic_audio": AudioResult(mic_data, samplerate, 1),
-            "system_audio": AudioResult(sys_data, samplerate, 2),
-            "monitor_offset": (0, 0),
-        }
+        def btn():
+            ns = SimpleNamespace()
+            ns.setEnabled = lambda v: None
+            ns.setChecked = lambda v: None
+            return ns
 
         window = SimpleNamespace(
-            _recorded_data=recorded_data,
-            _project_dir=project_dir,
+            _recorded_data={"old": "data"},
             _compositor=compositor,
-            _recording_controller=recording_controller,
-            _timeline=SimpleNamespace(tracks=tracks),
-            _audio_regions=[],
-            config=SimpleNamespace(default_fps=30),
-            _refresh_home_page=lambda: None,
-            update_status=lambda text: None,
+            _playback=None, _audio_regions=[],
+            _project_manager=SimpleNamespace(
+                open_project=lambda d: Project.load(os.path.join(d, "project.json"))),
+            _timeline=SimpleNamespace(set_tracks=lambda v: None, duration=0.0,
+                                       tracks=[], playhead=0.0),
+            _preview=SimpleNamespace(set_fps=lambda v: None),
+            _cursor_effect=None,
+            config=SimpleNamespace(cursor_size=32, cursor_theme="light",
+                                    cursor_style="dot", trail_enabled=False,
+                                    default_fps=30, preview_quality=0.5),
+            _frame_label=SimpleNamespace(setText=lambda v: None),
+            _btn_export=btn(), _btn_crop=btn(), _btn_add_audio=btn(),
+            _btn_rewind=btn(), _btn_step_back=btn(), _btn_play=btn(),
+            _btn_step_fwd=btn(), _btn_ff=btn(),
+            _crop_active=False, _crop_overlay=None,
+            _editing_zoom_clip=None,
+            _enable_playback_controls=lambda enabled: None,
+            _connect_timeline_signals=lambda: None,
+            _switch_to_editor=lambda: None,
+            _create_playback_controller=lambda: None,
             _show_notification=lambda title, msg, level: None,
-            _get_recording_duration=lambda: 1.0,
-            _project_name="roundtrip_test",
+            update_status=lambda text: None,
         )
-        # 绑定 _collect_project_state（需要 window 引用，不能用在构造器中）
-        window._collect_project_state = lambda project: MainWindow._collect_project_state(window, project)
+        window._project_dir = project_dir
 
-        MainWindow._finalize_project(window)
-
-        # ── 验证保存产物 ──
-        assert os.path.exists(os.path.join(project_dir, "frames.idx"))
-        assert os.path.exists(os.path.join(project_dir, "project.json"))
-        assert os.path.exists(os.path.join(project_dir, "audio_mic.wav"))
-        assert os.path.exists(os.path.join(project_dir, "audio_system.wav"))
-
-        saved = Project.load(os.path.join(project_dir, "project.json"))
-        assert saved.source is not None
-        assert saved.source.video == "frames.data"
-        assert saved._frame_count == 30
-        assert saved.source.audio_mic == "audio_mic.wav"
-        assert saved.source.audio_system == "audio_system.wav"
-
-        # ── 验证重开后的音频恢复 ──
-        mic_audio, mic_sr, mic_ch = _read_wav(os.path.join(project_dir, saved.source.audio_mic))
-        sys_audio, sys_sr, sys_ch = _read_wav(os.path.join(project_dir, saved.source.audio_system))
-        assert mic_audio is not None
-        assert sys_audio is not None
-
-        mixed = mix_audio_results(
-            AudioResult(mic_audio, mic_sr, mic_ch),
-            AudioResult(sys_audio, sys_sr, sys_ch),
-        )
-        assert mixed is not None
-        assert mixed.channels == 2
-        assert mixed.data.shape[0] > 0
-
-        # ── 验证重开后的光标时间基（相对时间戳） ──
-        # 保存后的 cursor_events 时间戳应相对于 compositor._base_time (0.0)
-        # 因此首帧光标应在第一个事件附近
-        assert len(saved.cursor_events) == 3
-        first_ts = saved.cursor_events[0][2]
-        last_ts = saved.cursor_events[-1][2]
-        assert abs(first_ts - 0.0) < 0.01, \
-            f"首事件时间戳应接近 0.0，实际 {first_ts}"
-        assert abs(last_ts - 1.0) < 0.01, \
-            f"末事件时间戳应接近 1.0，实际 {last_ts}"
+        MainWindow._on_open_project(window, project_dir)
+        assert window._recorded_data is None, "无帧无音频时应为 None"

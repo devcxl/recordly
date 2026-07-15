@@ -68,6 +68,41 @@ def _read_wav(path: str):
         return samples, samplerate, channels
 
 
+def _resolve_media_path(project_dir: str, rel_path: str) -> str:
+    """安全解析项目内媒体路径，拒绝绝对路径和 '..' 越界。"""
+    if os.path.isabs(rel_path):
+        raise ValueError(f"拒绝绝对路径: {rel_path}")
+    resolved = os.path.realpath(os.path.join(project_dir, rel_path))
+    project_real = os.path.realpath(project_dir)
+    if not resolved.startswith(project_real + os.sep) and resolved != project_real:
+        raise ValueError(f"路径越界: {rel_path}")
+    return resolved
+
+
+def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
+    """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
+    from core.audio_capture import AudioResult, mix_audio_results
+
+    mic_audio = None
+    sys_audio = None
+    if source and source.audio_mic:
+        mic_path = _resolve_media_path(project_dir, source.audio_mic)
+        result = _read_wav(mic_path)
+        if result is not None:
+            data, sr, ch = result
+            mic_audio = AudioResult(data, sr, ch)
+    if source and source.audio_system:
+        sys_path = _resolve_media_path(project_dir, source.audio_system)
+        result = _read_wav(sys_path)
+        if result is not None:
+            data, sr, ch = result
+            sys_audio = AudioResult(data, sr, ch)
+
+    if mic_audio is None and sys_audio is None:
+        return None
+    return mix_audio_results(mic_audio, sys_audio)
+
+
 class MainWindow(QMainWindow):
     """主窗口，管理录制/预览/导出的生命周期"""
 
@@ -1193,55 +1228,48 @@ class MainWindow(QMainWindow):
         if project.source and project.source.video:
             video_path = project.source.video
             if not os.path.isabs(video_path):
-                video_path = str(Path(path) / video_path)
-            try:
-                if video_path.endswith(".frames.data") or project.source.video == "frames.data":
-                    num_frames = comp.load_frames_data(
-                        video_path, getattr(project, '_frame_count', 0), project.source.fps)
-                else:
-                    num_frames = comp.load_video(video_path, project.source.fps)
-                if num_frames > 0:
-                    # 注册光标效果
-                    from core.cursor_effects import CursorEffect
-                    self._cursor_effect = CursorEffect(
-                        cursor_size=self.config.cursor_size,
-                        cursor_theme=self.config.cursor_theme,
-                        cursor_style=self.config.cursor_style,
-                    )
-                    comp.register_effect("cursor", self._cursor_effect)
-                    if not self.config.trail_enabled:
-                        self._cursor_effect.enabled["trail"] = False
-            except Exception as exc:
-                self._show_notification("视频解码失败", str(exc), "warning")
+                try:
+                    video_path = _resolve_media_path(project_dir, video_path)
+                except ValueError:
+                    self._show_notification(
+                        "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
+                    video_path = ""
+            else:
+                self._show_notification(
+                    "视频路径不安全", f"拒绝绝对路径: {video_path}", "error")
+                video_path = ""
+            if video_path:
+                try:
+                    if video_path.endswith(".frames.data") or project.source.video == "frames.data":
+                        num_frames = comp.load_frames_data(
+                            video_path, getattr(project, '_frame_count', 0), project.source.fps)
+                    else:
+                        num_frames = comp.load_video(video_path, project.source.fps)
+                    if num_frames > 0:
+                        # 注册光标效果
+                        from core.cursor_effects import CursorEffect
+                        self._cursor_effect = CursorEffect(
+                            cursor_size=self.config.cursor_size,
+                            cursor_theme=self.config.cursor_theme,
+                            cursor_style=self.config.cursor_style,
+                        )
+                        comp.register_effect("cursor", self._cursor_effect)
+                        if not self.config.trail_enabled:
+                            self._cursor_effect.enabled["trail"] = False
+                except Exception as exc:
+                    self._show_notification("视频解码失败", str(exc), "warning")
 
         # 恢复音频（从 project.json 声明的 WAV 文件读取）
-        if project.source:
-            from core.audio_capture import AudioResult, mix_audio_results
-            mic_data = None
-            sys_data = None
-            mic_sr = 44100
-            sys_sr = 44100
-            mic_ch = 1
-            sys_ch = 2
-            if project.source.audio_mic:
-                result = _read_wav(os.path.join(project_dir, project.source.audio_mic))
-                if result is not None:
-                    mic_data, mic_sr, mic_ch = result
-            if project.source.audio_system:
-                result = _read_wav(os.path.join(project_dir, project.source.audio_system))
-                if result is not None:
-                    sys_data, sys_sr, sys_ch = result
-            mixed = mix_audio_results(
-                AudioResult(mic_data, mic_sr, mic_ch) if mic_data is not None else None,
-                AudioResult(sys_data, sys_sr, sys_ch) if sys_data is not None else None,
-            )
+        mixed_audio = _load_project_audio(project_dir, project.source)
+
+        # 仅在存在帧或音频时构造 _recorded_data
+        has_content = bool(comp._frames) or mixed_audio is not None
+        if has_content:
             self._recorded_data = {
-                "audio": mixed,
+                "audio": mixed_audio,
                 "frames": comp._frames,
                 "cursor_events": comp._cursor_events,
                 "clicks": comp._click_events,
-                "mic_audio": AudioResult(mic_data, mic_sr, mic_ch) if mic_data is not None else None,
-                "system_audio": AudioResult(sys_data, sys_sr, sys_ch) if sys_data is not None else None,
             }
 
         # 加载时间线并同步到 compositor
