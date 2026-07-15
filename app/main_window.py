@@ -295,21 +295,6 @@ class MainWindow(QMainWindow):
         self._toolbar.setFloatable(False)
         self.addToolBar(self._toolbar)
 
-        # 录制
-        self._btn_record = QPushButton("● 录制")
-        self._btn_record.clicked.connect(self._toggle_record)
-        # 录制按钮已从工具栏移除，保留对象避免 AttributeError
-
-        self._btn_stop_rec = QPushButton("■ 停止")
-        self._btn_stop_rec.clicked.connect(self._toggle_record)
-        self._btn_stop_rec.setEnabled(False)
-        self._btn_stop_rec.setStyleSheet(
-            "QPushButton { background: #d32f2f; }"
-            "QPushButton:hover { background: #e53935; }"
-            "QPushButton:disabled { background: #3a3a3a; color: #666; }"
-        )
-        # 停止按钮已从工具栏移除，保留对象避免 AttributeError
-
         # 播放控制
         self._btn_rewind = QToolButton()
         self._btn_rewind.setText("⏪")
@@ -660,7 +645,7 @@ class MainWindow(QMainWindow):
             project._frame_count = len(frames)
             # 保存帧偏移索引（供重新打开时定位每帧）
             import json
-            offsets = self._recording_controller.recorder.screen._store._offsets
+            offsets = self.recording_controller.recorder.screen.frame_offsets
             idx_path = str(Path(self._project_dir) / "frames.idx")
             with open(idx_path, "w") as f:
                 json.dump([[o, l] for o, l in offsets], f)
@@ -760,8 +745,6 @@ class MainWindow(QMainWindow):
 
     def _update_ui_state(self):
         rec = self._is_recording
-        self._btn_record.setEnabled(not rec)
-        self._btn_stop_rec.setEnabled(rec)
         self._btn_export.setEnabled(not rec)
         self._tray_record_act.setEnabled(not rec)
         self._tray_stop_act.setEnabled(rec)
@@ -1139,9 +1122,9 @@ class MainWindow(QMainWindow):
         return 0.0
 
     def _update_audio_timeline(self):
-        self._timeline._tracks = [
-            t for t in self._timeline._tracks if t.type != "audio_extra"
-        ]
+        self._timeline.set_tracks([
+            t for t in self._timeline.tracks if t.type != "audio_extra"
+        ])
 
         if self._audio_regions:
             clips = []
@@ -1161,7 +1144,7 @@ class MainWindow(QMainWindow):
                     volume=r.volume,
                 ))
             track = Track(type="audio_extra", name="额外音频", clips=clips)
-            self._timeline._tracks.append(track)
+            self._timeline.tracks.append(track)
 
         self._timeline._update_height()
         self._timeline.update()
