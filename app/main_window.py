@@ -406,16 +406,38 @@ class MainWindow(QMainWindow):
     # ── 首页交互 ──────────────────────────────────────────
 
     def _on_home_record(self):
-        """首页点击'开始录制' → 确认弹窗 → 最小化 → 开始录制"""
+        """首页点击'开始录制' → 确认弹窗 → 创建项目目录 → 最小化 → 开始录制"""
         reply = QMessageBox.question(
             self, "开始录制",
             "将开始屏幕录制。录制时窗口会最小化到系统托盘，"
             "你可以通过托盘图标停止录制。\n\n确定开始？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
         )
-        if reply == QMessageBox.Yes:
-            self.showMinimized()
-            QTimer.singleShot(500, self._toggle_record)
+        if reply != QMessageBox.Yes:
+            return
+
+        # 立即创建项目目录
+        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
+        os.makedirs(project_dir, exist_ok=True)
+        self._current_project_path = project_dir
+
+        # 保存占位 project.json
+        project = Project()
+        project.name = name
+        project.save(str(Path(project_dir) / "project.json"))
+
+        self._project_name = name
+        self.showMinimized()
+        QTimer.singleShot(500, self._start_recording_from_home)
+
+    def _start_recording_from_home(self):
+        """从首页触发的录制（帧数据流式写入项目目录）"""
+        self._recorder.start_recording(self._current_project_path)
+        self._is_recording = True
+        self.recording_started.emit()
+        self._update_ui_state()
 
     def _on_home_open_project(self):
         """首页点击'打开项目' → 文件选择器"""
@@ -491,16 +513,13 @@ class MainWindow(QMainWindow):
         self.raise_()
 
     def _auto_create_project(self):
-        """录制完成后创建项目目录 → 导出到项目目录 → 保存"""
+        """录制完成后导出 source.mp4 到已创建的项目目录"""
         if not self._recorded_data or not self._recorded_data.get("frames"):
             return
+        if not self._current_project_path:
+            return
 
-        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        project_dir = Path(self.config.projects_dir) / f"{timestamp}_{name}"
-        project_dir.mkdir(parents=True, exist_ok=True)
-
-        output_path = str(project_dir / "source.mp4")
+        output_path = str(Path(self._current_project_path) / "source.mp4")
         settings = ExportSettings(
             output_path=output_path,
             format="mp4",
@@ -519,13 +538,13 @@ class MainWindow(QMainWindow):
 
         thread.started.connect(worker.run)
         worker.finished.connect(lambda result: self._on_auto_export_finished(
-            result, name, str(project_dir), worker, thread))
+            result, worker, thread))
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.start()
 
-    def _on_auto_export_finished(self, result, name, project_dir, worker, thread):
+    def _on_auto_export_finished(self, result, worker, thread):
         """导出完成后生成缩略图 → 保存 project.json"""
         if not result.success:
             self._show_notification(
@@ -536,16 +555,18 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            project_dir = self._current_project_path
             # 生成缩略图
             thumb_path = str(Path(project_dir) / "thumbnail.png")
             try:
                 self._project_manager.generate_thumbnail(result.path, thumb_path)
             except Exception:
-                pass  # 缩略图非必需
+                pass
 
             # 保存 project.json
             project = Project()
-            project.name = name
+            project.name = getattr(self, '_project_name',
+                                   f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
             project.duration = self._get_recording_duration()
             project.thumbnail_path = "thumbnail.png"
             project.source = SourceInfo(
@@ -556,11 +577,9 @@ class MainWindow(QMainWindow):
                 height=self._compositor.height,
             )
             self._collect_project_state(project)
-            self._current_project_path = project_dir
             project.save(str(Path(project_dir) / "project.json"))
             self._refresh_home_page()
 
-            # 切换到编辑器
             self.update_status("● 录制完成 — 已创建项目")
         except Exception as exc:
             self._show_notification("创建项目失败", str(exc), "error")

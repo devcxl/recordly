@@ -1,5 +1,6 @@
 """录制控制器 — 协调各录制引擎"""
 
+import os
 import time
 
 from core.screen_capture import ScreenCapture
@@ -37,14 +38,16 @@ class Recorder:
                 target_fps=self.target_fps,
             )
 
-    def start_recording(self):
+    def start_recording(self, project_dir: str | None = None):
         if self._recording:
             return
-        if self._screen_session_started:
-            self.screen = ScreenCapture(
-                monitor_id=self.screen.monitor_id,
-                target_fps=self.target_fps,
-            )
+        # 有项目目录则帧数据流式写入项目文件夹，否则用临时文件
+        store_path = os.path.join(project_dir, "frames.data") if project_dir else None
+        self.screen = ScreenCapture(
+            monitor_id=self.screen.monitor_id,
+            target_fps=self.target_fps,
+            store_path=store_path,
+        )
         self._recording = True
         self._perf_start = time.perf_counter()
         self._wall_start = time.time()

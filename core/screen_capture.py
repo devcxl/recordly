@@ -32,11 +32,17 @@ class CapturedFrame:
 class _CompressedFrameStore:
     """单文件 JPEG 帧仓库，按需解码并缓存最近访问的帧。"""
 
-    def __init__(self, jpeg_quality: int = 95, cache_size: int = 12):
-        handle = tempfile.NamedTemporaryFile(
-            prefix="recordly-", suffix=".frames", delete=False)
-        self.path = handle.name
-        self._file = handle
+    def __init__(self, jpeg_quality: int = 95, cache_size: int = 12,
+                 store_path: str | None = None):
+        if store_path:
+            self.path = store_path
+            os.makedirs(os.path.dirname(store_path), exist_ok=True)
+            self._file = open(store_path, "wb")
+        else:
+            handle = tempfile.NamedTemporaryFile(
+                prefix="recordly-", suffix=".frames", delete=False)
+            self.path = handle.name
+            self._file = handle
         self._quality = jpeg_quality
         self._cache_size = cache_size
         self._offsets: list[tuple[int, int]] = []
@@ -100,11 +106,13 @@ class _CompressedFrameStore:
 class ScreenCapture(Thread):
     """基于 mss 的跨平台屏幕录制"""
 
-    def __init__(self, monitor_id: int = 1, target_fps: int = 30):
+    def __init__(self, monitor_id: int = 1, target_fps: int = 30,
+                 store_path: str | None = None):
         super().__init__(daemon=True)
         self.monitor_id = monitor_id
         self.interval = 1.0 / target_fps
         self._quit = Event()
+        self._store_path = store_path
         self._store: _CompressedFrameStore | None = None
         self._timestamps: list[float] = []
         self._indices: list[int] = []
@@ -170,7 +178,7 @@ class ScreenCapture(Thread):
     def _store_frame(self, data: np.ndarray,
                      timestamp: float, index: int):
         if self._store is None:
-            self._store = _CompressedFrameStore()
+            self._store = _CompressedFrameStore(store_path=self._store_path)
         self._store.append(data)
         self._timestamps.append(timestamp)
         self._indices.append(index)
