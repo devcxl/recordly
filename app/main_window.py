@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
         self._recorded_data = None
         self._audio_regions = []
         self._export_controller = ExportController(self)
+        self._progress = None
         self._playback = None
         self._editing_zoom_clip = None
         self._crop_overlay = None
@@ -141,6 +142,8 @@ class MainWindow(QMainWindow):
 
         self.recording_started.connect(self._on_recording_started)
         self.recording_stopped.connect(self._on_recording_stopped)
+        self._export_controller.export_progress.connect(
+            self._on_export_progress)
         self._export_controller.export_finished.connect(self._on_export_finished)
 
     @property
@@ -1017,6 +1020,8 @@ class MainWindow(QMainWindow):
     # ── 导出 ──────────────────────────────────────────────
 
     def _on_export(self):
+        if self._export_controller.is_exporting:
+            return
         if not self._recorded_data and not self._compositor.frames:
             self._show_notification(
                 "无法导出", "请先录制一段视频或打开一个项目", "warning",
@@ -1062,6 +1067,7 @@ class MainWindow(QMainWindow):
             use_gpu=dialog.use_gpu,
         )
         self._btn_export.setEnabled(False)
+        self._menu_export.setEnabled(False)
 
         recorded = self._recorded_data or {}
         audio = recorded.get("audio")
@@ -1076,16 +1082,32 @@ class MainWindow(QMainWindow):
         self._progress.setAutoClose(True)
         self._progress.setAutoReset(True)
         self._progress.canceled.connect(self._cancel_export)
-        self._export_controller.export_progress.connect(self._progress.setValue)
 
-        self._export_controller.start_export(self._compositor, audio_data, settings)
+        try:
+            self._export_controller.start_export(
+                self._compositor, audio_data, settings)
+        except Exception as exc:
+            self._progress.close()
+            self._progress.deleteLater()
+            self._progress = None
+            self._btn_export.setEnabled(True)
+            self._menu_export.setEnabled(True)
+            self._show_notification("导出失败", str(exc), "error")
+
+    def _on_export_progress(self, value: int):
+        if self._progress is not None:
+            self._progress.setValue(value)
 
     def _cancel_export(self):
         self._export_controller.cancel()
 
     def _on_export_finished(self, result):
-        self._progress.close()
+        if self._progress is not None:
+            self._progress.close()
+            self._progress.deleteLater()
+            self._progress = None
         self._btn_export.setEnabled(True)
+        self._menu_export.setEnabled(True)
 
         if result.success:
             self.update_status("● 导出完成")

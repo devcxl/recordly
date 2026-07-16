@@ -312,6 +312,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
     captured = {}
     export_controller = SimpleNamespace(
+        is_exporting=False,
         export_progress=FakeSignal(),
         start_export=lambda compositor, audio, settings: captured.update(
             compositor=compositor, audio=audio, settings=settings),
@@ -324,6 +325,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
         _crop_active=False,
         _audio_regions=[],
         _btn_export=SimpleNamespace(setEnabled=lambda _value: None),
+        _menu_export=SimpleNamespace(setEnabled=lambda _value: None),
         _export_controller=export_controller,
         config=SimpleNamespace(
             recordings_dir="/tmp", default_bitrate="20M"),
@@ -337,6 +339,96 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
     assert captured["settings"].fps == 24
     assert captured["settings"].bitrate == "8M"
+
+
+def test_export_entry_is_not_reentrant(monkeypatch):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    progress_windows = []
+    entry_states = []
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    class FakeDialog:
+        Accepted = 1
+        output_path = "/tmp/out.mp4"
+        export_format = "mp4"
+        is_custom_resolution = False
+        resolution_max_height = 1080
+        aspect_ratio = "native"
+        quality = 1.0
+        gif_fps_value = 15
+        mp4_fps_value = 30
+        bitrate_value = "8M"
+        gif_loop_value = True
+        use_gpu = False
+
+        def __init__(self, *_args):
+            pass
+
+        def exec_(self):
+            return self.Accepted
+
+    class FakeProgress:
+        def __init__(self, *_args):
+            progress_windows.append(self)
+            self.canceled = FakeSignal()
+
+        def setWindowTitle(self, _value):
+            pass
+
+        def setWindowModality(self, _value):
+            pass
+
+        def setAutoClose(self, _value):
+            pass
+
+        def setAutoReset(self, _value):
+            pass
+
+        def setValue(self, _value):
+            pass
+
+    class FakeController:
+        def __init__(self):
+            self.is_exporting = False
+            self.start_calls = 0
+
+        def start_export(self, *_args):
+            self.start_calls += 1
+            self.is_exporting = True
+
+    controller = FakeController()
+    window = SimpleNamespace(
+        _recorded_data=None,
+        _compositor=SimpleNamespace(
+            frames=[object()], fps=30, crop_region=None),
+        _crop_active=False,
+        _audio_regions=[],
+        _btn_export=SimpleNamespace(
+            setEnabled=lambda value: entry_states.append(("button", value))),
+        _menu_export=SimpleNamespace(
+            setEnabled=lambda value: entry_states.append(("menu", value))),
+        _export_controller=controller,
+        config=SimpleNamespace(
+            recordings_dir="/tmp", default_bitrate="8M"),
+        _cancel_export=lambda: None,
+        _show_notification=lambda *_args: None,
+    )
+    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+
+    MainWindow._on_export(window)
+    MainWindow._on_export(window)
+
+    assert controller.start_calls == 1
+    assert len(progress_windows) == 1
+    assert ("button", False) in entry_states
+    assert ("menu", False) in entry_states
 
 
 def test_normalize_project_path_converts_file_to_directory():
