@@ -258,6 +258,7 @@ class TestMediaPathResolution:
 
     def test_notifications_on_video_path_violation(self, tmp_path):
         """_on_open_project 在视频路径越界时通知但不崩溃"""
+        from functools import partial
         from types import SimpleNamespace
         from app.main_window import MainWindow
         from core.project import Project, SourceInfo
@@ -300,6 +301,11 @@ class TestMediaPathResolution:
             _show_notification=lambda title, msg, level: notified.append(title),
             update_status=lambda text: None,
         )
+        for name in ('_clear_editor_state', '_restore_cursor_events',
+                     '_restore_video_frames', '_restore_project_audio',
+                     '_build_recorded_data_from_project', '_restore_timeline_and_playback',
+                     '_restore_editor_ui', '_register_cursor_effect'):
+            setattr(w, name, partial(getattr(MainWindow, name), w))
         w._project_dir = project_dir
         MainWindow._on_open_project(w, project_dir)
         assert any("视频" in n for n in notified), f"应有视频路径通知: {notified}"
@@ -334,6 +340,7 @@ class TestAudioHelper:
 
     def test_audio_load_failure_shows_notification(self, tmp_path):
         """_on_open_project 在音频加载失败时通知但继续打开视频"""
+        from functools import partial
         from types import SimpleNamespace
         from app.main_window import MainWindow
         from core.project import Project, SourceInfo
@@ -378,6 +385,11 @@ class TestAudioHelper:
             _show_notification=lambda title, msg, level: notified.append(title),
             update_status=lambda text: None,
         )
+        for name in ('_clear_editor_state', '_restore_cursor_events',
+                     '_restore_video_frames', '_restore_project_audio',
+                     '_build_recorded_data_from_project', '_restore_timeline_and_playback',
+                     '_restore_editor_ui', '_register_cursor_effect'):
+            setattr(w, name, partial(getattr(MainWindow, name), w))
         w._project_dir = project_dir
         MainWindow._on_open_project(w, project_dir)
         assert any("音频" in n for n in notified), f"应有音频通知: {notified}"
@@ -496,6 +508,14 @@ class TestFullRoundtrip:
             update_status=lambda text: None,
         )
         reopen_window._project_dir = project_dir
+
+        from functools import partial
+        for name in ('_clear_editor_state', '_restore_cursor_events',
+                     '_restore_video_frames', '_restore_project_audio',
+                     '_build_recorded_data_from_project', '_restore_timeline_and_playback',
+                     '_restore_editor_ui', '_register_cursor_effect',
+                     '_create_playback_controller'):
+            setattr(reopen_window, name, partial(getattr(MainWindow, name), reopen_window))
 
         def _create_playback():
             audio = reopen_window._recorded_data["audio"] if reopen_window._recorded_data else None

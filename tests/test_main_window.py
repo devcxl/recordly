@@ -319,6 +319,8 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
     )
     compositor = SimpleNamespace(
         frames=[object()], fps=60, crop_region=None)
+    from functools import partial
+
     window = SimpleNamespace(
         _recorded_data=None,
         _compositor=compositor,
@@ -332,6 +334,10 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
         _cancel_export=lambda: None,
         _show_notification=lambda *_args: None,
     )
+    window._build_export_settings = partial(
+        MainWindow._build_export_settings, window)
+    window._start_export_progress = partial(
+        MainWindow._start_export_progress, window)
     monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
     monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
 
@@ -343,6 +349,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
 def test_export_entry_is_not_reentrant(monkeypatch):
     from types import SimpleNamespace
+    from functools import partial
     import app.main_window as main_window_module
     from app.main_window import MainWindow
 
@@ -419,6 +426,10 @@ def test_export_entry_is_not_reentrant(monkeypatch):
         _cancel_export=lambda: None,
         _show_notification=lambda *_args: None,
     )
+    window._build_export_settings = partial(
+        MainWindow._build_export_settings, window)
+    window._start_export_progress = partial(
+        MainWindow._start_export_progress, window)
     monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
     monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
 

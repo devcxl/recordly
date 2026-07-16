@@ -311,38 +311,49 @@ class MainWindow(QMainWindow):
     # ── 导航 ──────────────────────────────────────────────
 
     def _setup_navigation(self):
-        # ── 菜单栏 ──
+        self._setup_menus()
+        self._setup_toolbar()
+        self._setup_central_widget()
+
+    def _setup_menus(self):
         menubar = self.menuBar()
 
-        # 文件菜单
         file_menu = menubar.addMenu("文件")
-
-        # 仅编辑器页显示
         self._menu_save = file_menu.addAction("保存", self._on_save_project)
         self._menu_export = file_menu.addAction("导出", self._on_export)
         self._menu_back_home = file_menu.addAction("返回首页", self._switch_to_home)
         file_menu.addSeparator()
-
-        # 仅首页显示
         self._menu_settings = file_menu.addAction("设置", self._on_open_settings)
-
         file_menu.addSeparator()
         file_menu.addAction("退出", QApplication.quit)
 
-        # 帮助菜单
         help_menu = menubar.addMenu("帮助")
         help_menu.addAction("反馈", lambda: QDesktopServices.openUrl(
             QUrl("https://github.com/devcxl/recordly/issues/new")))
         help_menu.addAction("关于", self._on_about)
 
-        # ── 工具栏（编辑器页显示）──
+    def _setup_toolbar(self):
         self._toolbar = QToolBar("工具")
         self._toolbar.setObjectName("mainToolbar")
         self._toolbar.setMovable(False)
         self._toolbar.setFloatable(False)
         self.addToolBar(self._toolbar)
 
-        # 播放控制
+        self._add_playback_toolbar_buttons()
+        self._toolbar.addSeparator()
+
+        self._frame_label = QLabel("0 / 0")
+        self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
+        self._toolbar.addWidget(self._frame_label)
+
+        self._time_label = QLabel("00:00.000 / 00:00.000")
+        self._time_label.setStyleSheet("color: #999; font-size: 12px;")
+        self._toolbar.addWidget(self._time_label)
+        self._toolbar.addSeparator()
+
+        self._add_toolbar_action_buttons()
+
+    def _add_playback_toolbar_buttons(self):
         self._btn_rewind = QToolButton()
         self._btn_rewind.setText("⏪")
         self._btn_rewind.setToolTip("后退 10 帧")
@@ -365,29 +376,16 @@ class MainWindow(QMainWindow):
         self._btn_step_fwd.clicked.connect(self._on_step_fwd)
         self._btn_ff.clicked.connect(self._on_fast_forward)
 
-        self._btn_rewind.setEnabled(False)
-        self._btn_step_back.setEnabled(False)
-        self._btn_play.setEnabled(False)
-        self._btn_step_fwd.setEnabled(False)
-        self._btn_ff.setEnabled(False)
+        for btn in [self._btn_rewind, self._btn_step_back,
+                     self._btn_play, self._btn_step_fwd, self._btn_ff]:
+            btn.setEnabled(False)
 
         for btn in [self._btn_rewind, self._btn_step_back, self._btn_play,
                      self._btn_step_fwd, self._btn_ff]:
             btn.setStyleSheet("font-size: 16px;")
             self._toolbar.addWidget(btn)
-        self._toolbar.addSeparator()
 
-        # 帧 / 时间
-        self._frame_label = QLabel("0 / 0")
-        self._frame_label.setStyleSheet("color: #999; font-size: 12px;")
-        self._toolbar.addWidget(self._frame_label)
-
-        self._time_label = QLabel("00:00.000 / 00:00.000")
-        self._time_label.setStyleSheet("color: #999; font-size: 12px;")
-        self._toolbar.addWidget(self._time_label)
-        self._toolbar.addSeparator()
-
-        # 导出
+    def _add_toolbar_action_buttons(self):
         self._btn_export = QToolButton()
         self._btn_export.setText("📤")
         self._btn_export.setToolTip("导出")
@@ -396,7 +394,6 @@ class MainWindow(QMainWindow):
         self._btn_export.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_export)
 
-        # 裁剪
         self._btn_crop = QToolButton()
         self._btn_crop.setText("✂")
         self._btn_crop.setToolTip("裁剪模式")
@@ -406,7 +403,6 @@ class MainWindow(QMainWindow):
         self._btn_crop.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_crop)
 
-        # 添加音频
         self._btn_add_audio = QToolButton()
         self._btn_add_audio.setText("🎵")
         self._btn_add_audio.setToolTip("添加额外音频")
@@ -415,16 +411,13 @@ class MainWindow(QMainWindow):
         self._btn_add_audio.setStyleSheet("font-size: 16px;")
         self._toolbar.addWidget(self._btn_add_audio)
 
-        # ── 堆叠页面 ──
+    def _setup_central_widget(self):
         self._stacked_widget = QStackedWidget()
-        self._stacked_widget.addWidget(self._home_page)          # index 0
-        self._stacked_widget.addWidget(self._editor_interface)   # index 1
+        self._stacked_widget.addWidget(self._home_page)
+        self._stacked_widget.addWidget(self._editor_interface)
         self.setCentralWidget(self._stacked_widget)
 
-        # 状态栏
         self.setStatusBar(QStatusBar())
-
-        # 默认首页，工具栏隐藏
         self._toolbar.setVisible(False)
         self._update_menu_visibility()
 
@@ -1041,10 +1034,23 @@ class MainWindow(QMainWindow):
                 "未选择保存路径", "请选择文件保存位置", "warning",
             )
             return
+
+        settings = self._build_export_settings(dialog)
+        self._btn_export.setEnabled(False)
+        self._menu_export.setEnabled(False)
+
+        recorded = self._recorded_data or {}
+        audio = recorded.get("audio")
+        audio_data = audio.data if audio else None
+        if audio:
+            settings.samplerate = audio.samplerate
+
+        self._start_export_progress(audio_data, settings)
+
+    def _build_export_settings(self, dialog) -> ExportSettings:
         is_gif = dialog.export_format == "gif"
         crop_region = self._compositor.crop_region if self._crop_active else None
 
-        # 分辨率设置
         if dialog.is_custom_resolution:
             export_width = dialog.custom_width
             export_height = dialog.custom_height
@@ -1054,7 +1060,7 @@ class MainWindow(QMainWindow):
             export_height = 0
             export_max_height = dialog.resolution_max_height
 
-        settings = ExportSettings(
+        return ExportSettings(
             output_path=dialog.output_path,
             format=dialog.export_format,
             aspect_ratio=dialog.aspect_ratio,
@@ -1069,16 +1075,8 @@ class MainWindow(QMainWindow):
             crop_region=crop_region,
             use_gpu=dialog.use_gpu,
         )
-        self._btn_export.setEnabled(False)
-        self._menu_export.setEnabled(False)
 
-        recorded = self._recorded_data or {}
-        audio = recorded.get("audio")
-        audio_data = audio.data if audio else None
-        if audio:
-            settings.samplerate = audio.samplerate
-
-        # 进度对话框
+    def _start_export_progress(self, audio_data, settings: ExportSettings):
         self._progress = QProgressDialog("正在导出视频...", "取消", 0, 100, self)
         self._progress.setWindowTitle("导出")
         self._progress.setWindowModality(Qt.WindowModal)
@@ -1220,10 +1218,29 @@ class MainWindow(QMainWindow):
         self.update_status("● 新建项目...")
 
     def _on_open_project(self, path: str):
-        """打开项目 → 加载到 compositor → 切换到编辑器界面"""
         project_dir = ProjectSession.normalize_path(path)
+        self._clear_editor_state()
 
-        # 清理旧状态
+        try:
+            project = self._project_manager.open_project(project_dir)
+        except Exception as exc:
+            self._show_notification("打开项目失败", str(exc), "error")
+            return
+
+        self._project_dir = project_dir
+        comp = self._compositor
+
+        self._restore_cursor_events(comp, project)
+        self._restore_video_frames(comp, project, project_dir)
+        mixed_audio = self._restore_project_audio(project_dir, project.source)
+        self._build_recorded_data_from_project(comp, mixed_audio)
+        self._restore_timeline_and_playback(comp, project)
+        self._restore_editor_ui(comp, project)
+
+        self._switch_to_editor()
+        self.update_status(f"● 已打开项目: {project.name}")
+
+    def _clear_editor_state(self):
         self._recorded_data = None
         self._playback = None
         self._compositor.frames = []
@@ -1234,17 +1251,7 @@ class MainWindow(QMainWindow):
         self._crop_active = False
         self._audio_regions = []
 
-        try:
-            project = self._project_manager.open_project(project_dir)
-        except Exception as exc:
-            self._show_notification("打开项目失败", str(exc), "error")
-            return
-
-        # 存储当前项目路径（已规范化为目录）
-        self._project_dir = project_dir
-
-        # 恢复录制原始数据（转为带属性的对象，兼容 compositor 读取）
-        comp = self._compositor
+    def _restore_cursor_events(self, comp, project):
         EventData = type("EventData", (), {})
         comp._cursor_events = []
         for c in project.cursor_events:
@@ -1258,48 +1265,52 @@ class MainWindow(QMainWindow):
             comp._monitor_left = project.monitor_offset[0]
             comp._monitor_top = project.monitor_offset[1]
 
-        # 加载视频帧
-        if project.source and project.source.video:
-            video_path = project.source.video
-            try:
-                video_path = _resolve_media_path(project_dir, video_path)
-            except ValueError:
-                self._show_notification(
-                    "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
-                video_path = ""
-            if video_path:
-                try:
-                    if video_path.endswith(".frames.data") or project.source.video == "frames.data":
-                        num_frames = comp.load_frames_data(
-                            video_path,
-                            getattr(project, '_frame_count', 0),
-                            project.source.fps,
-                            project.source.duration or project.duration,
-                        )
-                    else:
-                        num_frames = comp.load_video(video_path, project.source.fps)
-                    if num_frames > 0:
-                        # 注册光标效果
-                        from core.cursor_effects import CursorEffect
-                        self._cursor_effect = CursorEffect(
-                            cursor_size=self.config.cursor_size,
-                            cursor_theme=self.config.cursor_theme,
-                            cursor_style=self.config.cursor_style,
-                        )
-                        comp.register_effect("cursor", self._cursor_effect)
-                        if not self.config.trail_enabled:
-                            self._cursor_effect.enabled["trail"] = False
-                except Exception as exc:
-                    self._show_notification("视频解码失败", str(exc), "warning")
-
-        # 恢复音频（从 project.json 声明的 WAV 文件读取，失败时继续无音频打开）
+    def _restore_video_frames(self, comp, project, project_dir: str):
+        if not project.source or not project.source.video:
+            return
+        video_path = project.source.video
         try:
-            mixed_audio = _load_project_audio(project_dir, project.source)
+            video_path = _resolve_media_path(project_dir, video_path)
+        except ValueError:
+            self._show_notification(
+                "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
+            return
+        if not video_path:
+            return
+        try:
+            if video_path.endswith(".frames.data") or project.source.video == "frames.data":
+                num_frames = comp.load_frames_data(
+                    video_path,
+                    getattr(project, '_frame_count', 0),
+                    project.source.fps,
+                    project.source.duration or project.duration,
+                )
+            else:
+                num_frames = comp.load_video(video_path, project.source.fps)
+            if num_frames > 0:
+                self._register_cursor_effect(comp)
+        except Exception as exc:
+            self._show_notification("视频解码失败", str(exc), "warning")
+
+    def _register_cursor_effect(self, comp):
+        from core.cursor_effects import CursorEffect
+        self._cursor_effect = CursorEffect(
+            cursor_size=self.config.cursor_size,
+            cursor_theme=self.config.cursor_theme,
+            cursor_style=self.config.cursor_style,
+        )
+        comp.register_effect("cursor", self._cursor_effect)
+        if not self.config.trail_enabled:
+            self._cursor_effect.enabled["trail"] = False
+
+    def _restore_project_audio(self, project_dir: str, source):
+        try:
+            return _load_project_audio(project_dir, source)
         except Exception as exc:
             self._show_notification("音频加载失败", str(exc), "warning")
-            mixed_audio = None
+            return None
 
-        # 仅在存在帧或音频时构造 _recorded_data
+    def _build_recorded_data_from_project(self, comp, mixed_audio):
         has_content = bool(comp._frames) or mixed_audio is not None
         if has_content:
             self._recorded_data = {
@@ -1309,7 +1320,7 @@ class MainWindow(QMainWindow):
                 "clicks": comp._click_events,
             }
 
-        # 加载时间线并同步到 compositor
+    def _restore_timeline_and_playback(self, comp, project):
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
         for track in project.timeline:
@@ -1318,24 +1329,21 @@ class MainWindow(QMainWindow):
             elif track.type == "zoom":
                 comp.load_manual_zoom_clips(track.clips)
 
-        # 创建播放控制器（必须在时间线设置之后）
         if comp._frames:
             self._create_playback_controller()
             self._playback.seek(0)
             self._connect_timeline_signals()
 
-        # 加载音频区域
         self._audio_regions = project.audio_regions[:]
         if self._audio_regions:
             self._update_audio_timeline()
 
-        # 加载裁剪区域
+    def _restore_editor_ui(self, comp, project):
         if project.crop_region:
-            self._compositor.set_crop(project.crop_region)
+            comp.set_crop(project.crop_region)
             self._crop_active = True
             self._btn_crop.setChecked(True)
 
-        # 启用编辑器控件（仅当存在有效帧时）
         has_frames = len(comp._frames) > 0
         self._btn_export.setEnabled(has_frames)
         self._btn_crop.setEnabled(has_frames)
@@ -1343,10 +1351,6 @@ class MainWindow(QMainWindow):
         self._enable_playback_controls(has_frames)
         total = len(comp._frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
-
-        # 切换到编辑器界面
-        self._switch_to_editor()
-        self.update_status(f"● 已打开项目: {project.name}")
 
     def _on_project_deleted(self, path: str):
         """删除项目目录并刷新画廊"""
