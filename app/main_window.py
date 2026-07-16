@@ -16,6 +16,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
+from PyQt5.QtCore import QUrl
+from PyQt5.QtGui import QDesktopServices
 
 from app.config import AppConfig
 from core.compositor import Compositor
@@ -329,8 +331,9 @@ class MainWindow(QMainWindow):
 
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
-        help_menu.addAction("关于", lambda: QMessageBox.about(
-            self, "关于 Recordly", "Recordly v1.0\n屏幕录制与编辑工具"))
+        help_menu.addAction("反馈", lambda: QDesktopServices.openUrl(
+            QUrl("https://github.com/devcxl/recordly/issues/new")))
+        help_menu.addAction("关于", self._on_about)
 
         # ── 工具栏（编辑器页显示）──
         self._toolbar = QToolBar("工具")
@@ -1383,7 +1386,10 @@ class MainWindow(QMainWindow):
 
     def _on_about(self):
         QMessageBox.about(self, "关于 Recordly",
-            "Recordly v1.0\n\n开源演示视频录制与编辑工具\n\n基于 PyQt5 + FFmpeg")
+            "Recordly v1.0\n\n"
+            "开源演示视频录制与编辑工具\n\n"
+            "作者：devcxl\n"
+            "GitHub：https://github.com/devcxl/recordly")
 
     def _on_undo(self):
         if hasattr(self, '_timeline'):
