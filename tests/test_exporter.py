@@ -153,3 +153,249 @@ class TestExportWorker:
         # 输入保持 compositor.fps, split 前有 fps 降采样
         assert "-r 30" in command, "输入应保持 compositor.fps"
         assert "fps=fps=15" in command, "fps filter 应降采样到 settings.fps"
+
+    def test_parallel_stream_refills_behind_slow_first_frame(self, monkeypatch):
+        import threading
+        from types import SimpleNamespace
+        from core.exporter import ExportWorker, ExportSettings
+
+        release_first = threading.Event()
+        later_frame_started = threading.Event()
+        first_released_by_later_frame = []
+
+        class FakeCompositor:
+            width = 1
+            height = 1
+
+            def iter_frame_meta(self, render_fps=None):
+                for index in range(20):
+                    yield index, index, index / 30
+
+        class FakeStdin:
+            def __init__(self):
+                self.values = []
+
+            def write(self, data):
+                self.values.append(data[0])
+
+        stdin = FakeStdin()
+        worker = ExportWorker(
+            FakeCompositor(), None,
+            ExportSettings(output_path="out.mp4", fps=30),
+        )
+        worker._process = SimpleNamespace(
+            stdin=stdin, terminate=lambda: None, wait=lambda: 0)
+        monkeypatch.setattr("core.exporter.os.cpu_count", lambda: 2)
+
+        def prepare(_compositor, raw_frame, index, _ts,
+                    _target_w, _target_h, _pix_fmt, _direct_output):
+            if index == 0:
+                first_released_by_later_frame.append(
+                    release_first.wait(timeout=0.5))
+            if index == 4:
+                later_frame_started.set()
+                release_first.set()
+            return index, bytes([index])
+
+        monkeypatch.setattr(worker, "_compose_and_encode", prepare)
+        stderr_thread = SimpleNamespace(join=lambda timeout=None: None)
+
+        success = worker._stream_frames_parallel(
+            20, 1, 1, "RGB", stderr_thread, [],
+            render_fps=30, direct_output=False)
+
+        assert success is True
+        assert later_frame_started.is_set()
+        assert first_released_by_later_frame == [True]
+        assert stdin.values == list(range(20))
+
+    def test_parallel_stream_applies_effects_in_frame_order(self, monkeypatch):
+        import time
+        from types import SimpleNamespace
+        from PIL import Image
+        from core.exporter import ExportWorker, ExportSettings
+
+        effect_order = []
+
+        class FakeCompositor:
+            width = 1
+            height = 1
+
+            def iter_frame_meta(self, render_fps=None):
+                for index in range(8):
+                    yield index, SimpleNamespace(index=index), index / 30
+
+            def prepare_frame(self, raw_frame, _ts, **_kwargs):
+                time.sleep((7 - raw_frame.index) * 0.001)
+                image = Image.new("RGB", (1, 1), raw_frame.index)
+                return image, SimpleNamespace(frame_index=raw_frame.index)
+
+            def apply_effects(self, image, ctx, output_mode=None):
+                effect_order.append(ctx.frame_index)
+                return image
+
+        class FakeStdin:
+            def __init__(self):
+                self.values = []
+
+            def write(self, data):
+                self.values.append(data[0])
+
+        stdin = FakeStdin()
+        worker = ExportWorker(
+            FakeCompositor(), None,
+            ExportSettings(output_path="out.mp4", fps=30),
+        )
+        worker._process = SimpleNamespace(
+            stdin=stdin, terminate=lambda: None, wait=lambda: 0)
+        monkeypatch.setattr("core.exporter.os.cpu_count", lambda: 4)
+
+        success = worker._stream_frames_parallel(
+            8, 1, 1, "RGB",
+            SimpleNamespace(join=lambda timeout=None: None), [],
+            render_fps=30, direct_output=True)
+
+        assert success is True
+        assert effect_order == list(range(8))
+        assert stdin.values == list(range(8))
+
+    def test_parallel_stream_terminates_ffmpeg_when_frame_is_missing(self):
+        from types import SimpleNamespace
+        from core.exporter import ExportWorker, ExportSettings
+
+        class FakeCompositor:
+            width = 1
+            height = 1
+
+            def iter_frame_meta(self, render_fps=None):
+                yield 0, 0, 0.0
+                yield 2, 2, 2 / 30
+
+        terminated = []
+        worker = ExportWorker(
+            FakeCompositor(), None,
+            ExportSettings(output_path="out.mp4", fps=30),
+        )
+        worker._process = SimpleNamespace(
+            stdin=SimpleNamespace(write=lambda _data: None),
+            terminate=lambda: terminated.append(True),
+        )
+        worker._compose_and_encode = (
+            lambda _c, _frame, index, _ts, _w, _h, _fmt, _direct:
+            (index, bytes([index]))
+        )
+
+        with pytest.raises(RuntimeError, match="缺少第 1 帧"):
+            worker._stream_frames_parallel(
+                3, 1, 1, "RGB",
+                SimpleNamespace(join=lambda timeout=None: None), [],
+                render_fps=30, direct_output=True)
+
+        assert terminated == [True]
+
+    def test_parallel_export_matches_serial_moving_cursor(self, monkeypatch):
+        import time
+        from types import SimpleNamespace
+        import numpy as np
+        from core.compositor import Compositor
+        from core.cursor_effects import CursorEffect
+        from core.exporter import ExportWorker, ExportSettings
+        from core.screen_capture import CapturedFrame
+
+        def make_compositor():
+            compositor = Compositor(32, 16, 10)
+            compositor.load_frames([CapturedFrame(
+                data=np.zeros((16, 32, 3), dtype=np.uint8),
+                timestamp=index / 10,
+                index=index,
+            ) for index in range(8)])
+            compositor._cursor_events = [SimpleNamespace(
+                x=3 + index * 3, y=8, timestamp=index / 10,
+            ) for index in range(8)]
+            effect = CursorEffect(cursor_size=6, cursor_style="ring")
+            effect.enabled["ripple"] = False
+            compositor.register_effect("cursor", effect)
+            return compositor
+
+        serial = make_compositor()
+        expected = [serial.compose(
+            frame, index / 10, output_size=(32, 16), output_mode="RGB",
+        ).tobytes() for index, frame in enumerate(serial.frames)]
+
+        parallel = make_compositor()
+        original_prepare = parallel.prepare_frame
+
+        def delayed_prepare(frame, *args, **kwargs):
+            time.sleep((7 - frame.index) * 0.001)
+            return original_prepare(frame, *args, **kwargs)
+
+        monkeypatch.setattr(parallel, "prepare_frame", delayed_prepare)
+        rendered = []
+        worker = ExportWorker(
+            parallel, None, ExportSettings(output_path="out.mp4", fps=10))
+        worker._process = SimpleNamespace(
+            stdin=SimpleNamespace(write=rendered.append),
+            terminate=lambda: None,
+        )
+
+        success = worker._stream_frames_parallel(
+            8, 32, 16, "RGB",
+            SimpleNamespace(join=lambda timeout=None: None), [],
+            render_fps=10, direct_output=True)
+
+        assert success is True
+        assert rendered == expected
+
+    def test_parallel_pending_frames_respect_reorder_byte_budget(
+            self, monkeypatch):
+        import threading
+        import time
+        from types import SimpleNamespace
+        from core.exporter import ExportWorker, ExportSettings
+
+        release = threading.Event()
+        started = []
+
+        class FakeCompositor:
+            width = 4096
+            height = 4096
+
+            def iter_frame_meta(self, render_fps=None):
+                for index in range(8):
+                    yield index, index, index / 30
+
+        worker = ExportWorker(
+            FakeCompositor(), None,
+            ExportSettings(output_path="out.mp4", fps=30),
+        )
+        worker._process = SimpleNamespace(
+            stdin=SimpleNamespace(write=lambda _data: None),
+            terminate=lambda: None,
+        )
+        monkeypatch.setattr("core.exporter.os.cpu_count", lambda: 8)
+
+        def blocked_prepare(_c, _frame, index, _ts,
+                            _w, _h, _fmt, _direct):
+            started.append(index)
+            release.wait(timeout=1)
+            return index, bytes([index])
+
+        monkeypatch.setattr(worker, "_compose_and_encode", blocked_prepare)
+        result = []
+        thread = threading.Thread(target=lambda: result.append(
+            worker._stream_frames_parallel(
+                8, 1920, 1080, "RGB",
+                SimpleNamespace(join=lambda timeout=None: None), [],
+                render_fps=30, direct_output=False)))
+        thread.start()
+
+        deadline = time.monotonic() + 1
+        while len(started) < 4 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        time.sleep(0.02)
+        assert len(started) == 4
+
+        release.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert result == [True]

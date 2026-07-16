@@ -15,9 +15,10 @@ _CUSTOM_RESOLUTION = "自定义..."
 
 
 class ExportDialog(QDialog):
-    """增强导出对话框，支持格式、分辨率、宽高比预设、质量、GIF 帧率和循环设置"""
+    """导出格式、尺寸、帧率和码率设置。"""
 
-    def __init__(self, parent=None, default_dir="", default_fps=30):
+    def __init__(self, parent=None, default_dir="", default_fps=30,
+                 default_bitrate="10M"):
         super().__init__(parent)
         self.setWindowTitle("导出视频")
         self.setMinimumWidth(480)
@@ -76,8 +77,30 @@ class ExportDialog(QDialog):
             ["原始 (100%)", "高 (90%)", "好 (75%)", "中 (60%)"])
         layout.addWidget(self.quality_combo)
 
+        # MP4 帧率和码率
+        self.mp4_fps_label = QLabel("MP4 帧率:")
+        layout.addWidget(self.mp4_fps_label)
+        self.mp4_fps = QSpinBox()
+        self.mp4_fps.setRange(5, 120)
+        self.mp4_fps.setValue(max(5, min(int(default_fps), 120)))
+        self.mp4_fps.setSuffix(" FPS")
+        layout.addWidget(self.mp4_fps)
+
+        self.bitrate_label = QLabel("视频码率:")
+        layout.addWidget(self.bitrate_label)
+        self.bitrate_mbps = QSpinBox()
+        self.bitrate_mbps.setRange(1, 100)
+        try:
+            bitrate = int(float(str(default_bitrate).upper().rstrip("M")))
+        except ValueError:
+            bitrate = 10
+        self.bitrate_mbps.setValue(max(1, min(bitrate, 100)))
+        self.bitrate_mbps.setSuffix(" Mbps")
+        layout.addWidget(self.bitrate_mbps)
+
         # GIF 帧率
-        layout.addWidget(QLabel("GIF 帧率:"))
+        self.gif_fps_label = QLabel("GIF 帧率:")
+        layout.addWidget(self.gif_fps_label)
         self.gif_fps = QSpinBox()
         self.gif_fps.setRange(5, 30)
         self.gif_fps.setValue(min(default_fps, 15))
@@ -117,6 +140,11 @@ class ExportDialog(QDialog):
 
     def _on_format_changed(self, fmt: str):
         is_gif = fmt == "GIF"
+        self.mp4_fps_label.setVisible(not is_gif)
+        self.mp4_fps.setVisible(not is_gif)
+        self.bitrate_label.setVisible(not is_gif)
+        self.bitrate_mbps.setVisible(not is_gif)
+        self.gif_fps_label.setVisible(is_gif)
         self.gif_fps.setVisible(is_gif)
         self.gif_loop.setVisible(is_gif)
         self.quality_combo.setVisible(not is_gif)
@@ -180,6 +208,14 @@ class ExportDialog(QDialog):
     @property
     def gif_fps_value(self) -> int:
         return self.gif_fps.value()
+
+    @property
+    def mp4_fps_value(self) -> int:
+        return self.mp4_fps.value()
+
+    @property
+    def bitrate_value(self) -> str:
+        return f"{self.bitrate_mbps.value()}M"
 
     @property
     def gif_loop_value(self) -> bool:

@@ -241,6 +241,104 @@ def test_apply_cursor_config_updates_active_effect():
     assert window._cursor_effect.enabled["trail"] is False
 
 
+def test_export_dialog_exposes_mp4_fps_and_bitrate(qapp, monkeypatch):
+    import core.exporter
+    from ui.export_dialog import ExportDialog
+
+    monkeypatch.setattr(core.exporter, "is_gpu_available", lambda: False)
+    dialog = ExportDialog(default_fps=60, default_bitrate="20M")
+
+    assert dialog.mp4_fps_value == 60
+    assert dialog.bitrate_value == "20M"
+
+    dialog.mp4_fps.setValue(24)
+    dialog.bitrate_mbps.setValue(8)
+
+    assert dialog.mp4_fps_value == 24
+    assert dialog.bitrate_value == "8M"
+
+
+def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    class FakeDialog:
+        Accepted = 1
+        output_path = "/tmp/out.mp4"
+        export_format = "mp4"
+        is_custom_resolution = False
+        resolution_max_height = 1080
+        aspect_ratio = "native"
+        quality = 1.0
+        gif_fps_value = 15
+        mp4_fps_value = 24
+        bitrate_value = "8M"
+        gif_loop_value = True
+        use_gpu = False
+
+        def __init__(self, _parent, _directory, default_fps,
+                     default_bitrate):
+            assert default_fps == 60
+            assert default_bitrate == "20M"
+
+        def exec_(self):
+            return self.Accepted
+
+    class FakeProgress:
+        canceled = FakeSignal()
+
+        def __init__(self, *_args):
+            pass
+
+        def setWindowTitle(self, _value):
+            pass
+
+        def setWindowModality(self, _value):
+            pass
+
+        def setAutoClose(self, _value):
+            pass
+
+        def setAutoReset(self, _value):
+            pass
+
+        def setValue(self, _value):
+            pass
+
+    captured = {}
+    export_controller = SimpleNamespace(
+        export_progress=FakeSignal(),
+        start_export=lambda compositor, audio, settings: captured.update(
+            compositor=compositor, audio=audio, settings=settings),
+    )
+    compositor = SimpleNamespace(
+        frames=[object()], fps=60, crop_region=None)
+    window = SimpleNamespace(
+        _recorded_data=None,
+        _compositor=compositor,
+        _crop_active=False,
+        _audio_regions=[],
+        _btn_export=SimpleNamespace(setEnabled=lambda _value: None),
+        _export_controller=export_controller,
+        config=SimpleNamespace(
+            recordings_dir="/tmp", default_bitrate="20M"),
+        _cancel_export=lambda: None,
+        _show_notification=lambda *_args: None,
+    )
+    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+
+    MainWindow._on_export(window)
+
+    assert captured["settings"].fps == 24
+    assert captured["settings"].bitrate == "8M"
+
+
 def test_normalize_project_path_converts_file_to_directory():
     from app.project_session import ProjectSession
 

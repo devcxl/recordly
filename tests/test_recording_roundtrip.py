@@ -4,6 +4,7 @@ import json
 import os
 
 import numpy as np
+import pytest
 
 
 class TestAutosaveCreatesRequiredArtifacts:
@@ -384,8 +385,8 @@ class TestFullRoundtrip:
 
         # ── Phase 1: 模拟录制结束 → _finalize_project 保存 ──
         frames = [CapturedFrame(data=np.zeros((100, 100, 3), dtype=np.uint8),
-                                timestamp=i / 30.0, index=i) for i in range(10)]
-        compositor = Compositor(100, 100, 30)
+                                timestamp=i / 25.0, index=i) for i in range(10)]
+        compositor = Compositor(100, 100, 60)
         compositor.load_frames(frames)
 
         samplerate = 44100
@@ -402,11 +403,11 @@ class TestFullRoundtrip:
                 recorder=SimpleNamespace(
                     screen=SimpleNamespace(frame_offsets=[[0, 100] for _ in range(10)]))),
             _timeline=SimpleNamespace(tracks=[Track(type="video", name="视频", clips=[
-                Clip(type="video", start=0, end=10 / 30.0, content="test")])]),
-            _audio_regions=[], config=SimpleNamespace(default_fps=30),
+                Clip(type="video", start=0, end=10 / 25.0, content="test")])]),
+            _audio_regions=[], config=SimpleNamespace(default_fps=60),
             _refresh_home_page=lambda: None, update_status=lambda text: None,
             _show_notification=lambda title, msg, level: print(f"SAVE: {title} {msg}"),
-            _get_recording_duration=lambda: 10 / 30.0,
+            _get_recording_duration=lambda: 10 / 25.0,
             _collect_project_state=lambda project: None, _project_name="roundtrip",
         )
         MainWindow._finalize_project(window)
@@ -452,7 +453,7 @@ class TestFullRoundtrip:
             ns.setChecked = lambda v: None
             return ns
 
-        reopen_compositor = Compositor(100, 100, 30)
+        reopen_compositor = Compositor(100, 100, 60)
         reopen_window = SimpleNamespace(
             _recorded_data=None, _playback=None, _audio_regions=[],
             _compositor=reopen_compositor,
@@ -464,7 +465,7 @@ class TestFullRoundtrip:
             _cursor_effect=None,
             config=SimpleNamespace(cursor_size=32, cursor_theme="light",
                                     cursor_style="dot", trail_enabled=False,
-                                    default_fps=30, preview_quality=0.5),
+                                     default_fps=60, preview_quality=0.5),
             _frame_label=SimpleNamespace(setText=lambda v: None),
             _btn_export=btn(), _btn_crop=btn(), _btn_add_audio=btn(),
             _btn_rewind=btn(), _btn_step_back=btn(), _btn_play=btn(),
@@ -490,6 +491,7 @@ class TestFullRoundtrip:
 
         # ── 断言: 帧恢复 ──
         assert len(reopen_compositor._frames) == 10
+        assert reopen_compositor.source_duration == pytest.approx(0.4)
         # ── 断言: 音频恢复且可导出 ──
         assert captured_audio[0] is not None, "PlaybackController 应收到非空 AudioResult"
         assert reopen_window._recorded_data is not None, "_recorded_data 应存在"
@@ -546,3 +548,52 @@ class TestMp4AudioTrack:
         stream_types = [s.strip() for s in result.stdout.strip().split("\n") if s.strip()]
         assert "video" in stream_types, f"应包含视频流: {stream_types}"
         assert "audio" in stream_types, f"应包含音频流: {stream_types}"
+
+
+class TestMp4RenderFps:
+    @staticmethod
+    def _ffprobe_available():
+        import shutil
+        return shutil.which("ffprobe") is not None and shutil.which("ffmpeg") is not None
+
+    @pytest.mark.parametrize("render_fps", [24, 60])
+    def test_mp4_fps_changes_without_changing_duration(self, tmp_path,
+                                                       render_fps):
+        if not self._ffprobe_available():
+            pytest.skip("ffmpeg/ffprobe 不可用")
+
+        import fractions
+        import subprocess
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+        from core.project import Clip
+        from core.screen_capture import CapturedFrame
+
+        compositor = Compositor(32, 32, 25)
+        compositor.load_frames([CapturedFrame(
+            data=np.full((32, 32, 3), index * 5, dtype=np.uint8),
+            timestamp=index / 25,
+            index=index,
+        ) for index in range(25)])
+        compositor.load_clips([Clip(type="video", start=0, end=1.0)])
+
+        output_path = str(tmp_path / f"fps-{render_fps}.mp4")
+        worker = ExportWorker(
+            compositor, None,
+            ExportSettings(
+                output_path=output_path, fps=render_fps, bitrate="2M"),
+        )
+        worker._export_mp4_cpu()
+
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,nb_frames,duration",
+             "-of", "json", output_path],
+            capture_output=True, text=True, timeout=15, check=True,
+        )
+        stream = json.loads(probe.stdout)["streams"][0]
+        actual_fps = float(fractions.Fraction(stream["avg_frame_rate"]))
+
+        assert actual_fps == pytest.approx(render_fps, abs=0.01)
+        assert int(stream["nb_frames"]) == render_fps
+        assert float(stream["duration"]) == pytest.approx(1.0, abs=0.05)

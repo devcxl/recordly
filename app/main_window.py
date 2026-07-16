@@ -1022,8 +1022,10 @@ class MainWindow(QMainWindow):
                 "无法导出", "请先录制一段视频或打开一个项目", "warning",
             )
             return
-        dialog = ExportDialog(self, self.config.recordings_dir,
-                              self.config.default_fps)
+        dialog = ExportDialog(
+            self, self.config.recordings_dir,
+            self._compositor.fps, self.config.default_bitrate,
+        )
         if dialog.exec_() != ExportDialog.Accepted:
             return
         if not dialog.output_path:
@@ -1049,8 +1051,8 @@ class MainWindow(QMainWindow):
             format=dialog.export_format,
             aspect_ratio=dialog.aspect_ratio,
             quality=dialog.quality,
-            fps=dialog.gif_fps_value if is_gif else self.config.default_fps,
-            bitrate=self.config.default_bitrate,
+            fps=dialog.gif_fps_value if is_gif else dialog.mp4_fps_value,
+            bitrate=dialog.bitrate_value,
             loop=dialog.gif_loop_value,
             width=export_width,
             height=export_height,
@@ -1244,7 +1246,11 @@ class MainWindow(QMainWindow):
                 try:
                     if video_path.endswith(".frames.data") or project.source.video == "frames.data":
                         num_frames = comp.load_frames_data(
-                            video_path, getattr(project, '_frame_count', 0), project.source.fps)
+                            video_path,
+                            getattr(project, '_frame_count', 0),
+                            project.source.fps,
+                            project.source.duration or project.duration,
+                        )
                     else:
                         num_frames = comp.load_video(video_path, project.source.fps)
                     if num_frames > 0:

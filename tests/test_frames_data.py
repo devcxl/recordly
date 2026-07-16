@@ -69,6 +69,109 @@ class TestLoadFramesData:
         with pytest.raises((RuntimeError, IndexError, FileNotFoundError)):
             comp.load_frames_data("/nonexistent/frames.data", 10, 30)
 
+    def test_reload_preserves_recorded_duration_when_capture_fps_is_lower(
+            self, tmp_path):
+        """重开后应按录制时长恢复时间轴，而非按目标 FPS 加速。"""
+        store_path = tmp_path / "frames.data"
+        idx_path = tmp_path / "frames.idx"
+        store_path.write_bytes(b"")
+        idx_path.write_text(json.dumps([[0, 0]] * 250))
+
+        comp = Compositor(320, 240, 60)
+        comp.load_frames_data(
+            str(store_path), frame_count=250, fps=60, duration=10.0)
+
+        assert comp.source_duration == pytest.approx(10.0)
+        assert comp.frame_times[-1] == pytest.approx(9.96)
+
+    def test_concurrent_requests_decode_same_frame_once(self, tmp_path,
+                                                        monkeypatch):
+        import cv2
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+
+        frame = np.full((32, 32, 3), 90, dtype=np.uint8)
+        ok, encoded = cv2.imencode(".jpg", frame)
+        assert ok
+        payload = encoded.tobytes()
+        store_path = tmp_path / "frames.data"
+        idx_path = tmp_path / "frames.idx"
+        store_path.write_bytes(payload)
+        idx_path.write_text(json.dumps([[0, len(payload)]]))
+
+        original_decode = cv2.imdecode
+        decode_count = 0
+        count_lock = threading.Lock()
+
+        def tracked_decode(*args, **kwargs):
+            nonlocal decode_count
+            with count_lock:
+                decode_count += 1
+            time.sleep(0.02)
+            return original_decode(*args, **kwargs)
+
+        monkeypatch.setattr(cv2, "imdecode", tracked_decode)
+        comp = Compositor(32, 32, 30)
+        comp.load_frames_data(
+            str(store_path), 1, 30, cache_max_bytes=4096)
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(lambda _: comp.frames[0].data, range(8)))
+
+        assert decode_count == 1
+        assert all(result.shape == (32, 32, 3) for result in results)
+
+    def test_replacing_frames_closes_frames_data_handle(self, tmp_path):
+        store_path = tmp_path / "frames.data"
+        idx_path = tmp_path / "frames.idx"
+        store_path.write_bytes(b"")
+        idx_path.write_text("[[0, 0]]")
+
+        comp = Compositor(32, 32, 30)
+        comp.load_frames_data(str(store_path), 1, 30)
+        handle = comp._frames_data_handle
+
+        comp.frames = []
+
+        assert handle.closed
+        assert comp._frames_data_handle is None
+
+
+class TestLiveFrameStore:
+    def test_concurrent_reads_decode_once_and_use_byte_budget(self, tmp_path,
+                                                              monkeypatch):
+        import cv2
+        import threading
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+        from core.screen_capture import _CompressedFrameStore
+
+        store = _CompressedFrameStore(
+            store_path=str(tmp_path / "live.frames"),
+            cache_max_bytes=4096,
+        )
+        store.append(np.full((32, 32, 3), 70, dtype=np.uint8))
+        original_decode = cv2.imdecode
+        decode_count = 0
+        count_lock = threading.Lock()
+
+        def tracked_decode(*args, **kwargs):
+            nonlocal decode_count
+            with count_lock:
+                decode_count += 1
+            time.sleep(0.02)
+            return original_decode(*args, **kwargs)
+
+        monkeypatch.setattr(cv2, "imdecode", tracked_decode)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(executor.map(lambda _: store.read(0), range(8)))
+
+        assert decode_count == 1
+        assert store._cache_nbytes <= store._cache_max_bytes
+        assert all(result.shape == (32, 32, 3) for result in results)
+        store.cleanup()
+
 
 class TestCollectProjectStateFormats:
     """_collect_project_state 兼容 EventData 对象和元组"""

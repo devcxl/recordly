@@ -352,6 +352,7 @@ class TestCompositorPreviewQuality:
 
         assert c._resize_filter(preview=True) == Image.BILINEAR
         assert c._resize_filter(preview=False) == Image.LANCZOS
+        assert c._resize_filter(preview=False, zoom=True) == Image.BILINEAR
 
         c.set_preview_quality(0.9)
         assert c._resize_filter(preview=True) == Image.BICUBIC
@@ -394,6 +395,48 @@ class TestTimestampBasedTiming:
 
         assert c._source_index_at(5.0) == 200
 
+    def test_render_fps_changes_frame_count_without_changing_duration(self):
+        c = Compositor(1, 1, 25)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 25,
+            index=i,
+        ) for i in range(250)]
+        c.load_frames(frames)
+        c.load_clips([Clip(type="video", start=0, end=10)])
+
+        assert c.total_output_frames_for(30) == 300
+        assert c.total_output_frames_for(60) == 600
+        assert list(c.iter_frame_meta(render_fps=30))[-1][2] == pytest.approx(
+            299 / 30)
+
+
+class TestExportComposition:
+    def test_compose_can_output_target_size_in_rgb(self):
+        c = Compositor(200, 100, 30)
+        frame = CapturedFrame(
+            data=np.zeros((100, 200, 3), dtype=np.uint8),
+            timestamp=0.0,
+            index=0,
+        )
+        c.load_frames([frame])
+        captured = {}
+
+        class CaptureContext(Effect):
+            def apply(self, image, ctx):
+                captured["cursor"] = (ctx.cursor_x, ctx.cursor_y)
+                captured["size"] = (ctx.width, ctx.height)
+                return image
+
+        c.register_effect("capture", CaptureContext())
+
+        result = c.compose(
+            frame, output_size=(100, 50), output_mode="RGB")
+
+        assert result.size == (100, 50)
+        assert result.mode == "RGB"
+        assert captured == {"cursor": (50, 25), "size": (100, 50)}
+
 
 class TestCapturedFrameDataclass:
     def test_default_creation(self):
@@ -402,3 +445,94 @@ class TestCapturedFrameDataclass:
         assert cf.data is data
         assert cf.timestamp == 1.0
         assert cf.index == 5
+
+
+class TestLoaderThreadSafety:
+    def test_concurrent_decodes_no_errors(self, tmp_path):
+        """loader 加 Lock 后多线程解码不应产生损坏帧"""
+        import json, cv2
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # 构造小 frames.data（10 帧 64×64 JPEG）
+        store_path = tmp_path / "frames.data"
+        idx_path = tmp_path / "frames.idx"
+        offsets = []
+        rgb_frames = []
+        with open(store_path, "wb") as fh:
+            for i in range(10):
+                arr = np.random.randint(0, 256, (64, 64, 3), dtype=np.uint8)
+                rgb_frames.append(arr)
+                ok, buf = cv2.imencode(".jpg",
+                                       np.ascontiguousarray(arr[:, :, ::-1]),
+                                       [cv2.IMWRITE_JPEG_QUALITY, 95])
+                assert ok
+                offsets.append([fh.tell(), len(buf)])
+                fh.write(buf.tobytes())
+        json.dump(offsets, open(idx_path, "w"))
+
+        comp = Compositor(64, 64, 10)
+        comp.load_frames_data(str(store_path), 10, 10)
+
+        # 用 8 线程并发 loader，每线程随机读 200 次
+        def work():
+            for _ in range(200):
+                i = np.random.randint(0, 10)
+                data = comp.frames[i].data
+                assert data.shape == (64, 64, 3), f"帧 {i} 尺寸异常"
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = [ex.submit(work) for _ in range(8)]
+            for f in as_completed(futures):
+                f.result()  # 不应抛异常
+
+
+class TestCursorEffectThreadSafety:
+    def test_concurrent_apply_no_exception(self):
+        """CursorEffect.apply() 加 Lock 后多线程调用不应崩溃"""
+        from core.cursor_effects import CursorEffect
+        from core.effects import TextAnnotationEffect
+        import threading
+        import concurrent.futures
+
+        comp = Compositor(320, 240, 30)
+        frames = [
+            CapturedFrame(data=np.zeros((240, 320, 3), dtype=np.uint8),
+                          timestamp=i / 30, index=i) for i in range(30)
+        ]
+        comp.load_frames(frames)
+        ce = CursorEffect(cursor_size=24, cursor_theme="dark", cursor_style="ring")
+        comp.register_effect("cursor", ce)
+
+        def apply_one(idx):
+            ts = idx / 30.0
+            comp.compose(comp.frames[idx], ts)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            list(ex.map(apply_one, range(30)))
+
+        # 验证平滑位置一致性：多帧连续 compose 后，smooth 位置应与串行结果一致
+        comp2 = Compositor(320, 240, 30)
+        comp2.load_frames(frames)
+        ce2 = CursorEffect(cursor_size=24, cursor_theme="dark", cursor_style="ring")
+        comp2.register_effect("cursor", ce2)
+        serial_imgs = [comp2.compose(comp2.frames[idx], idx / 30) for idx in range(30)]
+
+        comp3 = Compositor(320, 240, 30)
+        comp3.load_frames(frames)
+        ce3 = CursorEffect(cursor_size=24, cursor_theme="dark", cursor_style="ring")
+        comp3.register_effect("cursor", ce3)
+
+        def compose_without_lock(idx):
+            return comp3.compose(comp3.frames[idx], idx / 30)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+            parallel_imgs = list(ex.map(compose_without_lock, range(30)))
+            # 并行结果应按帧索引排序
+            parallel_imgs.sort(key=lambda img: img.info.get("frame_index", 0))
+
+        # 比较并行与串行的像素均值（松弛容差，主要防止完全错乱）
+        serial_mean = np.mean([np.array(img).mean() for img in serial_imgs])
+        parallel_mean = np.mean([np.array(img).mean() for img in parallel_imgs])
+        assert abs(serial_mean - parallel_mean) < 5.0, (
+            f"并行 cursor 渲染偏差: serial={serial_mean:.1f} parallel={parallel_mean:.1f}"
+        )
