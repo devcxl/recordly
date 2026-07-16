@@ -29,6 +29,10 @@ class MoveClipCommand(UndoCommand):
     new_end: float
     old_track: int = -1
     new_track: int = -1
+    old_source_start: float = 0.0
+    new_source_start: float = 0.0
+    old_source_end: float | None = None
+    new_source_end: float | None = None
 
     def execute(self, timeline):
         if self.new_track >= 0 and self.new_track != self.old_track:
@@ -41,6 +45,8 @@ class MoveClipCommand(UndoCommand):
             clip = t.clips[self.clip_index]
             clip.start = self.new_start
             clip.end = self.new_end
+        clip.source_start = self.new_source_start
+        clip.source_end = self.new_source_end
 
     def undo(self, timeline):
         if self.new_track >= 0 and self.new_track != self.old_track:
@@ -53,6 +59,8 @@ class MoveClipCommand(UndoCommand):
             clip = t.clips[self.clip_index]
             clip.start = self.old_start
             clip.end = self.old_end
+        clip.source_start = self.old_source_start
+        clip.source_end = self.old_source_end
 
     def __repr__(self):
         return f"MoveClip(t{self.track_index}: {self.old_start:.1f}→{self.new_start:.1f})"
@@ -148,3 +156,24 @@ class ChangeSpeedCommand(UndoCommand):
         clip = timeline._tracks[self.track_index].clips[self.clip_index]
         clip.speed = self.old_speed
         clip.end = self.old_end
+
+
+@dataclass
+class CompositeCommand(UndoCommand):
+    """将多个子命令组合为单个可撤销/重做单元。
+    execute: 顺序执行子命令
+    undo:    逆序撤销子命令
+    """
+    sub_commands: list  # list[UndoCommand]
+
+    def execute(self, timeline):
+        for cmd in self.sub_commands:
+            cmd.execute(timeline)
+
+    def undo(self, timeline):
+        for cmd in reversed(self.sub_commands):
+            cmd.undo(timeline)
+
+    def __repr__(self):
+        inner = ', '.join(repr(c) for c in self.sub_commands)
+        return f"Composite({inner})"

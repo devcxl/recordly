@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
-from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand
+from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, CompositeCommand
 from core.project import SPEED_OPTIONS
 from core.speed import plan_clip_speed_change, format_speed_label
 
@@ -49,6 +49,8 @@ class TimelineWidget(QWidget):
         self._drag_start_x = 0
         self._drag_orig_start = 0.0
         self._drag_orig_end = 0.0
+        self._drag_orig_source_start = 0.0
+        self._drag_orig_source_end = None
         self._undo_stack = []
         self._redo_stack = []
 
@@ -194,6 +196,8 @@ class TimelineWidget(QWidget):
                 clip = self._tracks[self._drag_track].clips[self._drag_clip]
                 self._drag_orig_start = clip.start
                 self._drag_orig_end = clip.end
+                self._drag_orig_source_start = clip.source_start
+                self._drag_orig_source_end = clip.source_end
                 return
 
             ti, ci = self._hit_test(pos)
@@ -241,15 +245,28 @@ class TimelineWidget(QWidget):
                 clip.end = new_end
             elif self._drag_state == "resize_left":
                 new_start = max(0.0, min(self._drag_orig_start + dt, clip.end - 0.5))
+                d_start = new_start - self._drag_orig_start
                 clip.start = new_start
+                clip.source_start = self._drag_orig_source_start + d_start * clip.speed
             elif self._drag_state == "resize_right":
                 new_end = min(
                     self._duration,
                     max(clip.start + 0.5, self._drag_orig_end + dt),
                 )
+                d_end = new_end - self._drag_orig_end
                 clip.end = new_end
+                if clip.source_end is not None:
+                    clip.source_end = self._drag_orig_source_end + d_end * clip.speed
 
             self.update()
+            return
+
+        # 非拖拽状态 — 边缘 hover 光标
+        pos = event.localPos()
+        if pos.y() >= RULER_HEIGHT and self._hit_edge(pos):
+            self.setCursor(Qt.SizeHorCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton:
@@ -294,6 +311,10 @@ class TimelineWidget(QWidget):
                     track_index=self._drag_track, clip_index=self._drag_clip,
                     old_start=self._drag_orig_start, new_start=clip.start,
                     old_end=self._drag_orig_end, new_end=clip.end,
+                    old_source_start=self._drag_orig_source_start,
+                    new_source_start=clip.source_start,
+                    old_source_end=self._drag_orig_source_end,
+                    new_source_end=clip.source_end,
                 )
         return None
 
@@ -358,6 +379,47 @@ class TimelineWidget(QWidget):
         self._selected_clip = -2
         self.update()
 
+    def trim_in(self):
+        """裁掉播放头之前的内容（I 键）。
+        对选中 clip：播放头处拆分 → 删除左半边。
+        整体作为一个 undo 步。
+        """
+        if self._selected_clip < 0:
+            return
+        clip = self._tracks[self._selected_track].clips[self._selected_clip]
+        if self._playhead_s <= clip.start:
+            return
+        if self._playhead_s >= clip.end:
+            self.delete_clip(self._selected_track, self._selected_clip)
+            self._selected_clip = -1
+            return
+
+        split_cmd = SplitClipCommand(
+            self._selected_track, self._selected_clip, self._playhead_s)
+        delete_cmd = DeleteClipCommand(
+            self._selected_track, self._selected_clip)
+        self._push_undo(CompositeCommand([split_cmd, delete_cmd]))
+
+    def trim_out(self):
+        """裁掉播放头之后的内容（O 键）。
+        对选中 clip：播放头处拆分 → 删除右半边。
+        """
+        if self._selected_clip < 0:
+            return
+        clip = self._tracks[self._selected_track].clips[self._selected_clip]
+        if self._playhead_s >= clip.end:
+            return
+        if self._playhead_s <= clip.start:
+            self.delete_clip(self._selected_track, self._selected_clip)
+            self._selected_clip = -1
+            return
+
+        split_cmd = SplitClipCommand(
+            self._selected_track, self._selected_clip, self._playhead_s)
+        delete_cmd = DeleteClipCommand(
+            self._selected_track, self._selected_clip + 1)
+        self._push_undo(CompositeCommand([split_cmd, delete_cmd]))
+
     # ── 键盘事件 ──────────────────────────────────────────
 
     def keyPressEvent(self, event):
@@ -369,6 +431,12 @@ class TimelineWidget(QWidget):
         if event.key() == Qt.Key_S and (event.modifiers() & Qt.ControlModifier) == 0:
             if self._selected_clip >= 0:
                 self._split_clip(self._selected_track, self._selected_clip)
+            return
+        if event.key() == Qt.Key_I:
+            self.trim_in()
+            return
+        if event.key() == Qt.Key_O:
+            self.trim_out()
             return
         if event.key() == Qt.Key_Left and self._selected_clip >= 0:
             clip = self._tracks[self._selected_track].clips[self._selected_clip]
