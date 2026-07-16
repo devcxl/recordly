@@ -3,6 +3,7 @@
 try:
     from PyQt5.QtWidgets import QWidget
     from PyQt5.QtCore import Qt, pyqtSignal
+    from PyQt5.QtCore import QRectF
     from PyQt5.QtGui import QPainter, QColor, QPen, QBrush, QPainterPath
     _HAS_QT = True
 except ImportError:
@@ -125,7 +126,7 @@ class CropOverlay(QWidget):
 
         # 外部半透明遮罩（裁剪框外区域）
         path = QPainterPath()
-        path.addRect(self.rect())
+        path.addRect(QRectF(self.rect()))
         inner = QPainterPath()
         inner.addRect(cx, cy, cw, ch)
         mask = path - inner
