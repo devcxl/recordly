@@ -32,7 +32,8 @@ class CapturedFrame:
 class _CompressedFrameStore:
     """单文件 JPEG 帧仓库，按需解码并缓存最近访问的帧。"""
 
-    def __init__(self, jpeg_quality: int = 95, cache_size: int = 12,
+    def __init__(self, jpeg_quality: int = 95,
+                 cache_max_bytes: int = 256 * 1024 * 1024,
                  store_path: str | None = None):
         if store_path:
             self.path = store_path
@@ -47,9 +48,11 @@ class _CompressedFrameStore:
             self.path = handle.name
             self._file = handle
         self._quality = jpeg_quality
-        self._cache_size = cache_size
+        self._cache_max_bytes = cache_max_bytes
+        self._cache_nbytes = 0
         self._offsets: list[tuple[int, int]] = []
         self._cache: OrderedDict[int, np.ndarray] = OrderedDict()
+        self._inflight: dict[int, Event] = {}
         self._lock = Lock()
         if store_path is None:
             # 临时文件退出时自动清理；项目文件不注册
@@ -77,23 +80,43 @@ class _CompressedFrameStore:
             return len(self._offsets) - 1
 
     def read(self, index: int) -> np.ndarray:
-        with self._lock:
-            cached = self._cache.pop(index, None)
-            if cached is not None:
-                self._cache[index] = cached
-                return cached
-            offset, length = self._offsets[index]
-            self._file.flush()
-            self._file.seek(offset)
-            payload = self._file.read(length)
-        bgr = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise RuntimeError(f"无法解码录制帧 {index}")
-        rgb = np.ascontiguousarray(bgr[:, :, ::-1])
+        while True:
+            with self._lock:
+                cached = self._cache.pop(index, None)
+                if cached is not None:
+                    self._cache[index] = cached
+                    return cached
+                ready = self._inflight.get(index)
+                if ready is None:
+                    ready = Event()
+                    self._inflight[index] = ready
+                    break
+            ready.wait()
+
+        try:
+            with self._lock:
+                offset, length = self._offsets[index]
+                self._file.flush()
+                self._file.seek(offset)
+                payload = self._file.read(length)
+            bgr = cv2.imdecode(
+                np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if bgr is None:
+                raise RuntimeError(f"无法解码录制帧 {index}")
+            rgb = np.ascontiguousarray(bgr[:, :, ::-1])
+        except Exception:
+            with self._lock:
+                self._inflight.pop(index).set()
+            raise
+
         with self._lock:
             self._cache[index] = rgb
-            while len(self._cache) > self._cache_size:
-                self._cache.popitem(last=False)
+            self._cache_nbytes += rgb.nbytes
+            while (self._cache_nbytes > self._cache_max_bytes
+                   and len(self._cache) > 1):
+                _, evicted = self._cache.popitem(last=False)
+                self._cache_nbytes -= evicted.nbytes
+            self._inflight.pop(index).set()
         return rgb
 
     def cleanup(self):
@@ -101,6 +124,7 @@ class _CompressedFrameStore:
             handle = self._file
             self._file = None
             self._cache.clear()
+            self._cache_nbytes = 0
         if handle is not None:
             try:
                 handle.close()
@@ -188,6 +212,12 @@ class ScreenCapture(Thread):
             )
             for timestamp, index in zip(self._timestamps, self._indices)
         ]
+
+    @property
+    def frame_offsets(self) -> list:
+        if self._store is None:
+            return []
+        return self._store._offsets
 
     def _store_frame(self, data: np.ndarray,
                      timestamp: float, index: int):

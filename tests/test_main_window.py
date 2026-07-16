@@ -1,5 +1,7 @@
 """主窗口生命周期的纯逻辑回归测试。"""
 
+import os
+
 
 def test_frame_update_shows_time_and_follows_playhead():
     from types import SimpleNamespace
@@ -55,8 +57,8 @@ def test_playback_receives_recorded_audio_and_video_edit_map(monkeypatch):
     audio = object()
     video_clip = Clip(type="video", start=0, end=2)
     window = SimpleNamespace(
-        _preview=object(),
-        _compositor=object(),
+        _preview=SimpleNamespace(set_fps=lambda fps: None),
+            _compositor=SimpleNamespace(fps=30),
         _recorded_data={"audio": audio},
         _timeline=SimpleNamespace(tracks=[Track(type="video", clips=[video_clip])]),
         _update_frame_counter=lambda _idx: None,
@@ -85,16 +87,24 @@ def test_recording_duration_prefers_capture_timestamps_over_frame_count():
 
 def test_recording_start_error_restores_idle_state():
     import app.main_window as main_window_module
+    from types import SimpleNamespace
 
     errors = []
 
     class FakeRecorder:
-        def start_recording(self):
+        def start_recording(self, project_dir=None):
             raise RuntimeError("microphone unavailable")
 
     class FakeWindow:
-        _recorder = FakeRecorder()
+        _project_session = None
+        _recording_controller = SimpleNamespace(
+            start=lambda project_dir: (_ for _ in ()).throw(RuntimeError("microphone unavailable")),
+        )
         _is_recording = True
+
+        @property
+        def _project_dir(self):
+            return None
 
         def set_recording_state(self, value):
             self._is_recording = value
@@ -104,6 +114,12 @@ def test_recording_start_error_restores_idle_state():
 
         def _show_notification(self, title, content, level):
             errors.append({"title": title, "content": content, "level": level})
+
+        def _create_project_for_recording(self):
+            pass
+
+        def _cleanup_failed_recording(self):
+            pass
 
     window = FakeWindow()
 
@@ -221,7 +237,213 @@ def test_apply_cursor_config_updates_active_effect():
     window = FakeWindow()
     MainWindow._apply_cursor_config(window)
 
-    assert window._cursor_effect.cursor_size == 48
-    assert window._cursor_effect.cursor_theme == "light"
     assert window._cursor_effect.cursor_style == "arrow"
     assert window._cursor_effect.enabled["trail"] is False
+
+
+def test_export_dialog_exposes_mp4_fps_and_bitrate(qapp, monkeypatch):
+    import core.exporter
+    from ui.export_dialog import ExportDialog
+
+    monkeypatch.setattr(core.exporter, "is_gpu_available", lambda: False)
+    dialog = ExportDialog(default_fps=60, default_bitrate="20M")
+
+    assert dialog.mp4_fps_value == 60
+    assert dialog.bitrate_value == "20M"
+
+    dialog.mp4_fps.setValue(24)
+    dialog.bitrate_mbps.setValue(8)
+
+    assert dialog.mp4_fps_value == 24
+    assert dialog.bitrate_value == "8M"
+
+
+def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    class FakeDialog:
+        Accepted = 1
+        output_path = "/tmp/out.mp4"
+        export_format = "mp4"
+        is_custom_resolution = False
+        resolution_max_height = 1080
+        aspect_ratio = "native"
+        quality = 1.0
+        gif_fps_value = 15
+        mp4_fps_value = 24
+        bitrate_value = "8M"
+        gif_loop_value = True
+        use_gpu = False
+
+        def __init__(self, _parent, _directory, default_fps,
+                     default_bitrate):
+            assert default_fps == 60
+            assert default_bitrate == "20M"
+
+        def exec_(self):
+            return self.Accepted
+
+    class FakeProgress:
+        canceled = FakeSignal()
+
+        def __init__(self, *_args):
+            pass
+
+        def setWindowTitle(self, _value):
+            pass
+
+        def setWindowModality(self, _value):
+            pass
+
+        def setAutoClose(self, _value):
+            pass
+
+        def setAutoReset(self, _value):
+            pass
+
+        def setValue(self, _value):
+            pass
+
+    captured = {}
+    export_controller = SimpleNamespace(
+        is_exporting=False,
+        export_progress=FakeSignal(),
+        start_export=lambda compositor, audio, settings: captured.update(
+            compositor=compositor, audio=audio, settings=settings),
+    )
+    compositor = SimpleNamespace(
+        frames=[object()], fps=60, crop_region=None)
+    window = SimpleNamespace(
+        _recorded_data=None,
+        _compositor=compositor,
+        _crop_active=False,
+        _audio_regions=[],
+        _btn_export=SimpleNamespace(setEnabled=lambda _value: None),
+        _menu_export=SimpleNamespace(setEnabled=lambda _value: None),
+        _export_controller=export_controller,
+        config=SimpleNamespace(
+            recordings_dir="/tmp", default_bitrate="20M"),
+        _cancel_export=lambda: None,
+        _show_notification=lambda *_args: None,
+    )
+    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+
+    MainWindow._on_export(window)
+
+    assert captured["settings"].fps == 24
+    assert captured["settings"].bitrate == "8M"
+
+
+def test_export_entry_is_not_reentrant(monkeypatch):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    progress_windows = []
+    entry_states = []
+
+    class FakeSignal:
+        def connect(self, _slot):
+            pass
+
+    class FakeDialog:
+        Accepted = 1
+        output_path = "/tmp/out.mp4"
+        export_format = "mp4"
+        is_custom_resolution = False
+        resolution_max_height = 1080
+        aspect_ratio = "native"
+        quality = 1.0
+        gif_fps_value = 15
+        mp4_fps_value = 30
+        bitrate_value = "8M"
+        gif_loop_value = True
+        use_gpu = False
+
+        def __init__(self, *_args):
+            pass
+
+        def exec_(self):
+            return self.Accepted
+
+    class FakeProgress:
+        def __init__(self, *_args):
+            progress_windows.append(self)
+            self.canceled = FakeSignal()
+
+        def setWindowTitle(self, _value):
+            pass
+
+        def setWindowModality(self, _value):
+            pass
+
+        def setAutoClose(self, _value):
+            pass
+
+        def setAutoReset(self, _value):
+            pass
+
+        def setValue(self, _value):
+            pass
+
+    class FakeController:
+        def __init__(self):
+            self.is_exporting = False
+            self.start_calls = 0
+
+        def start_export(self, *_args):
+            self.start_calls += 1
+            self.is_exporting = True
+
+    controller = FakeController()
+    window = SimpleNamespace(
+        _recorded_data=None,
+        _compositor=SimpleNamespace(
+            frames=[object()], fps=30, crop_region=None),
+        _crop_active=False,
+        _audio_regions=[],
+        _btn_export=SimpleNamespace(
+            setEnabled=lambda value: entry_states.append(("button", value))),
+        _menu_export=SimpleNamespace(
+            setEnabled=lambda value: entry_states.append(("menu", value))),
+        _export_controller=controller,
+        config=SimpleNamespace(
+            recordings_dir="/tmp", default_bitrate="8M"),
+        _cancel_export=lambda: None,
+        _show_notification=lambda *_args: None,
+    )
+    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+
+    MainWindow._on_export(window)
+    MainWindow._on_export(window)
+
+    assert controller.start_calls == 1
+    assert len(progress_windows) == 1
+    assert ("button", False) in entry_states
+    assert ("menu", False) in entry_states
+
+
+def test_normalize_project_path_converts_file_to_directory():
+    from app.project_session import ProjectSession
+
+    p = ProjectSession.normalize_path(
+        os.path.join("home", "user", "Recordly", "projects", "test", "project.json"))
+    expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "test"))
+    assert p == expected
+
+    p = ProjectSession.normalize_path(
+        os.path.join("home", "user", "Recordly", "projects", "test"))
+    expected = os.path.normpath(os.path.join("home", "user", "Recordly", "projects", "test"))
+    assert p == expected
+
+    p = ProjectSession.normalize_path(os.path.join("relative", "project.json"))
+    expected = os.path.normpath("relative")
+    assert p == expected

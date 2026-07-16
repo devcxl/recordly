@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+pytest.importorskip("cv2", reason="需要 OpenCV for _store_frame JPEG 压缩测试")
+
 
 class TestCapturedFrame:
     def test_importable(self):

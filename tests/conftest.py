@@ -29,15 +29,6 @@ if 'sounddevice' not in sys.modules:
     _sd.default.device = (0, 0)
     sys.modules['sounddevice'] = _sd
 
-# cv2 — 避免 OpenCV 依赖
-if 'cv2' not in sys.modules:
-    _cv2 = MagicMock()
-    _cv2.imread = MagicMock(return_value=None)
-    _cv2.imwrite = MagicMock(return_value=True)
-    _cv2.cvtColor = MagicMock()
-    _cv2.COLOR_BGR2RGB = 4
-    sys.modules['cv2'] = _cv2
-
 # mss — 避免显示服务器依赖
 if 'mss' not in sys.modules:
     _mss = MagicMock()

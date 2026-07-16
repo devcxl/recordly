@@ -3,6 +3,7 @@
 import os
 import shutil
 import subprocess
+import wave
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -13,13 +14,12 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
     QLabel, QProgressDialog, QScrollArea,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
 
 from app.config import AppConfig
-from core.recorder import Recorder
 from core.compositor import Compositor
-from core.exporter import ExportWorker, ExportSettings
+from core.exporter import ExportSettings
 from core.project import (
     Clip, Track, AudioRegion, CropRegion, Project, SourceInfo,
     sync_audio_regions_from_clips,
@@ -30,6 +30,83 @@ from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
 from ui.home_page import HomePage
+from app.project_session import ProjectSession
+from app.recording_controller import RecordingController, RecordingState
+from app.export_controller import ExportController
+
+
+def _write_wav(path: str, data, samplerate: int):
+    """将 numpy float32 音频数据写入 16-bit PCM WAV 文件"""
+    import numpy as np
+    arr = np.asarray(data, dtype=np.float32)
+    arr = np.clip(arr, -1.0, 1.0)
+    if arr.ndim == 1:
+        channels = 1
+        arr = arr.reshape(-1, 1)
+    else:
+        channels = arr.shape[1]
+    samples = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
+
+
+def _read_wav(path: str):
+    """从 WAV 文件读取为 (numpy float32 数组, samplerate, channels)"""
+    import numpy as np
+    if not os.path.exists(path):
+        return None
+    with wave.open(path, "r") as wf:
+        samplerate = wf.getframerate()
+        channels = wf.getnchannels()
+        frames = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if channels > 1:
+            samples = samples.reshape(-1, channels)
+        return samples, samplerate, channels
+
+
+def _resolve_media_path(project_dir: str, rel_path: str) -> str:
+    """安全解析项目内媒体路径。
+    相对/绝对路径均解析后检查是否位于 project_dir 内；外部绝对路径和 '..' 越界拒绝。
+    """
+    project_real = os.path.realpath(project_dir)
+    candidate = rel_path if os.path.isabs(rel_path) else os.path.join(project_dir, rel_path)
+    resolved = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath([resolved, project_real]) != project_real:
+            raise ValueError(f"路径越界: {rel_path}")
+    except ValueError as exc:
+        if "路径越界" in str(exc):
+            raise
+        raise ValueError(f"路径越界: {rel_path}") from exc
+    return resolved
+
+
+def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
+    """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
+    from core.audio_capture import AudioResult, mix_audio_results
+
+    mic_audio = None
+    sys_audio = None
+    if source and source.audio_mic:
+        mic_path = _resolve_media_path(project_dir, source.audio_mic)
+        result = _read_wav(mic_path)
+        if result is not None:
+            data, sr, ch = result
+            mic_audio = AudioResult(data, sr, ch)
+    if source and source.audio_system:
+        sys_path = _resolve_media_path(project_dir, source.audio_system)
+        result = _read_wav(sys_path)
+        if result is not None:
+            data, sr, ch = result
+            sys_audio = AudioResult(data, sr, ch)
+
+    if mic_audio is None and sys_audio is None:
+        return None
+    return mix_audio_results(mic_audio, sys_audio)
 
 
 class MainWindow(QMainWindow):
@@ -42,20 +119,20 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig):
         super().__init__()
         self.config = config
-        self._is_recording = False
-        self._current_project_path: str | None = None
-        self._recorder = Recorder(target_fps=config.default_fps)
+        self._project_session: ProjectSession | None = None
+        self._recording_controller = RecordingController(config)
         self._compositor = Compositor(1920, 1080, config.default_fps)
         self._recorded_data = None
         self._audio_regions = []
-        self._export_thread = None
-        self._export_worker = None
+        self._export_controller = ExportController(self)
+        self._progress = None
         self._playback = None
         self._editing_zoom_clip = None
         self._crop_overlay = None
         self._crop_active = False
         os.makedirs(config.projects_dir, exist_ok=True)
         self._project_manager = ProjectManager(config.projects_dir)
+
         self._setup_window()
         self._setup_interfaces()
         self._setup_navigation()
@@ -63,9 +140,27 @@ class MainWindow(QMainWindow):
         self._check_deps()
         self._update_ui_state()
 
-        # 信号连接
         self.recording_started.connect(self._on_recording_started)
         self.recording_stopped.connect(self._on_recording_stopped)
+        self._export_controller.export_progress.connect(
+            self._on_export_progress)
+        self._export_controller.export_finished.connect(self._on_export_finished)
+
+    @property
+    def _project_dir(self) -> str | None:
+        return self._project_session.project_dir if self._project_session else None
+
+    @_project_dir.setter
+    def _project_dir(self, value: str | None):
+        self._project_session = ProjectSession(value) if value else None
+
+    @property
+    def _is_recording(self) -> bool:
+        return self._recording_controller.state == RecordingState.RECORDING
+
+    @_is_recording.setter
+    def _is_recording(self, value: bool):
+        pass  # no-op, state managed by controller
 
     # ── 窗口 ──────────────────────────────────────────────
 
@@ -187,7 +282,7 @@ class MainWindow(QMainWindow):
                     "warning",
                 )
             else:
-                self._recorder.set_target_fps(self.config.default_fps)
+                self._recording_controller.recorder.set_target_fps(self.config.default_fps)
             self._apply_cursor_config()
             self._compositor.set_preview_quality(self.config.preview_quality)
 
@@ -243,21 +338,6 @@ class MainWindow(QMainWindow):
         self._toolbar.setMovable(False)
         self._toolbar.setFloatable(False)
         self.addToolBar(self._toolbar)
-
-        # 录制
-        self._btn_record = QPushButton("● 录制")
-        self._btn_record.clicked.connect(self._toggle_record)
-        # 录制按钮已从工具栏移除，保留对象避免 AttributeError
-
-        self._btn_stop_rec = QPushButton("■ 停止")
-        self._btn_stop_rec.clicked.connect(self._toggle_record)
-        self._btn_stop_rec.setEnabled(False)
-        self._btn_stop_rec.setStyleSheet(
-            "QPushButton { background: #d32f2f; }"
-            "QPushButton:hover { background: #e53935; }"
-            "QPushButton:disabled { background: #3a3a3a; color: #666; }"
-        )
-        # 停止按钮已从工具栏移除，保留对象避免 AttributeError
 
         # 播放控制
         self._btn_rewind = QToolButton()
@@ -420,17 +500,16 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        # 立即创建项目目录
+        # 立即创建项目目录和占位 project.json
         name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
         os.makedirs(project_dir, exist_ok=True)
-        self._current_project_path = project_dir
 
-        # 保存占位 project.json
         project = Project()
         project.name = name
         project.save(str(Path(project_dir) / "project.json"))
+        self._project_dir = project_dir
 
         self._project_name = name
         self.showMinimized()
@@ -438,10 +517,57 @@ class MainWindow(QMainWindow):
 
     def _start_recording_from_home(self):
         """从首页触发的录制（帧数据流式写入项目目录）"""
-        self._recorder.start_recording(self._current_project_path)
-        self._is_recording = True
-        self.recording_started.emit()
+        try:
+            self._recording_controller.start(self._project_dir)
+        except Exception as exc:
+            self._is_recording = False
+            self.set_recording_state(False)
+            self.update_status("● 录制启动失败")
+            self._show_notification("无法开始录制", str(exc), "error")
+            self._cleanup_failed_recording()
+            return
         self._update_ui_state()
+
+    def _create_project_for_recording(self):
+        """托盘录制时自动创建项目目录"""
+        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
+        os.makedirs(project_dir, exist_ok=True)
+        self._project_name = name
+        project = Project()
+        project.name = name
+        project.save(str(Path(project_dir) / "project.json"))
+        self._project_dir = project_dir
+        self.showMinimized()
+
+    def _cleanup_failed_recording(self):
+        """录制启动失败：删除占位项目，恢复窗口"""
+        if self._project_dir:
+            try:
+                shutil.rmtree(self._project_dir, ignore_errors=True)
+            except Exception:
+                pass
+        self._project_dir = None
+        self.showNormal()
+        self.raise_()
+
+    def _handle_stop_failure(self):
+        """录制停止失败：恢复窗口，处理失败项目"""
+        self.showNormal()
+        self.raise_()
+        project_dir = self._project_dir
+        if not project_dir:
+            return
+        frames_file = Path(project_dir) / "frames.data"
+        if frames_file.exists() and frames_file.stat().st_size > 0:
+            self.update_status("⚠ 录制异常结束，项目已保留")
+        else:
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+            except Exception:
+                pass
+            self._project_dir = None
 
     def _on_home_open_project(self):
         """首页点击'打开项目' → 文件选择器"""
@@ -450,7 +576,7 @@ class MainWindow(QMainWindow):
             "Recordly 项目 (project.json)",
         )
         if path:
-            self._on_open_project(path)
+            self._on_open_project(ProjectSession.normalize_path(path))
 
     # ── 录制 ──────────────────────────────────────────────
 
@@ -464,23 +590,28 @@ class MainWindow(QMainWindow):
         self._update_ui_state()
 
     def _on_recording_started(self):
+        # 托盘录制：自动创建项目目录
+        if not self._project_dir:
+            self._create_project_for_recording()
         try:
-            self._recorder.start_recording()
+            self._recording_controller.start(self._project_dir)
         except Exception as exc:
             self.set_recording_state(False)
             self.update_status("● 录制启动失败")
             self._show_notification("无法开始录制", str(exc), "error")
+            self._cleanup_failed_recording()
             return
         self.update_status("● 录制中...")
 
     def _on_recording_stopped(self):
         try:
-            self._recorded_data = self._recorder.stop_recording()
+            self._recorded_data = self._recording_controller.stop()
         except Exception as exc:
             self._recorded_data = None
             self.set_recording_state(False)
             self.update_status("● 录制失败")
             self._show_notification("录制失败", str(exc), "error")
+            self._handle_stop_failure()
             return
         if self._recorded_data and self._recorded_data.get("frames"):
             self._compositor.load_frames(self._recorded_data["frames"])
@@ -503,7 +634,7 @@ class MainWindow(QMainWindow):
             self._btn_crop.setEnabled(True)
             self._btn_add_audio.setEnabled(True)
             self._enable_playback_controls(True)
-            total = len(self._compositor._frames)
+            total = len(self._compositor.frames)
             self._frame_label.setText(f"1 / {total}")
             self._populate_timeline()
             self._create_playback_controller()
@@ -520,18 +651,33 @@ class MainWindow(QMainWindow):
         """录制完成后直接保存 project.json（帧数据已在 frames.data 中）"""
         if not self._recorded_data or not self._recorded_data.get("frames"):
             return
-        if not self._current_project_path:
+        if not self._project_dir:
             return
 
         try:
             frames = self._recorded_data["frames"]
+            project_dir = Path(self._project_dir)
             project = Project()
             project.name = getattr(self, '_project_name',
                                    f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
             project.duration = self._get_recording_duration()
             project.thumbnail_path = ""
+
+            mic_path = ""
+            system_path = ""
+            mic_audio = self._recorded_data.get("mic_audio")
+            if mic_audio is not None and len(mic_audio.data) > 0:
+                mic_path = "audio_mic.wav"
+                _write_wav(str(project_dir / mic_path), mic_audio.data, mic_audio.samplerate)
+            sys_audio = self._recorded_data.get("system_audio")
+            if sys_audio is not None and len(sys_audio.data) > 0:
+                system_path = "audio_system.wav"
+                _write_wav(str(project_dir / system_path), sys_audio.data, sys_audio.samplerate)
+
             project.source = SourceInfo(
                 video="frames.data",
+                audio_mic=mic_path,
+                audio_system=system_path,
                 duration=project.duration,
                 fps=self.config.default_fps,
                 width=self._compositor.width,
@@ -540,12 +686,12 @@ class MainWindow(QMainWindow):
             project._frame_count = len(frames)
             # 保存帧偏移索引（供重新打开时定位每帧）
             import json
-            offsets = self._recorder.screen._store._offsets
-            idx_path = str(Path(self._current_project_path) / "frames.idx")
+            offsets = self._recording_controller.recorder.screen.frame_offsets
+            idx_path = str(Path(self._project_dir) / "frames.idx")
             with open(idx_path, "w") as f:
                 json.dump([[o, l] for o, l in offsets], f)
             self._collect_project_state(project)
-            project.save(str(Path(self._current_project_path) / "project.json"))
+            project.save(str(Path(self._project_dir) / "project.json"))
             self._refresh_home_page()
             self.update_status("✓ 项目已保存")
         except Exception as exc:
@@ -568,7 +714,7 @@ class MainWindow(QMainWindow):
 
     def _populate_timeline(self):
         """录制结束后在时间线中创建视频、音频、缩放轨道"""
-        frames = self._compositor._frames
+        frames = self._compositor.frames
         if not frames:
             return
         duration = self._get_recording_duration()
@@ -590,8 +736,8 @@ class MainWindow(QMainWindow):
                               self._compositor.width,
                               self._compositor.height, duration,
                               cursor_events, base_time,
-                              self._compositor._monitor_left,
-                              self._compositor._monitor_top)
+                              self._compositor.monitor_left,
+                              self._compositor.monitor_top)
         self._compositor.load_camera(camera)
 
         zoom_clips = camera.build_zoom_clips() if camera else []
@@ -607,13 +753,15 @@ class MainWindow(QMainWindow):
     def _collect_project_state(self, project: Project) -> None:
         """将当前 compositor 和编辑器状态写入 Project 对象"""
         comp = self._compositor
-        # 光标轨迹（CursorEvent 对象或 tuple 两种格式）
+        # 光标轨迹（保存为相对 compositor._base_time 的时间戳）
         project.cursor_events = []
+        base_ts = comp._base_time
         for c in comp._cursor_events:
+            ts = c.timestamp - base_ts if hasattr(c, 'timestamp') else c[2] - base_ts
             if hasattr(c, 'x'):
-                project.cursor_events.append([c.x, c.y, c.timestamp])
+                project.cursor_events.append([c.x, c.y, ts])
             else:
-                project.cursor_events.append([c[0], c[1], c[2]])
+                project.cursor_events.append([c[0], c[1], ts])
         # 点击事件
         project.click_events = []
         for c in comp._click_events:
@@ -634,14 +782,12 @@ class MainWindow(QMainWindow):
         duration = getattr(self._compositor, "source_duration", 0.0)
         if duration > 0:
             return duration
-        return len(self._compositor._frames) / self._compositor.fps
+        return len(self._compositor.frames) / self._compositor.fps
 
     # ── 状态更新 ──────────────────────────────────────────
 
     def _update_ui_state(self):
         rec = self._is_recording
-        self._btn_record.setEnabled(not rec)
-        self._btn_stop_rec.setEnabled(rec)
         self._btn_export.setEnabled(not rec)
         self._tray_record_act.setEnabled(not rec)
         self._tray_stop_act.setEnabled(rec)
@@ -658,7 +804,7 @@ class MainWindow(QMainWindow):
         self._preview.show_frame(pixmap)
 
     def _on_play_toggle(self):
-        if not self._compositor._frames:
+        if not self._compositor.frames:
             return
         if not self._playback:
             self._create_playback_controller()
@@ -667,7 +813,7 @@ class MainWindow(QMainWindow):
             self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif not self._playback._playing:
-            self._playback.play(self._playback._current_frame)
+            self._playback.play(self._playback.current_frame)
             self._btn_play.setText("⏸")
             self._btn_play.setToolTip("暂停")
         elif self._playback.is_paused:
@@ -844,7 +990,7 @@ class MainWindow(QMainWindow):
 
     def _on_crop_toggled(self, active: bool):
         """裁剪模式开关"""
-        if not self._compositor._frames:
+        if not self._compositor.frames:
             self._btn_crop.setChecked(False)
             return
 
@@ -874,13 +1020,17 @@ class MainWindow(QMainWindow):
     # ── 导出 ──────────────────────────────────────────────
 
     def _on_export(self):
-        if not self._recorded_data and not self._compositor._frames:
+        if self._export_controller.is_exporting:
+            return
+        if not self._recorded_data and not self._compositor.frames:
             self._show_notification(
                 "无法导出", "请先录制一段视频或打开一个项目", "warning",
             )
             return
-        dialog = ExportDialog(self, self.config.recordings_dir,
-                              self.config.default_fps)
+        dialog = ExportDialog(
+            self, self.config.recordings_dir,
+            self._compositor.fps, self.config.default_bitrate,
+        )
         if dialog.exec_() != ExportDialog.Accepted:
             return
         if not dialog.output_path:
@@ -889,7 +1039,7 @@ class MainWindow(QMainWindow):
             )
             return
         is_gif = dialog.export_format == "gif"
-        crop_region = self._compositor._crop_region if self._crop_active else None
+        crop_region = self._compositor.crop_region if self._crop_active else None
 
         # 分辨率设置
         if dialog.is_custom_resolution:
@@ -906,32 +1056,24 @@ class MainWindow(QMainWindow):
             format=dialog.export_format,
             aspect_ratio=dialog.aspect_ratio,
             quality=dialog.quality,
-            fps=dialog.gif_fps_value if is_gif else self.config.default_fps,
-            bitrate=self.config.default_bitrate,
+            fps=dialog.gif_fps_value if is_gif else dialog.mp4_fps_value,
+            bitrate=dialog.bitrate_value,
             loop=dialog.gif_loop_value,
             width=export_width,
             height=export_height,
             max_height=export_max_height,
             extra_audio=self._audio_regions if self._audio_regions else None,
             crop_region=crop_region,
+            use_gpu=dialog.use_gpu,
         )
         self._btn_export.setEnabled(False)
+        self._menu_export.setEnabled(False)
 
-        audio = self._recorded_data.get("audio")
+        recorded = self._recorded_data or {}
+        audio = recorded.get("audio")
         audio_data = audio.data if audio else None
         if audio:
             settings.samplerate = audio.samplerate
-
-        # 创建工作线程
-        self._export_worker = ExportWorker(self._compositor, audio_data, settings)
-        self._export_thread = QThread(self)
-        self._export_worker.moveToThread(self._export_thread)
-
-        self._export_thread.started.connect(self._export_worker.run)
-        self._export_worker.finished.connect(self._on_export_finished)
-        self._export_worker.finished.connect(self._export_thread.quit)
-        self._export_worker.finished.connect(self._export_worker.deleteLater)
-        self._export_thread.finished.connect(self._export_thread.deleteLater)
 
         # 进度对话框
         self._progress = QProgressDialog("正在导出视频...", "取消", 0, 100, self)
@@ -939,21 +1081,33 @@ class MainWindow(QMainWindow):
         self._progress.setWindowModality(Qt.WindowModal)
         self._progress.setAutoClose(True)
         self._progress.setAutoReset(True)
-
-        self._export_worker.progress.connect(self._progress.setValue)
         self._progress.canceled.connect(self._cancel_export)
 
-        self._export_thread.start()
+        try:
+            self._export_controller.start_export(
+                self._compositor, audio_data, settings)
+        except Exception as exc:
+            self._progress.close()
+            self._progress.deleteLater()
+            self._progress = None
+            self._btn_export.setEnabled(True)
+            self._menu_export.setEnabled(True)
+            self._show_notification("导出失败", str(exc), "error")
+
+    def _on_export_progress(self, value: int):
+        if self._progress is not None:
+            self._progress.setValue(value)
 
     def _cancel_export(self):
-        if self._export_worker:
-            self._export_worker.cancel()
+        self._export_controller.cancel()
 
     def _on_export_finished(self, result):
-        self._progress.close()
+        if self._progress is not None:
+            self._progress.close()
+            self._progress.deleteLater()
+            self._progress = None
         self._btn_export.setEnabled(True)
-        self._export_thread = None
-        self._export_worker = None
+        self._menu_export.setEnabled(True)
 
         if result.success:
             self.update_status("● 导出完成")
@@ -1030,9 +1184,9 @@ class MainWindow(QMainWindow):
         return 0.0
 
     def _update_audio_timeline(self):
-        self._timeline._tracks = [
-            t for t in self._timeline._tracks if t.type != "audio_extra"
-        ]
+        self._timeline.set_tracks([
+            t for t in self._timeline.tracks if t.type != "audio_extra"
+        ])
 
         if self._audio_regions:
             clips = []
@@ -1052,7 +1206,7 @@ class MainWindow(QMainWindow):
                     volume=r.volume,
                 ))
             track = Track(type="audio_extra", name="额外音频", clips=clips)
-            self._timeline._tracks.append(track)
+            self._timeline.tracks.append(track)
 
         self._timeline._update_height()
         self._timeline.update()
@@ -1064,25 +1218,27 @@ class MainWindow(QMainWindow):
 
     def _on_open_project(self, path: str):
         """打开项目 → 加载到 compositor → 切换到编辑器界面"""
+        project_dir = ProjectSession.normalize_path(path)
+
         # 清理旧状态
         self._recorded_data = None
         self._playback = None
-        self._compositor._frames = []
-        self._compositor._frame_times = []
-        self._compositor._cursor_events = []
-        self._compositor._click_events = []
-        self._compositor._crop_region = None
+        self._compositor.frames = []
+        self._compositor.frame_times = []
+        self._compositor.cursor_events = []
+        self._compositor.click_events = []
+        self._compositor.crop_region = None
         self._crop_active = False
         self._audio_regions = []
 
         try:
-            project = self._project_manager.open_project(path)
+            project = self._project_manager.open_project(project_dir)
         except Exception as exc:
             self._show_notification("打开项目失败", str(exc), "error")
             return
 
-        # 存储当前项目路径
-        self._current_project_path = path
+        # 存储当前项目路径（已规范化为目录）
+        self._project_dir = project_dir
 
         # 恢复录制原始数据（转为带属性的对象，兼容 compositor 读取）
         comp = self._compositor
@@ -1102,27 +1258,53 @@ class MainWindow(QMainWindow):
         # 加载视频帧
         if project.source and project.source.video:
             video_path = project.source.video
-            if not os.path.isabs(video_path):
-                video_path = str(Path(path) / video_path)
             try:
-                if video_path.endswith(".frames.data") or project.source.video == "frames.data":
-                    num_frames = comp.load_frames_data(
-                        video_path, getattr(project, '_frame_count', 0), project.source.fps)
-                else:
-                    num_frames = comp.load_video(video_path, project.source.fps)
-                if num_frames > 0:
-                    # 注册光标效果
-                    from core.cursor_effects import CursorEffect
-                    self._cursor_effect = CursorEffect(
-                        cursor_size=self.config.cursor_size,
-                        cursor_theme=self.config.cursor_theme,
-                        cursor_style=self.config.cursor_style,
-                    )
-                    comp.register_effect("cursor", self._cursor_effect)
-                    if not self.config.trail_enabled:
-                        self._cursor_effect.enabled["trail"] = False
-            except Exception as exc:
-                self._show_notification("视频解码失败", str(exc), "warning")
+                video_path = _resolve_media_path(project_dir, video_path)
+            except ValueError:
+                self._show_notification(
+                    "视频路径不安全", f"拒绝越界视频路径: {video_path}", "error")
+                video_path = ""
+            if video_path:
+                try:
+                    if video_path.endswith(".frames.data") or project.source.video == "frames.data":
+                        num_frames = comp.load_frames_data(
+                            video_path,
+                            getattr(project, '_frame_count', 0),
+                            project.source.fps,
+                            project.source.duration or project.duration,
+                        )
+                    else:
+                        num_frames = comp.load_video(video_path, project.source.fps)
+                    if num_frames > 0:
+                        # 注册光标效果
+                        from core.cursor_effects import CursorEffect
+                        self._cursor_effect = CursorEffect(
+                            cursor_size=self.config.cursor_size,
+                            cursor_theme=self.config.cursor_theme,
+                            cursor_style=self.config.cursor_style,
+                        )
+                        comp.register_effect("cursor", self._cursor_effect)
+                        if not self.config.trail_enabled:
+                            self._cursor_effect.enabled["trail"] = False
+                except Exception as exc:
+                    self._show_notification("视频解码失败", str(exc), "warning")
+
+        # 恢复音频（从 project.json 声明的 WAV 文件读取，失败时继续无音频打开）
+        try:
+            mixed_audio = _load_project_audio(project_dir, project.source)
+        except Exception as exc:
+            self._show_notification("音频加载失败", str(exc), "warning")
+            mixed_audio = None
+
+        # 仅在存在帧或音频时构造 _recorded_data
+        has_content = bool(comp._frames) or mixed_audio is not None
+        if has_content:
+            self._recorded_data = {
+                "audio": mixed_audio,
+                "frames": comp._frames,
+                "cursor_events": comp._cursor_events,
+                "clicks": comp._click_events,
+            }
 
         # 加载时间线并同步到 compositor
         self._timeline.set_tracks(project.timeline)
@@ -1150,11 +1332,12 @@ class MainWindow(QMainWindow):
             self._crop_active = True
             self._btn_crop.setChecked(True)
 
-        # 启用编辑器控件
-        self._btn_export.setEnabled(True)
-        self._btn_crop.setEnabled(True)
-        self._btn_add_audio.setEnabled(True)
-        self._enable_playback_controls(True)
+        # 启用编辑器控件（仅当存在有效帧时）
+        has_frames = len(comp._frames) > 0
+        self._btn_export.setEnabled(has_frames)
+        self._btn_crop.setEnabled(has_frames)
+        self._btn_add_audio.setEnabled(has_frames)
+        self._enable_playback_controls(has_frames)
         total = len(comp._frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
@@ -1180,15 +1363,15 @@ class MainWindow(QMainWindow):
 
     def _on_save_project(self):
         """保存当前项目编辑状态"""
-        if not self._current_project_path:
+        if not self._project_dir:
             QMessageBox.warning(self, "保存失败", "当前没有打开的项目。\n请先录制一个新项目，或从首页打开已有项目。")
             return
         try:
-            project = self._project_manager.open_project(self._current_project_path)
+            project = self._project_manager.open_project(self._project_dir)
             self._collect_project_state(project)
-            project.save(str(Path(self._current_project_path) / "project.json"))
+            project.save(str(Path(self._project_dir) / "project.json"))
             self.update_status("✓ 项目已保存")
-            self._show_notification("保存成功", f"已保存到: {self._current_project_path}", "success")
+            self._show_notification("保存成功", f"已保存到: {self._project_dir}", "success")
         except Exception as exc:
             self._show_notification("保存项目失败", str(exc), "error")
 

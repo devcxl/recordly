@@ -43,13 +43,16 @@ class TestCursorEffectConfig:
 
 
 class TestCursorEffectApply:
-    def _make_context(self, x=100, y=100, ts=0.0):
+    def _make_context(self, x=100, y=100, ts=0.0,
+                      render_ts=None, reference_fps=60):
         frame = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
         return CompositorContext(
             frame=frame, cursor_x=x, cursor_y=y,
             cursor_state="idle", click_events=[],
             frame_index=0, timestamp=ts,
             zoom_rect=None, width=320, height=240,
+            render_timestamp=render_ts,
+            reference_fps=reference_fps,
         )
 
     def test_apply_returns_pil_image(self):
@@ -123,7 +126,7 @@ class TestCursorEffectApply:
 
         effect.apply(Image.new("RGBA", (320, 240)), ctx)
 
-        assert effect._trail[-1] == (80, 60)
+        assert effect._trail[-1][:2] == (80, 60)
 
     def test_click_ripple(self):
         effect = CursorEffect()
@@ -210,6 +213,52 @@ class TestCursorEffectApply:
         sx, sy = effect._apply_smooth(150, 150)
         assert sx == 150
         assert sy == 150
+
+    def test_smoothing_is_consistent_across_render_fps(self):
+        def smooth_position(render_fps):
+            effect = CursorEffect()
+            effect.enabled["trail"] = False
+            effect.enabled["ripple"] = False
+            frame = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
+            effect.apply(frame, self._make_context(
+                x=0, y=0, ts=0, render_ts=0, reference_fps=60))
+            for index in range(1, round(render_fps * 0.2) + 1):
+                timestamp = index / render_fps
+                effect.apply(frame, self._make_context(
+                    x=100, y=100, ts=timestamp,
+                    render_ts=timestamp, reference_fps=60))
+            return effect._smooth_x
+
+        assert smooth_position(15) == pytest.approx(
+            smooth_position(60), abs=0.01)
+
+    def test_trail_uses_time_window_instead_of_frame_count(self):
+        effect = CursorEffect()
+        effect.enabled["smooth"] = False
+        effect.enabled["ripple"] = False
+        frame = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
+
+        for index, timestamp in enumerate((0.0, 0.05, 0.10, 0.15, 0.20)):
+            effect.apply(frame, self._make_context(
+                x=index * 10, y=50, ts=timestamp,
+                render_ts=timestamp, reference_fps=60))
+
+        assert [point[2] for point in effect._trail] == [0.10, 0.15, 0.20]
+
+    def test_seek_backward_resets_temporal_cursor_state(self):
+        effect = CursorEffect()
+        effect.enabled["ripple"] = False
+        frame = Image.new("RGBA", (320, 240), (0, 0, 0, 255))
+
+        effect.apply(frame, self._make_context(
+            x=0, y=50, ts=0.0, render_ts=0.0, reference_fps=60))
+        effect.apply(frame, self._make_context(
+            x=100, y=50, ts=0.2, render_ts=0.2, reference_fps=60))
+        effect.apply(frame, self._make_context(
+            x=25, y=50, ts=0.1, render_ts=0.1, reference_fps=60))
+
+        assert effect._smooth_x == 25
+        assert effect._trail == [(25, 50, 0.1)]
 
 
 class TestCursorEffectEdgeCases:
