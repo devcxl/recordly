@@ -122,6 +122,72 @@ class ExportWorker(QObject):
             self.finished.emit(ExportResult(False, self._settings.output_path,
                                             error=f"导出异常: {exc}"))
 
+    @staticmethod
+    def _process_one(img, index, target_w, target_h, pix_fmt):
+        if img.size != (target_w, target_h):
+            img = img.resize((target_w, target_h), Image.LANCZOS)
+        if img.mode != pix_fmt:
+            img = img.convert(pix_fmt)
+        return index, img.tobytes()
+
+    def _stream_frames_parallel(self, total, w, h, pix_fmt,
+                                stderr_thread, stderr_chunks):
+        from concurrent.futures import ThreadPoolExecutor
+
+        max_workers = min(os.cpu_count() or 4, 8)
+        buffer_size = max_workers * 2
+        c = self._compositor
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            frame_iter = enumerate(c.render_all())
+
+            for _ in range(buffer_size):
+                try:
+                    idx, frame = next(frame_iter)
+                except StopIteration:
+                    break
+                futures.append(executor.submit(
+                    self._process_one, frame, idx, w, h, pix_fmt))
+
+            while futures:
+                idx, data = futures[0].result()
+                futures.pop(0)
+
+                if self._cancelled:
+                    for f in futures:
+                        f.cancel()
+                    self._process.terminate()
+                    self.finished.emit(ExportResult(
+                        False, self._settings.output_path, error="已取消"))
+                    return False
+
+                try:
+                    self._process.stdin.write(data)
+                except BrokenPipeError:
+                    self._process.stdin.close()
+                    self._process.wait()
+                    stderr_thread.join(timeout=2)
+                    stderr_text = "".join(stderr_chunks).strip()
+                    if not stderr_text:
+                        stderr_text = "(ffmpeg 无 stderr 输出)"
+                    self._process = None
+                    self.finished.emit(ExportResult(
+                        False, self._settings.output_path,
+                        error=f"FFmpeg 管道断开:\n{stderr_text}"))
+                    return False
+
+                self.progress.emit(int((idx + 1) / total * 100))
+
+                try:
+                    next_idx, next_frame = next(frame_iter)
+                except StopIteration:
+                    continue
+                futures.append(executor.submit(
+                    self._process_one, next_frame, next_idx, w, h, pix_fmt))
+
+        return True
+
     # ── MP4 ────────────────────────────────────────────
 
     def _export_mp4(self):
@@ -219,33 +285,9 @@ class ExportWorker(QObject):
             logger.debug("ffmpeg {' '.join(cmd)}")
             logger.debug("帧数={total} 尺寸={w}x{h} fps={s.fps}")
 
-        for i, frame in enumerate(c.render_all()):
-            if self._cancelled:
-                self._process.terminate()
-                self.finished.emit(ExportResult(False, s.output_path,
-                                                error="已取消"))
-                return
-            if frame.size != (w, h):
-                frame = frame.resize((w, h), Image.LANCZOS)
-            if frame.mode != "RGB":
-                frame = frame.convert("RGB")
-            data = frame.tobytes()
-            if i == 0 and logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"首帧 {frame.size} {frame.mode} {len(data)} bytes")
-            try:
-                self._process.stdin.write(data)
-            except BrokenPipeError:
-                self._process.stdin.close()
-                self._process.wait()
-                stderr_thread.join(timeout=2)
-                stderr_text = "".join(stderr_chunks).strip()
-                if not stderr_text:
-                    stderr_text = "(ffmpeg 无 stderr 输出)"
-                self._process = None
-                self.finished.emit(ExportResult(False, s.output_path,
-                                                error=f"FFmpeg 管道断开:\n{stderr_text}"))
-                return
-            self.progress.emit(int((i + 1) / total * 100))
+        if not self._stream_frames_parallel(
+                total, w, h, "RGB", stderr_thread, stderr_chunks):
+            return
 
         process = self._process
         process.stdin.close()
@@ -352,28 +394,9 @@ class ExportWorker(QObject):
             cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         stderr_thread, stderr_chunks = _start_stderr_reader(self._process)
 
-        for i, frame in enumerate(c.render_all()):
-            if self._cancelled:
-                self._process.terminate()
-                self.finished.emit(ExportResult(False, s.output_path,
-                                                error="已取消"))
-                return
-            if frame.size != (w, h):
-                frame = frame.resize((w, h), Image.LANCZOS)
-            if frame.mode != "RGBA":
-                frame = frame.convert("RGBA")
-            try:
-                self._process.stdin.write(frame.tobytes())
-            except BrokenPipeError:
-                self._process.stdin.close()
-                self._process.wait()
-                stderr_thread.join(timeout=2)
-                stderr_text = "".join(stderr_chunks).strip()
-                self._process = None
-                self.finished.emit(ExportResult(False, s.output_path,
-                                                error=f"NVENC 管道断开:\n{stderr_text}"))
-                return
-            self.progress.emit(int((i + 1) / total * 100))
+        if not self._stream_frames_parallel(
+                total, w, h, "RGBA", stderr_thread, stderr_chunks):
+            return
 
         process = self._process
         process.stdin.close()
