@@ -124,75 +124,123 @@ class ExportWorker(QObject):
 
     @staticmethod
     def _compose_and_encode(compositor, raw_frame, index, ts,
-                            target_w, target_h, pix_fmt):
+                            target_w, target_h, pix_fmt, direct_output):
         if raw_frame is None:
-            img = Image.new("RGBA", (compositor.width, compositor.height),
-                            (0, 0, 0, 255))
-        else:
-            img = compositor.compose(raw_frame, ts)
-        if img.size != (target_w, target_h):
-            img = img.resize((target_w, target_h), Image.LANCZOS)
-        if img.mode != pix_fmt:
-            img = img.convert(pix_fmt)
-        return index, img.tobytes()
+            size = ((target_w, target_h) if direct_output
+                    else (compositor.width, compositor.height))
+            return index, Image.new(pix_fmt, size, 0), None
+        img, ctx = compositor.prepare_frame(
+            raw_frame,
+            ts,
+            output_size=(target_w, target_h) if direct_output else None,
+            output_mode=pix_fmt if direct_output else None,
+            frame_index=index,
+        )
+        return index, img, ctx
 
     def _stream_frames_parallel(self, total, w, h, pix_fmt,
-                                stderr_thread, stderr_chunks):
-        from concurrent.futures import ThreadPoolExecutor
+                                stderr_thread, stderr_chunks,
+                                render_fps, direct_output):
+        from concurrent.futures import (
+            FIRST_COMPLETED, ThreadPoolExecutor, wait,
+        )
 
         max_workers = min(os.cpu_count() or 4, 8)
-        buffer_size = max_workers * 2
+        reorder_max_bytes = 256 * 1024 * 1024
         c = self._compositor
+        bytes_per_frame = (
+            w * h * (4 if pix_fmt == "RGBA" else 3)
+            if direct_output else c.width * c.height * 4
+        )
+        pending_limit = min(
+            max_workers * 2,
+            max(1, reorder_max_bytes // max(bytes_per_frame, 1)),
+        )
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = []
-            frame_iter = c.iter_frame_meta()
+            pending = set()
+            ready = {}
+            next_to_write = 0
+            frame_iter = c.iter_frame_meta(render_fps=render_fps)
+            exhausted = False
 
-            for _ in range(buffer_size):
+            def submit_one():
+                nonlocal exhausted
                 try:
                     idx, raw_frame, ts = next(frame_iter)
                 except StopIteration:
-                    break
-                futures.append(executor.submit(
+                    exhausted = True
+                    return False
+                pending.add(executor.submit(
                     self._compose_and_encode, c, raw_frame, idx, ts,
-                    w, h, pix_fmt))
+                    w, h, pix_fmt, direct_output))
+                return True
 
-            while futures:
-                idx, data = futures[0].result()
-                futures.pop(0)
+            while len(pending) < pending_limit and submit_one():
+                pass
+
+            while pending or ready:
+                if pending:
+                    completed, pending = wait(
+                        pending, return_when=FIRST_COMPLETED)
+                    for future in completed:
+                        result = future.result()
+                        ready[result[0]] = result[1:]
 
                 if self._cancelled:
-                    for f in futures:
-                        f.cancel()
+                    for future in pending:
+                        future.cancel()
                     self._process.terminate()
                     self.finished.emit(ExportResult(
                         False, self._settings.output_path, error="已取消"))
                     return False
 
-                try:
-                    self._process.stdin.write(data)
-                except BrokenPipeError:
-                    self._process.stdin.close()
-                    self._process.wait()
-                    stderr_thread.join(timeout=2)
-                    stderr_text = "".join(stderr_chunks).strip()
-                    if not stderr_text:
-                        stderr_text = "(ffmpeg 无 stderr 输出)"
-                    self._process = None
-                    self.finished.emit(ExportResult(
-                        False, self._settings.output_path,
-                        error=f"FFmpeg 管道断开:\n{stderr_text}"))
-                    return False
+                while next_to_write in ready:
+                    prepared = ready.pop(next_to_write)
+                    if len(prepared) == 1 and isinstance(
+                            prepared[0], (bytes, bytearray)):
+                        data = prepared[0]
+                    else:
+                        img, ctx = prepared
+                        if ctx is not None:
+                            img = c.apply_effects(
+                                img, ctx,
+                                output_mode=pix_fmt if direct_output else None,
+                            )
+                        if img.size != (w, h):
+                            img = img.resize((w, h), Image.LANCZOS)
+                        if img.mode != pix_fmt:
+                            img = img.convert(pix_fmt)
+                        data = img.tobytes()
+                    try:
+                        self._process.stdin.write(data)
+                    except BrokenPipeError:
+                        self._process.stdin.close()
+                        self._process.wait()
+                        stderr_thread.join(timeout=2)
+                        stderr_text = "".join(stderr_chunks).strip()
+                        if not stderr_text:
+                            stderr_text = "(ffmpeg 无 stderr 输出)"
+                        self._process = None
+                        self.finished.emit(ExportResult(
+                            False, self._settings.output_path,
+                            error=f"FFmpeg 管道断开:\n{stderr_text}"))
+                        return False
+                    next_to_write += 1
+                    self.progress.emit(int(next_to_write / total * 100))
 
-                self.progress.emit(int((idx + 1) / total * 100))
+                if (exhausted and not pending and ready
+                        and next_to_write not in ready):
+                    self._process.terminate()
+                    raise RuntimeError(
+                        f"导出帧序列缺少第 {next_to_write} 帧")
 
-                try:
-                    next_idx, next_frame, next_ts = next(frame_iter)
-                except StopIteration:
-                    continue
-                futures.append(executor.submit(
-                    self._compose_and_encode, c, next_frame, next_idx,
-                    next_ts, w, h, pix_fmt))
+                ready_bytes = len(ready) * bytes_per_frame
+                while (not exhausted
+                       and len(pending) < pending_limit
+                       and ready_bytes < reorder_max_bytes):
+                    if not submit_one():
+                        break
 
         return True
 
@@ -228,14 +276,14 @@ class ExportWorker(QObject):
             w = int(w * s.crop_region.width)
             h = int(h * s.crop_region.height)
 
-        total = c.total_output_frames
+        total = c.total_output_frames_for(s.fps)
         if total == 0:
             self.finished.emit(ExportResult(False, s.output_path,
                                             error="没有帧可以导出"))
             return
 
         video = ffmpeg.input("pipe:", format="rawvideo",
-                              pix_fmt="rgb24", s=f"{w}x{h}", r=c.fps)
+                              pix_fmt="rgb24", s=f"{w}x{h}", r=s.fps)
 
         # ── 速度滤镜 ────────────────────────────────────────
         # ── 音频处理 ────────────────────────────────────────
@@ -253,14 +301,14 @@ class ExportWorker(QObject):
         if extra:
             mixed_wav = self._build_audio_filtergraph(
                 extra, orig_wav, s.samplerate,
-                video_duration=total / c.fps,
+                video_duration=total / s.fps,
             )
             if mixed_wav:
                 _temp_paths.append(mixed_wav)
         elif orig_wav and c._clips:
             mixed_wav = self._build_audio_filtergraph(
                 [], orig_wav, s.samplerate,
-                video_duration=total / c.fps,
+                video_duration=total / s.fps,
             )
             if mixed_wav:
                 _temp_paths.append(mixed_wav)
@@ -291,10 +339,16 @@ class ExportWorker(QObject):
         if logger.isEnabledFor(logging.DEBUG):
             cmd = output.compile()
             logger.debug("ffmpeg {' '.join(cmd)}")
-            logger.debug("帧数={total} 尺寸={w}x{h} fps={s.fps}")
+            logger.debug(f"帧数={total} 尺寸={w}x{h} fps={s.fps}")
 
+        direct_output = (
+            src_w * h == src_h * w
+            and not (s.crop_region and (
+                s.crop_region.width < 1.0 or s.crop_region.height < 1.0))
+        )
         if not self._stream_frames_parallel(
-                total, w, h, "RGB", stderr_thread, stderr_chunks):
+                total, w, h, "RGB", stderr_thread, stderr_chunks,
+                render_fps=s.fps, direct_output=direct_output):
             return
 
         process = self._process
@@ -320,7 +374,7 @@ class ExportWorker(QObject):
         result = ExportResult(
             success=True, path=s.output_path,
             size_bytes=os.path.getsize(s.output_path),
-            duration=total / c.fps,
+            duration=total / s.fps,
         )
         self.finished.emit(result)
 
@@ -344,7 +398,7 @@ class ExportWorker(QObject):
             w = int(w * s.crop_region.width)
             h = int(h * s.crop_region.height)
 
-        total = c.total_output_frames
+        total = c.total_output_frames_for(s.fps)
         if total == 0:
             self.finished.emit(ExportResult(False, s.output_path,
                                             error="没有帧可以导出"))
@@ -362,23 +416,23 @@ class ExportWorker(QObject):
         if extra:
             mixed_wav = self._build_audio_filtergraph(
                 extra, orig_wav, s.samplerate,
-                video_duration=total / c.fps,
+                video_duration=total / s.fps,
             )
             if mixed_wav:
                 _temp_paths.append(mixed_wav)
         elif orig_wav and c._clips:
             mixed_wav = self._build_audio_filtergraph(
                 [], orig_wav, s.samplerate,
-                video_duration=total / c.fps,
+                video_duration=total / s.fps,
             )
             if mixed_wav:
                 _temp_paths.append(mixed_wav)
 
         final_wav = mixed_wav or orig_wav
 
-        # 视频输入：rgba（NVENC 原生支持，无需 hwupload）
+        # RGB 管道避免合成后再做整帧 RGBA 转换。
         video = ffmpeg.input("pipe:", format="rawvideo",
-                              pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
+                              pix_fmt="rgb24", s=f"{w}x{h}", r=s.fps)
 
         if final_wav:
             audio_input = ffmpeg.input(final_wav)
@@ -401,8 +455,14 @@ class ExportWorker(QObject):
             cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
         stderr_thread, stderr_chunks = _start_stderr_reader(self._process)
 
+        direct_output = (
+            src_w * h == src_h * w
+            and not (s.crop_region and (
+                s.crop_region.width < 1.0 or s.crop_region.height < 1.0))
+        )
         if not self._stream_frames_parallel(
-                total, w, h, "RGBA", stderr_thread, stderr_chunks):
+                total, w, h, "RGB", stderr_thread, stderr_chunks,
+                render_fps=s.fps, direct_output=direct_output):
             return
 
         process = self._process
@@ -428,7 +488,7 @@ class ExportWorker(QObject):
         result = ExportResult(
             success=True, path=s.output_path,
             size_bytes=os.path.getsize(s.output_path),
-            duration=total / c.fps,
+            duration=total / s.fps,
         )
         self.finished.emit(result)
 
