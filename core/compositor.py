@@ -149,17 +149,21 @@ class Compositor:
         import cv2
         import numpy as np
         from collections import OrderedDict
+        import threading
         fh = open(store_path, "rb")
         cache: OrderedDict[int, np.ndarray] = OrderedDict()
-        cache_size = 12
+        cache_size = 256
+        _lock = threading.Lock()
 
         def loader(_i):
             if _i in cache:
-                cache.move_to_end(_i)
+                with _lock:
+                    cache.move_to_end(_i)
                 return cache[_i]
             off, length = offsets[_i]
-            fh.seek(off)
-            payload = fh.read(length)
+            with _lock:
+                fh.seek(off)
+                payload = fh.read(length)
             if not payload:
                 raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
             arr = np.frombuffer(payload, dtype=np.uint8)

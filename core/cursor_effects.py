@@ -2,6 +2,7 @@
 
 import math
 import os
+import threading
 import numpy as np
 from PIL import Image, ImageDraw
 from core.compositor import Effect, CompositorContext
@@ -18,6 +19,7 @@ class CursorEffect(Effect):
         self.cursor_theme = cursor_theme
         self.cursor_style = (
             cursor_style if cursor_style in self.CURSOR_STYLES else "dot")
+        self._state_lock = threading.Lock()
         # 状态
         self._smooth_x: float | None = None
         self._smooth_y: float | None = None
@@ -257,23 +259,15 @@ class CursorEffect(Effect):
         img = frame.copy()
         cx, cy = ctx.cursor_x, ctx.cursor_y
 
-        # 1. 平滑
-        if self.enabled["smooth"]:
-            cx, cy = self._apply_smooth(cx, cy)
-
-        # 2. Sway
-        if self.enabled["sway"]:
-            cx, cy = self._apply_sway(cx, cy, ctx.timestamp)
-
-        # 3. 拖尾
-        if self.enabled["trail"]:
-            self._record_trail(cx, cy)
-
-        # 4. 拖尾和点击波纹只创建局部图层，避免每帧分配全屏透明图。
-        clicks = ctx.click_events if self.enabled["ripple"] else []
-        self._draw_local_effects(img, clicks, ctx.timestamp)
-
-        # 5. 绘制光标
-        self._draw_cursor(img, cx, cy)
+        with self._state_lock:
+            if self.enabled["smooth"]:
+                cx, cy = self._apply_smooth(cx, cy)
+            if self.enabled["sway"]:
+                cx, cy = self._apply_sway(cx, cy, ctx.timestamp)
+            if self.enabled["trail"]:
+                self._record_trail(cx, cy)
+            clicks = ctx.click_events if self.enabled["ripple"] else []
+            self._draw_local_effects(img, clicks, ctx.timestamp)
+            self._draw_cursor(img, cx, cy)
 
         return img
