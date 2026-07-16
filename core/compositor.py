@@ -26,6 +26,7 @@ class CompositorContext:
     height: int
     raw_cursor_x: int = 0
     raw_cursor_y: int = 0
+    render_scale: float = 1.0
 
 
 class Effect(ABC):
@@ -58,11 +59,14 @@ class Compositor:
         self._crop_region = None  # CropRegion | None
         self._monitor_left = 0
         self._monitor_top = 0
+        self._frames_data_handle = None
 
     @property
     def frames(self): return self._frames
     @frames.setter
-    def frames(self, v): self._frames = v
+    def frames(self, v):
+        self._close_frames_data()
+        self._frames = v
 
     @property
     def cursor_events(self): return self._cursor_events
@@ -92,6 +96,7 @@ class Compositor:
     # ── 输入 ──────────────────────────────────────────────
 
     def load_frames(self, frames: list[CapturedFrame]):
+        self._close_frames_data()
         self._frames = list(frames)
         if frames:
             self._base_time = frames[0].timestamp
@@ -132,7 +137,9 @@ class Compositor:
             self.load_frames(frames)
         return len(frames)
 
-    def load_frames_data(self, store_path: str, frame_count: int, fps: float) -> int:
+    def load_frames_data(self, store_path: str, frame_count: int, fps: float,
+                         duration: float = 0.0,
+                         cache_max_bytes: int = 256 * 1024 * 1024) -> int:
         """从 CompressedFrameStore 文件加载帧。返回帧数。"""
         import json
         # 读取帧偏移索引
@@ -152,35 +159,61 @@ class Compositor:
         import threading
         fh = open(store_path, "rb")
         cache: OrderedDict[int, np.ndarray] = OrderedDict()
-        cache_size = 256
-        _lock = threading.Lock()
+        cache_nbytes = 0
+        cache_lock = threading.Lock()
+        read_lock = threading.Lock()
+        inflight: dict[int, threading.Event] = {}
 
         def loader(_i):
-            if _i in cache:
-                with _lock:
-                    cache.move_to_end(_i)
-                return cache[_i]
-            off, length = offsets[_i]
-            with _lock:
-                fh.seek(off)
-                payload = fh.read(length)
-            if not payload:
-                raise RuntimeError(f"帧 {_i}: 偏移 {off} 处读取到空数据")
-            arr = np.frombuffer(payload, dtype=np.uint8)
-            frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if frame_bgr is None:
-                raise RuntimeError(
-                    f"帧 {_i}: JPEG 解码失败 (offset={off}, len={length})")
-            rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
-            cache[_i] = rgb
-            cache.move_to_end(_i)
-            while len(cache) > cache_size:
-                cache.popitem(last=False)
+            nonlocal cache_nbytes
+            while True:
+                with cache_lock:
+                    cached = cache.pop(_i, None)
+                    if cached is not None:
+                        cache[_i] = cached
+                        return cached
+                    ready = inflight.get(_i)
+                    if ready is None:
+                        ready = threading.Event()
+                        inflight[_i] = ready
+                        break
+                ready.wait()
+
+            try:
+                off, length = offsets[_i]
+                with read_lock:
+                    fh.seek(off)
+                    payload = fh.read(length)
+                if not payload:
+                    raise RuntimeError(
+                        f"帧 {_i}: 偏移 {off} 处读取到空数据")
+                arr = np.frombuffer(payload, dtype=np.uint8)
+                frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame_bgr is None:
+                    raise RuntimeError(
+                        f"帧 {_i}: JPEG 解码失败 "
+                        f"(offset={off}, len={length})")
+                rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
+            except Exception:
+                with cache_lock:
+                    inflight.pop(_i).set()
+                raise
+
+            with cache_lock:
+                cache[_i] = rgb
+                cache_nbytes += rgb.nbytes
+                while cache_nbytes > cache_max_bytes and len(cache) > 1:
+                    _, evicted = cache.popitem(last=False)
+                    cache_nbytes -= evicted.nbytes
+                inflight.pop(_i).set()
             return rgb
 
-        frames: list = []
-        frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
         actual_count = max(frame_count, len(offsets))
+        frames: list = []
+        frame_interval = (
+            duration / actual_count if duration > 0 and actual_count > 0
+            else 1.0 / fps if fps > 0 else 1.0 / 30
+        )
         for i in range(actual_count):
             timestamp = i * frame_interval
             from core.screen_capture import CapturedFrame
@@ -191,7 +224,18 @@ class Compositor:
         if frames:
             self.fps = fps
             self.load_frames(frames)
+            self._frames_data_handle = fh
+        else:
+            fh.close()
         return len(frames)
+
+    def _close_frames_data(self):
+        if self._frames_data_handle is not None:
+            self._frames_data_handle.close()
+            self._frames_data_handle = None
+
+    def close(self):
+        self._close_frames_data()
 
     @property
     def source_duration(self) -> float:
@@ -387,9 +431,13 @@ class Compositor:
             y = int((y - crop_y) * height / max(crop_h, 1))
         return x, y
 
-    def compose(self, frame: CapturedFrame,
-                timeline_ts: float | None = None,
-                preview: bool = False) -> Image.Image:
+    def prepare_frame(self, frame: CapturedFrame,
+                      timeline_ts: float | None = None,
+                      preview: bool = False,
+                      output_size: tuple[int, int] | None = None,
+                      output_mode: str | None = None,
+                      frame_index: int | None = None
+                      ) -> tuple[Image.Image, CompositorContext]:
         try:
             img = Image.fromarray(frame.data, mode="RGB")
         except RuntimeError:
@@ -402,6 +450,8 @@ class Compositor:
         if timeline_ts is None:
             timeline_ts = source_ts
         w, h = self.width, self.height
+        target_w, target_h = output_size or (w, h)
+        direct_resize = output_size is not None and self._crop_region is None
 
         cx, cy = self._interpolate_cursor(source_ts)
 
@@ -413,7 +463,10 @@ class Compositor:
             zy = max(0, min(zy, h - zh))
             zoom = (zx, zy, zw, zh)
             img = self._resize_crop(
-                img, (zx, zy, zx + zw, zy + zh), preview)
+                img, (zx, zy, zx + zw, zy + zh), preview,
+                size=(target_w, target_h) if direct_resize else (w, h),
+                zoom=True,
+            )
             zoom_cx, zoom_cy = self._transform_point(
                 cx, cy, w, h, zoom=zoom)
 
@@ -430,10 +483,19 @@ class Compositor:
                 crop_rect = (cx_c, cy_c, cw_c, ch_c)
                 img = self._resize_crop(
                     img, (cx_c, cy_c, cx_c + cw_c, cy_c + ch_c),
-                    preview,
+                    preview, size=(w, h),
                 )
                 zoom_cx, zoom_cy = self._transform_point(
                     zoom_cx, zoom_cy, w, h, crop_rect=crop_rect)
+
+        if img.size != (target_w, target_h):
+            img = img.resize(
+                (target_w, target_h), self._resize_filter(preview))
+
+        scale_x = target_w / max(w, 1)
+        scale_y = target_h / max(h, 1)
+        zoom_cx = round(zoom_cx * scale_x)
+        zoom_cy = round(zoom_cy * scale_y)
 
         transformed_clicks = []
         for click_x, click_y, click_ts in self._click_events:
@@ -442,9 +504,10 @@ class Compositor:
             point_x, point_y = self._transform_point(
                 point_x, point_y, w, h, zoom=zoom,
                 crop_rect=crop_rect)
-            transformed_clicks.append((point_x, point_y, click_ts))
+            transformed_clicks.append((
+                round(point_x * scale_x), round(point_y * scale_y), click_ts))
 
-        if img.mode != "RGBA":
+        if output_mode is None and img.mode != "RGBA":
             img = img.convert("RGBA")
 
         ctx = CompositorContext(
@@ -452,15 +515,32 @@ class Compositor:
             cursor_x=zoom_cx, cursor_y=zoom_cy,
             cursor_state=self._cursor_state,
             click_events=transformed_clicks,
-            frame_index=self._frame_index,
+            frame_index=(self._frame_index if frame_index is None
+                         else frame_index),
             timestamp=source_ts,
             zoom_rect=zoom,
-            width=w, height=h,
+            width=target_w, height=target_h,
             raw_cursor_x=cx, raw_cursor_y=cy,
+            render_scale=min(scale_x, scale_y),
         )
+        return img, ctx
 
+    def apply_effects(self, img: Image.Image, ctx: CompositorContext,
+                      output_mode: str | None = None) -> Image.Image:
         for name, effect in self._effects.items():
             img = effect.apply(img, ctx)
+        if output_mode is not None and img.mode != output_mode:
+            img = img.convert(output_mode)
+        return img
+
+    def compose(self, frame: CapturedFrame,
+                timeline_ts: float | None = None,
+                preview: bool = False,
+                output_size: tuple[int, int] | None = None,
+                output_mode: str | None = None) -> Image.Image:
+        img, ctx = self.prepare_frame(
+            frame, timeline_ts, preview, output_size, output_mode)
+        img = self.apply_effects(img, ctx, output_mode)
 
         self._frame_index += 1
         return img
@@ -481,9 +561,18 @@ class Compositor:
 
     @property
     def total_output_frames(self) -> int:
-        if not self._clips:
-            return len(self._frames)
-        return max(0, math.ceil(max(c.end for c in self._clips) * self.fps))
+        return self.total_output_frames_for(self.fps)
+
+    def total_output_frames_for(self, render_fps: float) -> int:
+        if render_fps <= 0:
+            return 0
+        if self._clips:
+            duration = max(c.end for c in self._clips)
+        else:
+            duration = self.source_duration
+            if duration <= 0 and self._frames:
+                duration = len(self._frames) / self.fps
+        return max(0, math.ceil(duration * render_fps))
 
     def _source_index_at(self, timeline_ts: float) -> int | None:
         """将时间线时刻映射到源帧；空洞返回 None。"""
@@ -510,24 +599,33 @@ class Compositor:
         after = self._frame_times[position]
         return position - 1 if source_time - before <= after - source_time else position
 
-    def iter_frame_meta(self, start: int = 0, end: int = None):
+    def iter_frame_meta(self, start: int = 0, end: int | None = None,
+                        render_fps: float | None = None):
         """并行导出用的帧迭代器，返回 (序号, 原始帧或None, 时间线时间戳)。
         与 render_all 不同，不调用 compose()，由调用方在子线程中 compose。"""
-        if not self._clips:
-            frames = self._frames[start:end]
-            for offset, frame in enumerate(frames, start=start):
-                yield offset, frame, offset / self.fps
-            return
-
-        output_end = self.total_output_frames if end is None else min(
-            end, self.total_output_frames)
+        fps = render_fps or self.fps
+        total = self.total_output_frames_for(fps)
+        output_end = total if end is None else min(end, total)
         for output_idx in range(max(0, start), output_end):
-            ts = output_idx / self.fps
-            source_idx = self._source_index_at(ts)
+            ts = output_idx / fps
+            source_idx = (self._source_index_at(ts) if self._clips
+                          else self._nearest_source_index(ts))
             if source_idx is None:
                 yield output_idx, None, ts
             else:
                 yield output_idx, self._frames[source_idx], ts
+
+    def _nearest_source_index(self, source_time: float) -> int | None:
+        if not self._frame_times or source_time < 0:
+            return None
+        position = bisect.bisect_left(self._frame_times, source_time)
+        if position <= 0:
+            return 0
+        if position >= len(self._frame_times):
+            return len(self._frame_times) - 1
+        before = self._frame_times[position - 1]
+        after = self._frame_times[position]
+        return position - 1 if source_time - before <= after - source_time else position
 
     def render_all(self, start: int = 0, end: int = None
                    ) -> Generator[Image.Image, None, None]:
@@ -551,7 +649,9 @@ class Compositor:
     def set_preview_quality(self, quality: float):
         self._preview_quality = max(0.1, min(1.0, quality))
 
-    def _resize_filter(self, preview: bool):
+    def _resize_filter(self, preview: bool, zoom: bool = False):
+        if zoom:
+            return Image.BILINEAR
         if not preview:
             return Image.LANCZOS
         if self._preview_quality >= 0.75:
@@ -559,9 +659,11 @@ class Compositor:
         return Image.BILINEAR
 
     def _resize_crop(self, image: Image.Image, box: tuple,
-                     preview: bool) -> Image.Image:
+                     preview: bool, size: tuple[int, int] | None = None,
+                     zoom: bool = False) -> Image.Image:
         return image.crop(box).resize(
-            (self.width, self.height), self._resize_filter(preview))
+            size or (self.width, self.height),
+            self._resize_filter(preview, zoom=zoom))
 
     def get_preview_quality(self) -> float:
         return self._preview_quality

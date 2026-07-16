@@ -352,6 +352,7 @@ class TestCompositorPreviewQuality:
 
         assert c._resize_filter(preview=True) == Image.BILINEAR
         assert c._resize_filter(preview=False) == Image.LANCZOS
+        assert c._resize_filter(preview=False, zoom=True) == Image.BILINEAR
 
         c.set_preview_quality(0.9)
         assert c._resize_filter(preview=True) == Image.BICUBIC
@@ -393,6 +394,48 @@ class TestTimestampBasedTiming:
         c.load_clips([Clip(type="video", start=0, end=10)])
 
         assert c._source_index_at(5.0) == 200
+
+    def test_render_fps_changes_frame_count_without_changing_duration(self):
+        c = Compositor(1, 1, 25)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 25,
+            index=i,
+        ) for i in range(250)]
+        c.load_frames(frames)
+        c.load_clips([Clip(type="video", start=0, end=10)])
+
+        assert c.total_output_frames_for(30) == 300
+        assert c.total_output_frames_for(60) == 600
+        assert list(c.iter_frame_meta(render_fps=30))[-1][2] == pytest.approx(
+            299 / 30)
+
+
+class TestExportComposition:
+    def test_compose_can_output_target_size_in_rgb(self):
+        c = Compositor(200, 100, 30)
+        frame = CapturedFrame(
+            data=np.zeros((100, 200, 3), dtype=np.uint8),
+            timestamp=0.0,
+            index=0,
+        )
+        c.load_frames([frame])
+        captured = {}
+
+        class CaptureContext(Effect):
+            def apply(self, image, ctx):
+                captured["cursor"] = (ctx.cursor_x, ctx.cursor_y)
+                captured["size"] = (ctx.width, ctx.height)
+                return image
+
+        c.register_effect("capture", CaptureContext())
+
+        result = c.compose(
+            frame, output_size=(100, 50), output_mode="RGB")
+
+        assert result.size == (100, 50)
+        assert result.mode == "RGB"
+        assert captured == {"cursor": (50, 25), "size": (100, 50)}
 
 
 class TestCapturedFrameDataclass:
