@@ -31,8 +31,8 @@ def is_gpu_available() -> bool:
         result = subprocess.run(
             ["ffmpeg", "-hide_banner", "-init_hw_device", "cuda=cuda:0",
              "-f", "lavfi", "-i", "testsrc=duration=0.1:size=320x240:rate=10",
-             "-vf", "hwupload_cuda,scale_cuda=320:240", "-c:v", "h264_nvenc",
-             "-b:v", "1M", "-f", "null", "-"],
+             "-c:v", "h264_nvenc", "-b:v", "1M",
+             "-f", "null", "-"],
             capture_output=True, timeout=10,
         )
         _gpu_available_cache = result.returncode == 0
@@ -123,7 +123,13 @@ class ExportWorker(QObject):
                                             error=f"导出异常: {exc}"))
 
     @staticmethod
-    def _process_one(img, index, target_w, target_h, pix_fmt):
+    def _compose_and_encode(compositor, raw_frame, index, ts,
+                            target_w, target_h, pix_fmt):
+        if raw_frame is None:
+            img = Image.new("RGBA", (compositor.width, compositor.height),
+                            (0, 0, 0, 255))
+        else:
+            img = compositor.compose(raw_frame, ts)
         if img.size != (target_w, target_h):
             img = img.resize((target_w, target_h), Image.LANCZOS)
         if img.mode != pix_fmt:
@@ -140,15 +146,16 @@ class ExportWorker(QObject):
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            frame_iter = enumerate(c.render_all())
+            frame_iter = c.iter_frame_meta()
 
             for _ in range(buffer_size):
                 try:
-                    idx, frame = next(frame_iter)
+                    idx, raw_frame, ts = next(frame_iter)
                 except StopIteration:
                     break
                 futures.append(executor.submit(
-                    self._process_one, frame, idx, w, h, pix_fmt))
+                    self._compose_and_encode, c, raw_frame, idx, ts,
+                    w, h, pix_fmt))
 
             while futures:
                 idx, data = futures[0].result()
@@ -180,11 +187,12 @@ class ExportWorker(QObject):
                 self.progress.emit(int((idx + 1) / total * 100))
 
                 try:
-                    next_idx, next_frame = next(frame_iter)
+                    next_idx, next_frame, next_ts = next(frame_iter)
                 except StopIteration:
                     continue
                 futures.append(executor.submit(
-                    self._process_one, next_frame, next_idx, w, h, pix_fmt))
+                    self._compose_and_encode, c, next_frame, next_idx,
+                    next_ts, w, h, pix_fmt))
 
         return True
 
@@ -368,10 +376,9 @@ class ExportWorker(QObject):
 
         final_wav = mixed_wav or orig_wav
 
-        # 视频输入：rgba（NVENC 原生支持，无需 yuv 转换）
+        # 视频输入：rgba（NVENC 原生支持，无需 hwupload）
         video = ffmpeg.input("pipe:", format="rawvideo",
                               pix_fmt="rgba", s=f"{w}x{h}", r=c.fps)
-        video = video.filter("hwupload_cuda")
 
         if final_wav:
             audio_input = ffmpeg.input(final_wav)

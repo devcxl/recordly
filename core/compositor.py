@@ -506,6 +506,25 @@ class Compositor:
         after = self._frame_times[position]
         return position - 1 if source_time - before <= after - source_time else position
 
+    def iter_frame_meta(self, start: int = 0, end: int = None):
+        """并行导出用的帧迭代器，返回 (序号, 原始帧或None, 时间线时间戳)。
+        与 render_all 不同，不调用 compose()，由调用方在子线程中 compose。"""
+        if not self._clips:
+            frames = self._frames[start:end]
+            for offset, frame in enumerate(frames, start=start):
+                yield offset, frame, offset / self.fps
+            return
+
+        output_end = self.total_output_frames if end is None else min(
+            end, self.total_output_frames)
+        for output_idx in range(max(0, start), output_end):
+            ts = output_idx / self.fps
+            source_idx = self._source_index_at(ts)
+            if source_idx is None:
+                yield output_idx, None, ts
+            else:
+                yield output_idx, self._frames[source_idx], ts
+
     def render_all(self, start: int = 0, end: int = None
                    ) -> Generator[Image.Image, None, None]:
         if not self._clips:
