@@ -23,7 +23,8 @@ class CursorEffect(Effect):
         # 状态
         self._smooth_x: float | None = None
         self._smooth_y: float | None = None
-        self._trail: list[tuple[int, int]] = []
+        self._trail: list[tuple[int, int, float]] = []
+        self._last_render_timestamp: float | None = None
         self._ripples: list[tuple[int, int, float]] = []  # (x, y, start_time)
         self._sway_time = 0.0
 
@@ -71,37 +72,26 @@ class CursorEffect(Effect):
 
     # ── 各效果实现 ────────────────────────────────────────
 
-    def _apply_smooth(self, cx: int, cy: int) -> tuple[int, int]:
-        if self._smooth_x is None:
+    def _apply_smooth(self, cx: int, cy: int,
+                      elapsed: float | None = None,
+                      reference_fps: float = 60.0) -> tuple[int, int]:
+        if self._smooth_x is None or self._smooth_y is None:
             self._smooth_x, self._smooth_y = float(cx), float(cy)
             return cx, cy
-        self._smooth_x += (cx - self._smooth_x) * self.smooth_alpha
-        self._smooth_y += (cy - self._smooth_y) * self.smooth_alpha
-        return int(self._smooth_x), int(self._smooth_y)
+        alpha = self.smooth_alpha
+        if elapsed is not None:
+            steps = max(0.0, elapsed * max(reference_fps, 1.0))
+            alpha = 1 - (1 - self.smooth_alpha) ** steps
+        smooth_x = self._smooth_x + (cx - self._smooth_x) * alpha
+        smooth_y = self._smooth_y + (cy - self._smooth_y) * alpha
+        self._smooth_x, self._smooth_y = smooth_x, smooth_y
+        return int(smooth_x), int(smooth_y)
 
     def _apply_sway(self, cx: int, cy: int, ts: float,
                     scale: float = 1.0) -> tuple[int, int]:
         offset = self.sway_amplitude * scale * math.sin(
             self.sway_frequency * ts * math.pi * 2)
         return cx + int(offset), cy
-
-    def _draw_trail(self, draw: ImageDraw.ImageDraw,
-                    cursor_x: int, cursor_y: int,
-                    ctx: CompositorContext):
-        self._trail.append((cursor_x, cursor_y))
-        if len(self._trail) > self.trail_length:
-            self._trail.pop(0)
-        for i, (tx, ty) in enumerate(self._trail):
-            alpha = int(self.trail_opacity * ((i + 1) / len(self._trail)))
-            radius = max(1, int(self.cursor_size * 0.12
-                                * ((i + 1) / len(self._trail))))
-            color = ((255, 255, 255, alpha)
-                     if self.cursor_theme == "dark"
-                     else (25, 25, 25, alpha))
-            draw.ellipse(
-                [tx - radius, ty - radius, tx + radius, ty + radius],
-                fill=color,
-            )
 
     def _draw_ripples(self, draw: ImageDraw.ImageDraw,
                       clicks: list[tuple[int, int, float]],
@@ -214,16 +204,23 @@ class CursorEffect(Effect):
 
         img.paste(overlay, destination, overlay)
 
-    def _record_trail(self, cursor_x: int, cursor_y: int):
-        self._trail.append((cursor_x, cursor_y))
-        if len(self._trail) > self.trail_length:
+    def _record_trail(self, cursor_x: int, cursor_y: int,
+                      timestamp: float, reference_fps: float):
+        point = (cursor_x, cursor_y, timestamp)
+        if self._trail and self._trail[-1][2] == timestamp:
+            self._trail[-1] = point
+        else:
+            self._trail.append(point)
+        duration = self.trail_length / max(reference_fps, 1.0)
+        while (len(self._trail) > self.trail_length
+               or timestamp - self._trail[0][2] > duration):
             self._trail.pop(0)
 
     def _draw_local_effects(self, img: Image.Image,
                             clicks: list[tuple[int, int, float]],
                             current_time: float, scale: float = 1.0):
         if self.enabled["trail"] and self._trail:
-            for i, (tx, ty) in enumerate(self._trail):
+            for i, (tx, ty, _) in enumerate(self._trail):
                 alpha = int(self.trail_opacity * ((i + 1) / len(self._trail)))
                 radius = max(1, int(self.cursor_size * scale * 0.12
                                     * ((i + 1) / len(self._trail))))
@@ -264,16 +261,29 @@ class CursorEffect(Effect):
         img = frame.copy()
         cx, cy = ctx.cursor_x, ctx.cursor_y
         scale = max(ctx.render_scale, 0.01)
+        render_timestamp = (
+            ctx.render_timestamp if ctx.render_timestamp is not None
+            else ctx.timestamp)
 
         with self._state_lock:
+            if (self._last_render_timestamp is not None
+                    and render_timestamp < self._last_render_timestamp):
+                self._smooth_x = None
+                self._smooth_y = None
+                self._trail.clear()
+            elapsed = (None if self._last_render_timestamp is None
+                       else render_timestamp - self._last_render_timestamp)
             if self.enabled["smooth"]:
-                cx, cy = self._apply_smooth(cx, cy)
+                cx, cy = self._apply_smooth(
+                    cx, cy, elapsed, ctx.reference_fps)
             if self.enabled["sway"]:
                 cx, cy = self._apply_sway(cx, cy, ctx.timestamp, scale)
             if self.enabled["trail"]:
-                self._record_trail(cx, cy)
+                self._record_trail(
+                    cx, cy, render_timestamp, ctx.reference_fps)
             clicks = ctx.click_events if self.enabled["ripple"] else []
             self._draw_local_effects(img, clicks, ctx.timestamp, scale)
             self._draw_cursor(img, cx, cy, scale)
+            self._last_render_timestamp = render_timestamp
 
         return img

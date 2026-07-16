@@ -99,9 +99,9 @@ class TestCursorTimebase:
 
 
 class TestGifFps:
-    """GIF 导出使用 fps filter 降采样，保持输入 r=compositor.fps"""
+    """GIF 直接按目标 FPS 合成，避免生成后再丢帧。"""
 
-    def test_gif_graph_uses_fps_filter_before_split(self):
+    def test_gif_graph_uses_target_fps_before_split(self):
         import ffmpeg
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
@@ -109,9 +109,9 @@ class TestGifFps:
         worker = ExportWorker(Compositor(320, 240, 30), None,
                               ExportSettings(output_path="out.gif", format="gif", fps=15))
         command = " ".join(ffmpeg.compile(worker._build_gif_output(320, 240)))
-        assert "-r 30" in command
-        assert "fps=fps=15" in command
-        assert "round=near" in command
+        assert "-pix_fmt rgb24" in command
+        assert "-r 15" in command
+        assert "fps=fps=" not in command
 
     def test_gif_real_export_has_correct_fps_and_duration(self, tmp_path):
         import shutil
@@ -121,12 +121,25 @@ class TestGifFps:
 
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
+        from core.screen_capture import CapturedFrame
 
         compositor = Compositor(32, 32, 30)
-        compositor._frames = [type("F", (), {
-            "data": np.full((32, 32, 3), 128, dtype=np.uint8),
-            "timestamp": i / 30.0, "index": i,
-        })() for i in range(30)]
+        compositor.load_frames([CapturedFrame(
+            data=np.full((32, 32, 3), 128, dtype=np.uint8),
+            timestamp=i / 30.0, index=i,
+        ) for i in range(30)])
+        prepared_frames = 0
+        prepare_options = []
+        original_prepare = compositor.prepare_frame
+
+        def tracked_prepare(*args, **kwargs):
+            nonlocal prepared_frames
+            prepared_frames += 1
+            prepare_options.append((
+                kwargs.get("output_size"), kwargs.get("output_mode")))
+            return original_prepare(*args, **kwargs)
+
+        compositor.prepare_frame = tracked_prepare
 
         worker = ExportWorker(compositor, None,
                               ExportSettings(output_path=str(tmp_path / "test.gif"),
@@ -139,6 +152,9 @@ class TestGifFps:
         for frame_index in range(n_frames):
             gif.seek(frame_index)
             duration_ms += gif.info.get("duration", 0)
+        assert prepared_frames == 10
+        assert set(prepare_options) == {((32, 32), "RGB")}
+        assert n_frames == 10
         assert duration_ms == 1000, f"期望 1000ms, 实际 {duration_ms}ms ({n_frames} 帧)"
 
 

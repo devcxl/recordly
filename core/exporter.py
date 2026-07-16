@@ -128,7 +128,8 @@ class ExportWorker(QObject):
         if raw_frame is None:
             size = ((target_w, target_h) if direct_output
                     else (compositor.width, compositor.height))
-            return index, Image.new(pix_fmt, size, 0), None
+            color = (0, 0, 0, 255) if pix_fmt == "RGBA" else 0
+            return index, Image.new(pix_fmt, size, color), None
         img, ctx = compositor.prepare_frame(
             raw_frame,
             ts,
@@ -495,16 +496,13 @@ class ExportWorker(QObject):
     # ── GIF ────────────────────────────────────────────
 
     def _build_gif_output(self, width: int, height: int):
-        """构建 palettegen 与 paletteuse 显式连接的 GIF 滤镜图。
-        在 split 前对 rawvideo 应用 fps 降采样，输入保持 compositor.fps，
-        输出使用 settings.fps 确保总时长不变。"""
+        """构建 palettegen 与 paletteuse 显式连接的 GIF 滤镜图。"""
         s = self._settings
         source = ffmpeg.input(
-            "pipe:", format="rawvideo", pix_fmt="rgba",
-            s=f"{width}x{height}", r=self._compositor.fps,
+            "pipe:", format="rawvideo", pix_fmt="rgb24",
+            s=f"{width}x{height}", r=s.fps,
         )
-        downsampled = source.filter("fps", fps=s.fps, round="near")
-        split = downsampled.filter_multi_output("split")
+        split = source.filter_multi_output("split")
         palette = split[0].filter("palettegen", stats_mode="diff")
         gif_video = ffmpeg.filter(
             [split[1], palette], "paletteuse",
@@ -533,7 +531,7 @@ class ExportWorker(QObject):
             w = int(w * s.crop_region.width)
             h = int(h * s.crop_region.height)
 
-        total = c.total_output_frames
+        total = c.total_output_frames_for(s.fps)
         if total == 0:
             self.finished.emit(ExportResult(False, s.output_path,
                                             error="没有帧可以导出"))
@@ -543,46 +541,40 @@ class ExportWorker(QObject):
             pipe_stdin=True, pipe_stderr=True)
         self._process = process
         stderr_thread, stderr_chunks = _start_stderr_reader(process)
-        gif_cancelled = False
         try:
-            for i, frame in enumerate(c.render_all()):
-                if self._cancelled:
-                    gif_cancelled = True
-                    process.terminate()
-                    self.finished.emit(ExportResult(False, s.output_path,
-                                                    error="已取消"))
-                    return
-                if frame.size != (w, h):
-                    frame = frame.resize((w, h), Image.LANCZOS)
-                if frame.mode != "RGBA":
-                    frame = frame.convert("RGBA")
-                try:
-                    process.stdin.write(frame.tobytes())
-                except BrokenPipeError:
-                    break
-                self.progress.emit(int((i + 1) / total * 100))
-            if not gif_cancelled:
-                process.stdin.close()
-                returncode = process.wait()
-                stderr_thread.join(timeout=5)
-                stderr_text = "".join(stderr_chunks)
-                output_exists = os.path.exists(s.output_path) and os.path.getsize(s.output_path) > 0
-                if returncode != 0 or not output_exists:
-                    self.finished.emit(ExportResult(
-                        False, s.output_path,
-                        error=f"FFmpeg GIF 导出失败: {stderr_text.strip() or returncode}",
-                    ))
-                    return
+            direct_output = (
+                src_w * h == src_h * w
+                and not (s.crop_region and (
+                    s.crop_region.width < 1.0
+                    or s.crop_region.height < 1.0))
+            )
+            if not self._stream_frames_parallel(
+                    total, w, h, "RGB", stderr_thread, stderr_chunks,
+                    render_fps=s.fps, direct_output=direct_output):
+                return
+            process.stdin.close()
+            returncode = process.wait()
+            stderr_thread.join(timeout=5)
+            stderr_text = "".join(stderr_chunks)
+            output_exists = (
+                os.path.exists(s.output_path)
+                and os.path.getsize(s.output_path) > 0)
+            if returncode != 0 or not output_exists:
                 self.finished.emit(ExportResult(
-                    success=True, path=s.output_path,
-                    size_bytes=os.path.getsize(s.output_path),
-                    duration=total / c.fps,
+                    False, s.output_path,
+                    error=("FFmpeg GIF 导出失败: "
+                           f"{stderr_text.strip() or returncode}"),
                 ))
+                return
+            self.finished.emit(ExportResult(
+                success=True, path=s.output_path,
+                size_bytes=os.path.getsize(s.output_path),
+                duration=total / s.fps,
+            ))
         finally:
             self._process = None
-            if not gif_cancelled:
-                stderr_thread.join(timeout=3)
-            if gif_cancelled and os.path.exists(s.output_path):
+            stderr_thread.join(timeout=3)
+            if self._cancelled and os.path.exists(s.output_path):
                 try:
                     os.remove(s.output_path)
                 except OSError:

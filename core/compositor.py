@@ -27,6 +27,8 @@ class CompositorContext:
     raw_cursor_x: int = 0
     raw_cursor_y: int = 0
     render_scale: float = 1.0
+    render_timestamp: float | None = None
+    reference_fps: float = 60.0
 
 
 class Effect(ABC):
@@ -522,6 +524,8 @@ class Compositor:
             width=target_w, height=target_h,
             raw_cursor_x=cx, raw_cursor_y=cy,
             render_scale=min(scale_x, scale_y),
+            render_timestamp=timeline_ts,
+            reference_fps=self.fps,
         )
         return img, ctx
 

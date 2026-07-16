@@ -134,7 +134,7 @@ class TestExportWorker:
         assert "amix=inputs=2:duration=longest" in filtergraph
         assert "atrim=duration=8.0" in filtergraph
 
-    def test_gif_graph_connects_palette_and_keeps_source_timing(self):
+    def test_gif_graph_uses_target_fps_without_downsampling_filter(self):
         import ffmpeg
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
@@ -150,9 +150,9 @@ class TestExportWorker:
 
         assert "palettegen" in command
         assert "paletteuse" in command
-        # 输入保持 compositor.fps, split 前有 fps 降采样
-        assert "-r 30" in command, "输入应保持 compositor.fps"
-        assert "fps=fps=15" in command, "fps filter 应降采样到 settings.fps"
+        assert "-pix_fmt rgb24" in command
+        assert "-r 15" in command, "输入应直接使用 GIF 目标 FPS"
+        assert "fps=fps=" not in command
 
     def test_parallel_stream_refills_behind_slow_first_frame(self, monkeypatch):
         import threading
