@@ -14,3 +14,8 @@ Thumbs.db
 *.swp
 *.bak
 .aur/out/
+.aur/pkg/
+.aur/src/
+.aur/*.tar.gz
+.opencode/
+*.spec.bak

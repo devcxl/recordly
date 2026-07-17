@@ -9,10 +9,15 @@ from app.config import AppConfig
 from app.main_window import MainWindow
 
 
+def _resource_path(relative: str) -> str:
+    """PyInstaller 打包后资源在 sys._MEIPASS，开发时相对于 __file__"""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+    return os.path.join(base, relative)
+
+
 def _load_stylesheet() -> str:
-    qss_path = os.path.join(os.path.dirname(__file__), "resources", "style.qss")
     try:
-        with open(qss_path, "r", encoding="utf-8") as f:
+        with open(_resource_path(os.path.join("resources", "style.qss")), encoding="utf-8") as f:
             return f.read()
     except (FileNotFoundError, PermissionError):
         return ""
