@@ -10,7 +10,7 @@ class TestProject:
     def test_create_default_project(self):
         """默认项目有正确的初始值"""
         p = Project()
-        assert p.version == "1.1"
+        assert p.version == Project.VERSION
         assert p.timeline == []
         assert p.source is None
         assert isinstance(p.cursor, CursorSettings)
@@ -43,7 +43,7 @@ class TestProject:
             # 验证文件内容
             with open(path) as f:
                 data = json.load(f)
-            assert data["version"] == "1.1"
+            assert data["version"] == Project.VERSION
             assert len(data["timeline"]) == 2
             assert data["source"]["fps"] == 30
             assert data["cursor"]["style"] == "macos-dark"
@@ -51,7 +51,7 @@ class TestProject:
 
             # 加载验证
             loaded = Project.load(path)
-            assert loaded.version == "1.1"
+            assert loaded.version == Project.VERSION
             assert loaded.source.fps == 30
             assert loaded.source.width == 1920
             assert len(loaded.timeline) == 2
@@ -93,7 +93,7 @@ class TestProject:
         try:
             p.save(path)
             loaded = Project.load(path)
-            assert loaded.version == "1.1"
+            assert loaded.version == Project.VERSION
         finally:
             os.unlink(path)
 
