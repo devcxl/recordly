@@ -3,18 +3,13 @@
 
 pkgname=recordly
 pkgver=1.0.3
-pkgrel=1
+pkgrel=2
 pkgdesc="开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出"
 arch=('any')
 url="https://github.com/devcxl/recordly"
 license=('MIT')
 depends=(
     'python>=3.10'
-    'python-pyqt5'
-    'python-pillow'
-    'python-numpy'
-    'python-mss'
-    'python-opencv'
     'ffmpeg'
     'portaudio'
 )
@@ -38,8 +33,8 @@ package() {
     cd "$srcdir/$pkgname-$pkgver"
     python -m installer --destdir="$pkgdir" dist/*.whl
 
-    # pip 安装非 Arch 系统包的纯 Python 依赖
     pip install --root="$pkgdir" --prefix=/usr --no-deps --no-compile \
+        PyQt5 Pillow numpy mss opencv-python-headless \
         pynput sounddevice ffmpeg-python future
 
     install -Dm644 debian/recordly.desktop \
