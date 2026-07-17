@@ -27,6 +27,7 @@ jobs:
             python3-pil \
             python3-numpy \
             python3-opencv \
+            python3-xlib \
             ffmpeg \
             libportaudio2 \
             pulseaudio-utils
