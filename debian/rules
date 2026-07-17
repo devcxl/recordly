@@ -36,7 +36,7 @@ override_dh_auto_install:
 		--no-compile \
 		--root=$(CURDIR)/debian/recordly \
 		--target=/usr/lib/python3/dist-packages \
-		mss pynput sounddevice audio2numpy 2>&1
+		mss pynput sounddevice ffmpeg-python future 2>&1
 
 	# 4. 安装可执行入口（/usr/bin/recordly）
 	install -d $(CURDIR)/debian/recordly/usr/bin

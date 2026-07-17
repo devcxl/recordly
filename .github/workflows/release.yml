@@ -26,13 +26,14 @@ jobs:
             python3-pyqt5 \
             python3-pil \
             python3-numpy \
+            python3-opencv \
             ffmpeg \
             libportaudio2 \
             pulseaudio-utils
 
       - name: Install pip-only dependencies
         run: |
-          pip install --break-system-packages --no-deps mss pynput sounddevice
+          pip install --break-system-packages --no-deps mss pynput sounddevice ffmpeg-python future
 
       - name: Build Debian package
         run: |
