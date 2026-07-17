@@ -1390,7 +1390,7 @@ class MainWindow(QMainWindow):
 
     def _on_about(self):
         QMessageBox.about(self, "关于 Recordly",
-            "Recordly v1.0\n\n"
+            "Recordly v1.0.4\n\n"
             "开源演示视频录制与编辑工具\n\n"
             "作者：devcxl\n"
             "GitHub：https://github.com/devcxl/recordly")

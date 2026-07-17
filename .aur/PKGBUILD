@@ -2,18 +2,18 @@
 # Contributor: devcxl <64475363+devcxl@users.noreply.github.com>
 
 pkgname=recordly
-pkgver=1.0.3
-pkgrel=3
+pkgver=1.0.4
+pkgrel=1
 pkgdesc="开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出"
 arch=('any')
 url="https://github.com/devcxl/recordly"
 license=('MIT')
 depends=(
-    'python>=3.10'
     'ffmpeg'
     'portaudio'
 )
 makedepends=(
+    'python>=3.10'
     'python-build'
     'python-installer'
     'python-wheel'
@@ -26,17 +26,17 @@ validpgpkeys=('SKIP')
 
 build() {
     cd "$srcdir/$pkgname-$pkgver"
-    python -m build --wheel --no-isolation
+    pip install --break-system-packages pyinstaller
+    pip install --break-system-packages .
+    pyinstaller recordly.spec --distpath="$srcdir/dist" --workpath="$srcdir/build"
 }
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
-    pip install --root="$pkgdir" --prefix=/usr dist/*.whl
-
-    install -Dm644 debian/recordly.desktop \
+    install -Dm755 "$srcdir/dist/recordly" "$pkgdir/usr/bin/recordly"
+    install -Dm644 "$srcdir/$pkgname-$pkgver/debian/recordly.desktop" \
         "$pkgdir/usr/share/applications/recordly.desktop"
-    install -Dm644 resources/icons/recordly.svg \
+    install -Dm644 "$srcdir/$pkgname-$pkgver/resources/icons/recordly.svg" \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/recordly.svg"
-    install -Dm644 debian/io.github.devcxl.recordly.appdata.xml \
+    install -Dm644 "$srcdir/$pkgname-$pkgver/debian/io.github.devcxl.recordly.appdata.xml" \
         "$pkgdir/usr/share/metainfo/io.github.devcxl.recordly.appdata.xml"
 }
