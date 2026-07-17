@@ -3,7 +3,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="recordly",
-    version="1.0.0",
+    version="1.0.3",
     description="开源屏幕录制与回放工具",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
@@ -19,11 +19,13 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "PyQt5>=5.15",
-        "numpy>=1.20",
-        "Pillow>=9.0",
-        "mss>=5.0",
+        "numpy>=1.24",
+        "Pillow>=10.0",
+        "mss>=9.0",
+        "opencv-python-headless>=4.8",
         "pynput>=1.7",
-        "sounddevice>=0.4",
+        "sounddevice>=0.5",
+        "ffmpeg-python>=0.2",
     ],
     extras_require={
         "test": [

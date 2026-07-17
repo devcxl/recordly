@@ -179,7 +179,7 @@ class SourceInfo:
 class Project:
     """Recordly 项目文件模型"""
 
-    VERSION = "1.0.2"
+    VERSION = "1.0.3"
 
     def __init__(self):
         self.version = self.VERSION

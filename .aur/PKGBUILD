@@ -2,8 +2,8 @@
 # Contributor: devcxl <64475363+devcxl@users.noreply.github.com>
 
 pkgname=recordly
-pkgver=1.0.2
-pkgrel=2
+pkgver=1.0.3
+pkgrel=1
 pkgdesc="开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出"
 arch=('any')
 url="https://github.com/devcxl/recordly"
@@ -38,18 +38,14 @@ package() {
     cd "$srcdir/$pkgname-$pkgver"
     python -m installer --destdir="$pkgdir" dist/*.whl
 
-    # pip 安装纯 Python 依赖（不在 Arch 官方源）
-    pip install --root="$pkgdir" --prefix=/usr --no-deps --no-compile pynput sounddevice ffmpeg-python
+    # pip 安装非 Arch 系统包的纯 Python 依赖
+    pip install --root="$pkgdir" --prefix=/usr --no-deps --no-compile \
+        pynput sounddevice ffmpeg-python future
 
-    # 安装 .desktop 入口
     install -Dm644 debian/recordly.desktop \
         "$pkgdir/usr/share/applications/recordly.desktop"
-
-    # 安装图标
     install -Dm644 resources/icons/recordly.svg \
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/recordly.svg"
-
-    # 安装 AppStream 元数据
     install -Dm644 debian/io.github.devcxl.recordly.appdata.xml \
         "$pkgdir/usr/share/metainfo/io.github.devcxl.recordly.appdata.xml"
 }
