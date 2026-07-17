@@ -1,8 +1,11 @@
 """音频录制引擎 — 麦克风 (sounddevice) + 系统音频 (FFmpeg)"""
 
+import logging
 import sys
 import time
 import subprocess
+
+logger = logging.getLogger(__name__)
 import threading
 import numpy as np
 import sounddevice as sd
@@ -59,7 +62,7 @@ class MicrophoneCapture:
 
         def callback(indata, frames, time_info, status):
             if status:
-                print(f"[mic] {status}", file=sys.stderr)
+                logger.debug("麦克风状态: %s", status)
             self._buffer.append(indata.copy())
 
         def open_stream(channels: int):

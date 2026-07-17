@@ -1,8 +1,10 @@
 """录制控制器 — 协调各录制引擎"""
 
+import logging
 import os
 import time
 
+logger = logging.getLogger(__name__)
 from core.screen_capture import ScreenCapture
 from core.audio_capture import (
     MicrophoneCapture,
@@ -68,7 +70,7 @@ class Recorder:
             self._recording = False
             self._stop_resources(started)
             raise
-        print("[recorder] 录制开始")
+        logger.info("录制开始")
 
     def _stop_resources(self, started: list[str]):
         """逆序 best-effort 清理已启动资源，不掩盖原始异常。"""
@@ -93,7 +95,7 @@ class Recorder:
         mic_audio = self.mic.stop()
         system_audio = self.system_audio.stop()
         self.screen.stop()
-        print(f"[recorder] 录制结束")
+        logger.info("录制结束")
 
         if self.screen.error is not None:
             raise RuntimeError(f"屏幕采集失败: {self.screen.error}") from self.screen.error

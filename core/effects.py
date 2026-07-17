@@ -1,8 +1,11 @@
 """文字标注与摄像头画中画 — Compositor 效果插件"""
 
+import logging
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from dataclasses import dataclass
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 import base64
 import math
 from core.compositor import Effect, CompositorContext
@@ -83,7 +86,7 @@ class WebcamOverlay(Effect):
             self._cap = cv2.VideoCapture(self._device_id)
             self._enabled = True
         except ImportError:
-            print("[webcam] opencv-python-headless 未安装", flush=True)
+            logger.warning("opencv-python-headless 未安装，摄像头禁用")
             self._enabled = False
 
     def close(self):

@@ -2,7 +2,10 @@
 
 import bisect
 import json
+import logging
 import math
+
+logger = logging.getLogger(__name__)
 import os
 from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
@@ -443,10 +446,7 @@ class Compositor:
         try:
             img = Image.fromarray(frame.data, mode="RGB")
         except RuntimeError:
-            # 帧解码失败时用黑帧兜底，避免导出/回放过程中闪退
-            import sys
-            print(f"[compositor] 帧 {frame.index} 解码失败，使用黑帧兜底",
-                  file=sys.stderr, flush=True)
+            logger.warning("帧 %d 解码失败，使用黑帧兜底", frame.index)
             img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
         source_ts = frame.timestamp - self._base_time
         if timeline_ts is None:
