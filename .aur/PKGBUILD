@@ -3,7 +3,7 @@
 
 pkgname=recordly
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出"
 arch=('any')
 url="https://github.com/devcxl/recordly"
@@ -14,6 +14,8 @@ depends=(
     'python-pillow'
     'python-numpy'
     'python-mss'
+    'python-opencv'
+    'python-ffmpeg-python'
     'ffmpeg'
     'portaudio'
 )
