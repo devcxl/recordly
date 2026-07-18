@@ -34,6 +34,7 @@ def test_space_shortcut_uses_window_context_without_auto_repeat(qapp):
     class ShortcutWindow(QMainWindow):
         _setup_space_shortcut = MainWindow._setup_space_shortcut
         _on_space_shortcut = MainWindow._on_space_shortcut
+        _is_editor_active_and_safe = MainWindow._is_editor_active_and_safe
 
     window = ShortcutWindow()
     window._setup_space_shortcut()
@@ -51,6 +52,7 @@ def test_space_shortcut_toggles_play_once_in_active_editor(qapp, monkeypatch):
     class ShortcutWindow(QMainWindow):
         _setup_space_shortcut = MainWindow._setup_space_shortcut
         _on_space_shortcut = MainWindow._on_space_shortcut
+        _is_editor_active_and_safe = MainWindow._is_editor_active_and_safe
 
         def __init__(self):
             super().__init__()
@@ -85,7 +87,7 @@ def test_space_shortcut_toggles_play_once_in_active_editor(qapp, monkeypatch):
 
 @pytest.mark.parametrize("blocked_by", ["home", "inactive", "modal", "popup"])
 def test_space_shortcut_ignores_non_editor_contexts(qapp, monkeypatch, blocked_by):
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
 
@@ -94,6 +96,8 @@ def test_space_shortcut_ignores_non_editor_contexts(qapp, monkeypatch, blocked_b
         _editor_interface=editor,
         _on_play_toggle=lambda: pytest.fail("不应触发播放"),
     )
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
     current_widget = object() if blocked_by == "home" else editor
     window._stacked_widget = SimpleNamespace(
         currentWidget=lambda: current_widget
@@ -122,7 +126,7 @@ def test_space_shortcut_ignores_non_editor_contexts(qapp, monkeypatch, blocked_b
     ["QLineEdit", "QTextEdit", "QPlainTextEdit", "QSpinBox", "QComboBox"],
 )
 def test_space_shortcut_ignores_input_focus(qapp, monkeypatch, widget_type):
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
     from PyQt5 import QtWidgets
@@ -133,6 +137,8 @@ def test_space_shortcut_ignores_input_focus(qapp, monkeypatch, widget_type):
         _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
         _on_play_toggle=lambda: pytest.fail("不应触发播放"),
     )
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
     focus_widget = getattr(QtWidgets, widget_type)()
     monkeypatch.setattr(
         main_window_module.QApplication, "activeWindow", lambda: window
@@ -307,6 +313,9 @@ def test_timeline_signal_connection_is_idempotent():
         def _on_playhead_seek_play(self):
             pass
 
+        def _refresh_undo_redo_state(self):
+            pass
+
         def update_status(self, _message):
             pass
 
@@ -320,7 +329,7 @@ def test_timeline_signal_connection_is_idempotent():
         window._on_zoom_double_clicked
     ]
     assert len(window._timeline.zoom_clip_selected.slots) == 1
-    assert len(window._timeline.clips_changed.slots) == 1
+    assert len(window._timeline.clips_changed.slots) == 2
     assert window._timeline.status_message.slots == [window.update_status]
 
 
@@ -908,3 +917,381 @@ def test_start_playback_at_initiates_playback(monkeypatch):
     assert pause_calls == [True]          # 先停止当前播放
     assert play_calls == [75]             # 2.5 * 30
     assert "⏸" in btn_texts
+# ── undo/redo 快捷键、编辑菜单、工具栏按钮测试 ──────────
+
+
+class _FakeUndoCmd:
+    """用于测试 undo/redo description 的假命令对象"""
+    def __init__(self, desc="测试撤销"):
+        self._desc = desc
+
+    def description(self) -> str:
+        return self._desc
+
+
+def test_timeline_undo_redo_descriptions(qapp):
+    """TimelineWidget 的 undo_description / redo_description 属性返回栈顶命令描述"""
+    from ui.timeline import TimelineWidget
+    from core.project import Clip, Track
+
+    timeline = TimelineWidget()
+    timeline.set_tracks([
+        Track(type="video", clips=[Clip(type="video", start=0, end=10)]),
+    ])
+    timeline.duration = 10.0
+
+    # 初始状态：无操作历史
+    assert timeline.can_undo is False
+    assert timeline.undo_description == ""
+    assert timeline.can_redo is False
+    assert timeline.redo_description == ""
+
+    # 将假命令推入栈中（直接操作私有栈模拟撤销场景）
+    timeline._undo_stack.append(_FakeUndoCmd("添加片段"))
+    assert timeline.can_undo is True
+    assert timeline.undo_description == "添加片段"
+    assert timeline.can_redo is False
+    assert timeline.redo_description == ""
+
+    # 模拟撤销后再推入 redo 栈
+    cmd = timeline._undo_stack.pop()
+    timeline._redo_stack.append(cmd)
+    assert timeline.can_undo is False
+    assert timeline.undo_description == ""
+    assert timeline.can_redo is True
+    assert timeline.redo_description == "添加片段"
+
+
+@pytest.mark.parametrize("blocked_by", ["home", "inactive", "modal", "popup"])
+def test_is_editor_active_and_safe_rejects_blocked_contexts(
+        qapp, monkeypatch, blocked_by):
+    """守卫方法在非编辑器语境下返回 False"""
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    editor = SimpleNamespace()
+    window = SimpleNamespace(
+        _editor_interface=editor,
+        _stacked_widget=SimpleNamespace(
+            currentWidget=lambda: (
+                editor if blocked_by != "home" else SimpleNamespace()
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow",
+        lambda: window if blocked_by != "inactive" else SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget",
+        lambda: SimpleNamespace() if blocked_by == "modal" else None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget",
+        lambda: SimpleNamespace() if blocked_by == "popup" else None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None,
+    )
+
+    assert MainWindow._is_editor_active_and_safe(window) is False
+
+
+@pytest.mark.parametrize("widget_type", [
+    "QLineEdit", "QTextEdit", "QPlainTextEdit", "QSpinBox", "QComboBox",
+])
+def test_is_editor_active_and_safe_rejects_input_focus(qapp, monkeypatch, widget_type):
+    """焦点在输入控件上时守卫返回 False"""
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from PyQt5 import QtWidgets
+
+    editor = SimpleNamespace()
+    window = SimpleNamespace(
+        _editor_interface=editor,
+        _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
+    )
+    focus_widget = getattr(QtWidgets, widget_type)()
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: focus_widget,
+    )
+
+    assert MainWindow._is_editor_active_and_safe(window) is False
+
+
+def test_is_editor_active_and_safe_allows_safe_editor(qapp, monkeypatch):
+    """编辑器在前台且无输入焦点时返回 True"""
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    editor = SimpleNamespace()
+    window = SimpleNamespace(
+        _editor_interface=editor,
+        _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None,
+    )
+    # focusWidget 返回 None（或一个不排除的控件比如 QLabel）→ 安全
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None,
+    )
+
+    assert MainWindow._is_editor_active_and_safe(window) is True
+
+
+def test_maybe_undo_redo_guards_before_delegating():
+    """_maybe_undo / _maybe_redo 在守卫不通过时不调用 _on_undo / _on_redo"""
+    from types import SimpleNamespace, MethodType
+    from app.main_window import MainWindow
+
+    calls = []
+
+    class FakeWindow:
+        _editor_interface = SimpleNamespace()
+        _stacked_widget = SimpleNamespace(
+            currentWidget=lambda: SimpleNamespace(),  # 不是编辑器
+        )
+
+        def _on_undo(self):
+            calls.append("undo")
+
+        def _on_redo(self):
+            calls.append("redo")
+
+    window = FakeWindow()
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
+
+    MainWindow._maybe_undo(window)
+    MainWindow._maybe_redo(window)
+
+    assert calls == []
+
+
+def test_maybe_undo_redo_calls_methods_when_safe(qapp, monkeypatch):
+    """守卫通过时 _maybe_undo / _maybe_redo 调用 _on_undo / _on_redo"""
+    from types import SimpleNamespace, MethodType
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    calls = []
+    editor = SimpleNamespace()
+
+    class FakeWindow:
+        _editor_interface = editor
+        _stacked_widget = SimpleNamespace(currentWidget=lambda: editor)
+
+        def _on_undo(self):
+            calls.append("undo")
+
+        def _on_redo(self):
+            calls.append("redo")
+
+    window = FakeWindow()
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None,
+    )
+
+    MainWindow._maybe_undo(window)
+    MainWindow._maybe_redo(window)
+
+    assert calls == ["undo", "redo"]
+
+
+def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
+    """编辑菜单包含 undo/redo action，支持快捷键和动态文本更新"""
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from PyQt5.QtWidgets import QMenuBar, QWidget, QToolButton
+
+    menubar = QMenuBar()
+    test_window = QWidget()
+    test_window._undo_action = None
+    test_window._redo_action = None
+    test_window._on_undo = lambda: None
+    test_window._on_redo = lambda: None
+    test_window._timeline = SimpleNamespace(
+        can_undo=True,
+        can_redo=True,
+        undo_description="添加片段",
+        redo_description="删除片段",
+    )
+    # 创建假的按钮避免 _refresh_undo_redo_state 报错
+    test_window._btn_undo = QToolButton()
+    test_window._btn_redo = QToolButton()
+
+    # 创建编辑菜单
+    MainWindow._setup_edit_menu(test_window, menubar)
+
+    # 验证菜单位置和 action 属性
+    edit_menu = None
+    for action in menubar.actions():
+        if action.text() == "编辑":
+            edit_menu = action.menu()
+            break
+    assert edit_menu is not None
+
+    actions = edit_menu.actions()
+    assert len(actions) >= 2
+
+    undo_act = test_window._undo_action
+    redo_act = test_window._redo_action
+    assert undo_act is not None
+    assert redo_act is not None
+
+    # 初始文本（无描述时仅为"撤销"/"重做"）
+    assert undo_act.text() == "撤销"
+    assert redo_act.text() == "重做"
+
+    # 验证快捷键设置
+    from PyQt5.QtGui import QKeySequence
+    assert undo_act.shortcut() == QKeySequence("Ctrl+Z")
+    assert redo_act.shortcut() == QKeySequence("Ctrl+Shift+Z")
+
+    # 调用 _refresh_undo_redo_state 验证动态文本更新
+    MainWindow._refresh_undo_redo_state(test_window)
+
+    assert undo_act.isEnabled() is True
+    assert "添加片段" in undo_act.text()
+    assert "撤销" in undo_act.text()
+    assert redo_act.isEnabled() is True
+    assert "删除片段" in redo_act.text()
+    assert "重做" in redo_act.text()
+
+
+def test_refresh_undo_redo_state_updates_menu_and_toolbar():
+    """_refresh_undo_redo_state 根据 can_undo/can_redo 更新所有 UI 元素"""
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+
+    logs = {}
+
+    class FakeAction:
+        def __init__(self, name):
+            self._name = name
+            self._enabled = False
+            self._text = ""
+
+        def setEnabled(self, v):
+            self._enabled = v
+            logs[f"{self._name}.enabled"] = v
+
+        def setText(self, t):
+            self._text = t
+            logs[f"{self._name}.text"] = t
+
+        def isEnabled(self):
+            return self._enabled
+
+        def text(self):
+            return self._text
+
+    class FakeButton:
+        def __init__(self, name):
+            self._name = name
+            self._enabled = False
+            self._tip = ""
+
+        def setEnabled(self, v):
+            self._enabled = v
+            logs[f"{self._name}.enabled"] = v
+
+        def setToolTip(self, t):
+            self._tip = t
+            logs[f"{self._name}.tip"] = t
+
+    window = SimpleNamespace(
+        _timeline=SimpleNamespace(
+            can_undo=True,
+            can_redo=False,
+            undo_description="移动片段",
+            redo_description="",
+        ),
+        _undo_action=FakeAction("undo"),
+        _redo_action=FakeAction("redo"),
+        _btn_undo=FakeButton("btn_undo"),
+        _btn_redo=FakeButton("btn_redo"),
+    )
+
+    MainWindow._refresh_undo_redo_state(window)
+
+    assert logs["undo.enabled"] is True
+    assert "移动片段" in logs["undo.text"]
+    assert "撤销" in logs["undo.text"]
+    assert logs["redo.enabled"] is False
+    assert logs["redo.text"] == "重做"
+    assert logs["btn_undo.enabled"] is True
+    assert "移动片段" in logs["btn_undo.tip"]
+    assert "Ctrl+Z" in logs["btn_undo.tip"]
+    assert logs["btn_redo.enabled"] is False
+    assert logs["btn_redo.tip"] == "重做 (Ctrl+Shift+Z)"
+
+
+def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
+    """验证工具栏包含 undo/redo 按钮，且在播放控制按钮之前"""
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from PyQt5.QtWidgets import QToolBar, QWidget, QToolButton
+
+    # 使用真实 QToolBar 来追踪添加的控件
+    toolbar = QToolBar()
+    parent = QWidget()
+
+    # 创建 self 对象，让 _add_undo_redo_toolbar_buttons 创建真实按钮
+    class FakeWindow:
+        pass
+
+    window = FakeWindow()
+    window._toolbar = toolbar
+    window._btn_undo = None
+    window._btn_redo = None
+    window._on_undo = lambda: None
+    window._on_redo = lambda: None
+
+    MainWindow._add_undo_redo_toolbar_buttons(window)
+
+    # 验证按钮被创建
+    assert isinstance(window._btn_undo, QToolButton)
+    assert isinstance(window._btn_redo, QToolButton)
+    assert window._btn_undo.text() == "↩"
+    assert window._btn_redo.text() == "↪"
+    assert window._btn_undo.isEnabled() is False
+    assert window._btn_redo.isEnabled() is False
+    assert "Ctrl+Z" in window._btn_undo.toolTip()
+    assert "Ctrl+Shift+Z" in window._btn_redo.toolTip()
+
+    # 验证按钮被添加到 toolbar
+    actions = toolbar.actions()
+    assert len(actions) == 3  # undo button, redo button, separator
+    # 分隔线在最后
+    assert actions[-1].isSeparator() is True
