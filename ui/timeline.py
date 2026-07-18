@@ -121,8 +121,16 @@ class TimelineWidget(QWidget):
         return len(self._undo_stack) > 0
 
     @property
+    def undo_description(self) -> str:
+        return self._undo_stack[-1].description() if self._undo_stack else ""
+
+    @property
     def can_redo(self) -> bool:
         return len(self._redo_stack) > 0
+
+    @property
+    def redo_description(self) -> str:
+        return self._redo_stack[-1].description() if self._redo_stack else ""
 
     def _time_to_x(self, s: float) -> int:
         return int(TRACK_HEADER_WIDTH + s * self._pixels_per_sec)

@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
         self._setup_toolbar()
         self._setup_central_widget()
         self._setup_space_shortcut()
+        self._setup_undo_redo_shortcuts()
 
     def _setup_space_shortcut(self):
         self._space_shortcut = QShortcut(
@@ -325,19 +326,50 @@ class MainWindow(QMainWindow):
         self._space_shortcut.activated.connect(self._on_space_shortcut)
 
     def _on_space_shortcut(self):
+        if not self._is_editor_active_and_safe():
+            return
+        self._on_play_toggle()
+
+    def _is_editor_active_and_safe(self) -> bool:
+        """编辑器在前台且无文本输入焦点时返回 True。
+        提取自 _on_space_shortcut，供所有编辑器级快捷键复用。"""
         if self._stacked_widget.currentWidget() is not self._editor_interface:
-            return
+            return False
         if QApplication.activeWindow() is not self:
-            return
+            return False
         if QApplication.activeModalWidget() is not None:
-            return
+            return False
         if QApplication.activePopupWidget() is not None:
-            return
+            return False
         if isinstance(QApplication.focusWidget(), (
             QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
         )):
-            return
-        self._on_play_toggle()
+            return False
+        return True
+
+    def _setup_undo_redo_shortcuts(self):
+        self._shortcut_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._shortcut_undo.setContext(Qt.WindowShortcut)
+        self._shortcut_undo.setAutoRepeat(False)
+        self._shortcut_undo.activated.connect(self._maybe_undo)
+
+        self._shortcut_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
+        self._shortcut_redo.setContext(Qt.WindowShortcut)
+        self._shortcut_redo.setAutoRepeat(False)
+        self._shortcut_redo.activated.connect(self._maybe_redo)
+
+        self._shortcut_redo_alt = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self._shortcut_redo_alt.setContext(Qt.WindowShortcut)
+        self._shortcut_redo_alt.setAutoRepeat(False)
+        self._shortcut_redo_alt.activated.connect(self._maybe_redo)
+
+    def _maybe_undo(self):
+        if self._is_editor_active_and_safe():
+            self._on_undo()
+
+    def _maybe_redo(self):
+        if self._is_editor_active_and_safe():
+            self._on_redo()
 
     def _setup_menus(self):
         menubar = self.menuBar()
@@ -351,10 +383,22 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction("退出", QApplication.quit)
 
+        self._setup_edit_menu(menubar)
+
         help_menu = menubar.addMenu("帮助")
         help_menu.addAction("反馈", lambda: QDesktopServices.openUrl(
             QUrl("https://github.com/devcxl/recordly/issues/new")))
         help_menu.addAction("关于", self._on_about)
+
+    def _setup_edit_menu(self, menubar):
+        edit_menu = menubar.addMenu("编辑")
+        self._undo_action = QAction("撤销", self)
+        self._undo_action.triggered.connect(self._on_undo)
+        edit_menu.addAction(self._undo_action)
+
+        self._redo_action = QAction("重做", self)
+        self._redo_action.triggered.connect(self._on_redo)
+        edit_menu.addAction(self._redo_action)
 
     def _setup_toolbar(self):
         self._toolbar = QToolBar("工具")
@@ -363,6 +407,7 @@ class MainWindow(QMainWindow):
         self._toolbar.setFloatable(False)
         self.addToolBar(self._toolbar)
 
+        self._add_undo_redo_toolbar_buttons()
         self._add_playback_toolbar_buttons()
         self._toolbar.addSeparator()
 
@@ -376,6 +421,25 @@ class MainWindow(QMainWindow):
         self._toolbar.addSeparator()
 
         self._add_toolbar_action_buttons()
+
+    def _add_undo_redo_toolbar_buttons(self):
+        self._btn_undo = QToolButton()
+        self._btn_undo.setText("↩")
+        self._btn_undo.setToolTip("撤销 (Ctrl+Z)")
+        self._btn_undo.setEnabled(False)
+        self._btn_undo.clicked.connect(self._on_undo)
+
+        self._btn_redo = QToolButton()
+        self._btn_redo.setText("↪")
+        self._btn_redo.setToolTip("重做 (Ctrl+Shift+Z)")
+        self._btn_redo.setEnabled(False)
+        self._btn_redo.clicked.connect(self._on_redo)
+
+        for btn in [self._btn_undo, self._btn_redo]:
+            btn.setStyleSheet("font-size: 16px;")
+            self._toolbar.addWidget(btn)
+
+        self._toolbar.addSeparator()
 
     def _add_playback_toolbar_buttons(self):
         self._btn_rewind = QToolButton()
@@ -467,6 +531,30 @@ class MainWindow(QMainWindow):
         self._menu_export.setVisible(is_editor)
         self._menu_back_home.setVisible(is_editor)
         self._menu_settings.setVisible(not is_editor)
+
+    def _refresh_undo_redo_state(self):
+        """根据 can_undo/can_redo 同步菜单项和工具栏按钮状态"""
+        if not hasattr(self, '_undo_action'):
+            return
+        tl = self._timeline
+        can_undo = tl.can_undo
+        can_redo = tl.can_redo
+        undo_desc = tl.undo_description
+        redo_desc = tl.redo_description
+
+        self._undo_action.setEnabled(can_undo)
+        self._undo_action.setText(f"撤销 {undo_desc}\tCtrl+Z" if undo_desc else "撤销\tCtrl+Z")
+
+        self._redo_action.setEnabled(can_redo)
+        self._redo_action.setText(f"重做 {redo_desc}\tCtrl+Shift+Z" if redo_desc else "重做\tCtrl+Shift+Z")
+
+        self._btn_undo.setEnabled(can_undo)
+        self._btn_undo.setToolTip(
+            f"撤销 {undo_desc} (Ctrl+Z)" if undo_desc else "撤销 (Ctrl+Z)")
+
+        self._btn_redo.setEnabled(can_redo)
+        self._btn_redo.setToolTip(
+            f"重做 {redo_desc} (Ctrl+Shift+Z)" if redo_desc else "重做 (Ctrl+Shift+Z)")
 
     def _refresh_home_page(self):
         """刷新首页项目列表"""
@@ -725,6 +813,7 @@ class MainWindow(QMainWindow):
             (self._timeline.zoom_add_requested, self._on_zoom_double_clicked),
             (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
             (self._timeline.clips_changed, self._on_clips_changed),
+            (self._timeline.clips_changed, self._refresh_undo_redo_state),
             (self._timeline.status_message, self.update_status),
             (self._timeline.playhead_seek_play, self._on_playhead_seek_play),
         )
