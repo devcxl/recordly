@@ -46,6 +46,68 @@ class TestTimelineCommands:
         cmd.undo(mock_timeline)
         assert len(mock_timeline._tracks[0].clips) == 1
 
+    def test_add_clip_command_appends_and_records_index(self, mock_timeline):
+        from core.commands import AddClipCommand
+
+        cmd = AddClipCommand(track_index=0, clip_data={
+            "id": "zoom-1",
+            "type": "zoom",
+            "start": 1.0,
+            "end": 3.0,
+        })
+
+        cmd.execute(mock_timeline)
+
+        assert cmd.clip_index == 1
+        assert mock_timeline._tracks[0].clips[1].id == "zoom-1"
+
+    def test_add_clip_command_inserts_at_fixed_index(self, mock_timeline):
+        from core.commands import AddClipCommand
+
+        cmd = AddClipCommand(
+            track_index=0,
+            clip_index=0,
+            clip_data={"type": "zoom", "content": "inserted"},
+        )
+
+        cmd.execute(mock_timeline)
+
+        assert [clip.content for clip in mock_timeline._tracks[0].clips] == [
+            "inserted", "clip1",
+        ]
+
+    def test_add_clip_command_redo_restores_modified_clip_data(
+            self, mock_timeline):
+        from dataclasses import asdict
+        from core.commands import AddClipCommand
+
+        cmd = AddClipCommand(
+            track_index=0,
+            clip_index=0,
+            clip_data={
+                "id": "zoom-2",
+                "type": "zoom",
+                "start": 2.0,
+                "end": 4.0,
+                "rect": [10, 20, 300, 200],
+                "transition_duration": 0.4,
+            },
+        )
+        cmd.execute(mock_timeline)
+        created = mock_timeline._tracks[0].clips[0]
+        created.rect = [50, 60, 640, 360]
+        created.transition_duration = 0.8
+        expected = asdict(created)
+
+        cmd.undo(mock_timeline)
+        assert [clip.content for clip in mock_timeline._tracks[0].clips] == [
+            "clip1",
+        ]
+
+        cmd.execute(mock_timeline)
+        restored = mock_timeline._tracks[0].clips[0]
+        assert asdict(restored) == expected
+
     def test_split_clip_command(self, mock_timeline):
         from core.commands import SplitClipCommand
         cmd = SplitClipCommand(track_index=0, clip_index=0, split_time=2.5)
