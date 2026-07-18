@@ -18,12 +18,19 @@ class UndoCommand(ABC):
     def __repr__(self):
         return self.__class__.__name__
 
+    def description(self) -> str:
+        """返回面向用户的中文操作描述，菜单和 ToolTip 使用。"""
+        return self.__class__.__name__
+
 
 @dataclass
 class AddClipCommand(UndoCommand):
     track_index: int
     clip_data: dict
     clip_index: int | None = None
+
+    def description(self) -> str:
+        return "添加片段"
 
     def execute(self, timeline):
         t = timeline._tracks[self.track_index]
@@ -53,6 +60,9 @@ class MoveClipCommand(UndoCommand):
     new_source_start: float = 0.0
     old_source_end: float | None = None
     new_source_end: float | None = None
+
+    def description(self) -> str:
+        return "移动片段"
 
     def execute(self, timeline):
         if self.new_track >= 0 and self.new_track != self.old_track:
@@ -92,6 +102,9 @@ class DeleteClipCommand(UndoCommand):
     clip_index: int
     clip_data: dict | None = None
 
+    def description(self) -> str:
+        return "删除片段"
+
     def execute(self, timeline):
         t = timeline._tracks[self.track_index]
         if not self.clip_data:
@@ -114,6 +127,9 @@ class SplitClipCommand(UndoCommand):
     right_clip_data: dict | None = None
     old_end: float = 0.0
     old_source_end: float | None = None
+
+    def description(self) -> str:
+        return "切割片段"
 
     def execute(self, timeline):
         t = timeline._tracks[self.track_index]
@@ -157,6 +173,9 @@ class ChangeSpeedCommand(UndoCommand):
     new_speed: float
     old_end: float
 
+    def description(self) -> str:
+        return "变更速度"
+
     def execute(self, timeline):
         clip = timeline._tracks[self.track_index].clips[self.clip_index]
         clip.speed = self.new_speed
@@ -185,6 +204,20 @@ class CompositeCommand(UndoCommand):
     undo:    逆序撤销子命令
     """
     sub_commands: list  # list[UndoCommand]
+
+    def description(self) -> str:
+        """根据子命令组合推断面向用户的中文操作描述。"""
+        subs = self.sub_commands
+        if (
+            len(subs) == 2
+            and isinstance(subs[0], SplitClipCommand)
+            and isinstance(subs[1], DeleteClipCommand)
+        ):
+            if subs[1].clip_index == subs[0].clip_index:
+                return "裁剪开头"
+            elif subs[1].clip_index == subs[0].clip_index + 1:
+                return "裁剪结尾"
+        return f"批量操作({len(subs)}步)"
 
     def execute(self, timeline):
         for cmd in self.sub_commands:
