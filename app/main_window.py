@@ -724,6 +724,7 @@ class MainWindow(QMainWindow):
             (self._timeline.zoom_double_clicked, self._on_zoom_double_clicked),
             (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
             (self._timeline.clips_changed, self._on_clips_changed),
+            (self._timeline.status_message, self.update_status),
         )
         for signal, slot in pairs:
             try:

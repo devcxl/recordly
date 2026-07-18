@@ -32,6 +32,7 @@ class TimelineWidget(QWidget):
     zoom_clip_selected = pyqtSignal(object)
     audio_add_requested = pyqtSignal()
     clips_changed = pyqtSignal()
+    status_message = pyqtSignal(str)
 
     SnapDistance = 5
 
@@ -369,6 +370,16 @@ class TimelineWidget(QWidget):
         cmd = SplitClipCommand(track_index=track_index, clip_index=clip_index, split_time=self._playhead_s)
         self._push_undo(cmd)
 
+    def _find_playhead_video(self) -> tuple[int, int] | None:
+        for track_index, track in enumerate(self._tracks):
+            if track.type != "video":
+                continue
+            for clip_index, clip in enumerate(track.clips):
+                if (clip.type == "video"
+                        and clip.start < self._playhead_s < clip.end):
+                    return track_index, clip_index
+        return None
+
     def _select_clip(self, track_index: int, clip_index: int):
         self._selected_track = track_index
         self._selected_clip = clip_index
@@ -423,6 +434,13 @@ class TimelineWidget(QWidget):
     # ── 键盘事件 ──────────────────────────────────────────
 
     def keyPressEvent(self, event):
+        if event.key() == Qt.Key_X and event.modifiers() == Qt.NoModifier:
+            target = self._find_playhead_video()
+            if target is not None:
+                self._split_clip(*target)
+            else:
+                self.status_message.emit("播放头下无视频片段")
+            return
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
             if self._selected_clip >= 0:
                 self.delete_clip(self._selected_track, self._selected_clip)

@@ -277,6 +277,7 @@ def test_timeline_signal_connection_is_idempotent():
         zoom_double_clicked = FakeSignal()
         zoom_clip_selected = FakeSignal()
         clips_changed = FakeSignal()
+        status_message = FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -293,6 +294,9 @@ def test_timeline_signal_connection_is_idempotent():
         def _on_clips_changed(self):
             pass
 
+        def update_status(self, _message):
+            pass
+
     window = FakeWindow()
     MainWindow._connect_timeline_signals(window)
     MainWindow._connect_timeline_signals(window)
@@ -301,6 +305,7 @@ def test_timeline_signal_connection_is_idempotent():
     assert len(window._timeline.zoom_double_clicked.slots) == 1
     assert len(window._timeline.zoom_clip_selected.slots) == 1
     assert len(window._timeline.clips_changed.slots) == 1
+    assert window._timeline.status_message.slots == [window.update_status]
 
 
 def test_zoom_clip_selection_opens_that_clip_for_editing():
