@@ -393,12 +393,10 @@ class MainWindow(QMainWindow):
     def _setup_edit_menu(self, menubar):
         edit_menu = menubar.addMenu("编辑")
         self._undo_action = QAction("撤销", self)
-        self._undo_action.setShortcut(QKeySequence("Ctrl+Z"))
         self._undo_action.triggered.connect(self._on_undo)
         edit_menu.addAction(self._undo_action)
 
         self._redo_action = QAction("重做", self)
-        self._redo_action.setShortcut(QKeySequence("Ctrl+Shift+Z"))
         self._redo_action.triggered.connect(self._on_redo)
         edit_menu.addAction(self._redo_action)
 
@@ -545,10 +543,10 @@ class MainWindow(QMainWindow):
         redo_desc = tl.redo_description
 
         self._undo_action.setEnabled(can_undo)
-        self._undo_action.setText(f"撤销 {undo_desc}" if undo_desc else "撤销")
+        self._undo_action.setText(f"撤销 {undo_desc}\tCtrl+Z" if undo_desc else "撤销\tCtrl+Z")
 
         self._redo_action.setEnabled(can_redo)
-        self._redo_action.setText(f"重做 {redo_desc}" if redo_desc else "重做")
+        self._redo_action.setText(f"重做 {redo_desc}\tCtrl+Shift+Z" if redo_desc else "重做\tCtrl+Shift+Z")
 
         self._btn_undo.setEnabled(can_undo)
         self._btn_undo.setToolTip(

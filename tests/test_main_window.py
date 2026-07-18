@@ -1173,20 +1173,17 @@ def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     assert undo_act.text() == "撤销"
     assert redo_act.text() == "重做"
 
-    # 验证快捷键设置
-    from PyQt5.QtGui import QKeySequence
-    assert undo_act.shortcut() == QKeySequence("Ctrl+Z")
-    assert redo_act.shortcut() == QKeySequence("Ctrl+Shift+Z")
-
-    # 调用 _refresh_undo_redo_state 验证动态文本更新
+    # 调用 _refresh_undo_redo_state 验证动态文本更新（含 \t 快捷键提示）
     MainWindow._refresh_undo_redo_state(test_window)
 
     assert undo_act.isEnabled() is True
     assert "添加片段" in undo_act.text()
     assert "撤销" in undo_act.text()
+    assert "\tCtrl+Z" in undo_act.text()
     assert redo_act.isEnabled() is True
     assert "删除片段" in redo_act.text()
     assert "重做" in redo_act.text()
+    assert "\tCtrl+Shift+Z" in redo_act.text()
 
 
 def test_refresh_undo_redo_state_updates_menu_and_toolbar():
@@ -1249,7 +1246,7 @@ def test_refresh_undo_redo_state_updates_menu_and_toolbar():
     assert "移动片段" in logs["undo.text"]
     assert "撤销" in logs["undo.text"]
     assert logs["redo.enabled"] is False
-    assert logs["redo.text"] == "重做"
+    assert logs["redo.text"] == "重做\tCtrl+Shift+Z"
     assert logs["btn_undo.enabled"] is True
     assert "移动片段" in logs["btn_undo.tip"]
     assert "Ctrl+Z" in logs["btn_undo.tip"]
