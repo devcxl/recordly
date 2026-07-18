@@ -2,6 +2,133 @@
 
 import os
 
+import pytest
+
+
+def test_space_shortcut_uses_window_context_without_auto_repeat(qapp):
+    from app.main_window import MainWindow
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QKeySequence
+    from PyQt5.QtWidgets import QMainWindow
+
+    class ShortcutWindow(QMainWindow):
+        _setup_space_shortcut = MainWindow._setup_space_shortcut
+        _on_space_shortcut = MainWindow._on_space_shortcut
+
+    window = ShortcutWindow()
+    window._setup_space_shortcut()
+
+    assert window._space_shortcut.key() == QKeySequence(Qt.Key_Space)
+    assert window._space_shortcut.context() == Qt.WindowShortcut
+    assert window._space_shortcut.autoRepeat() is False
+
+
+def test_space_shortcut_toggles_play_once_in_active_editor(qapp, monkeypatch):
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from PyQt5.QtWidgets import QMainWindow
+
+    class ShortcutWindow(QMainWindow):
+        _setup_space_shortcut = MainWindow._setup_space_shortcut
+        _on_space_shortcut = MainWindow._on_space_shortcut
+
+        def __init__(self):
+            super().__init__()
+            self.play_toggle_calls = 0
+            self._editor_interface = object()
+            self._stacked_widget = type(
+                "Stack", (), {"currentWidget": lambda stack: self._editor_interface}
+            )()
+
+        def _on_play_toggle(self):
+            self.play_toggle_calls += 1
+
+    window = ShortcutWindow()
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None
+    )
+    window._setup_space_shortcut()
+
+    window._space_shortcut.activated.emit()
+
+    assert window.play_toggle_calls == 1
+
+
+@pytest.mark.parametrize("blocked_by", ["home", "inactive", "modal", "popup"])
+def test_space_shortcut_ignores_non_editor_contexts(qapp, monkeypatch, blocked_by):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+
+    editor = object()
+    window = SimpleNamespace(
+        _editor_interface=editor,
+        _on_play_toggle=lambda: pytest.fail("不应触发播放"),
+    )
+    current_widget = object() if blocked_by == "home" else editor
+    window._stacked_widget = SimpleNamespace(
+        currentWidget=lambda: current_widget
+    )
+    active_window = object() if blocked_by == "inactive" else window
+    modal = object() if blocked_by == "modal" else None
+    popup = object() if blocked_by == "popup" else None
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: active_window
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: modal
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: popup
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None
+    )
+
+    MainWindow._on_space_shortcut(window)
+
+
+@pytest.mark.parametrize(
+    "widget_type",
+    ["QLineEdit", "QTextEdit", "QPlainTextEdit", "QSpinBox", "QComboBox"],
+)
+def test_space_shortcut_ignores_input_focus(qapp, monkeypatch, widget_type):
+    from types import SimpleNamespace
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from PyQt5 import QtWidgets
+
+    editor = object()
+    window = SimpleNamespace(
+        _editor_interface=editor,
+        _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
+        _on_play_toggle=lambda: pytest.fail("不应触发播放"),
+    )
+    focus_widget = getattr(QtWidgets, widget_type)()
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: focus_widget
+    )
+
+    MainWindow._on_space_shortcut(window)
+
 
 def test_frame_update_shows_time_and_follows_playhead():
     from types import SimpleNamespace
