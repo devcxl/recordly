@@ -726,6 +726,7 @@ class MainWindow(QMainWindow):
             (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
             (self._timeline.clips_changed, self._on_clips_changed),
             (self._timeline.status_message, self.update_status),
+            (self._timeline.playhead_seek_play, self._on_playhead_seek_play),
         )
         for signal, slot in pairs:
             try:
@@ -846,6 +847,46 @@ class MainWindow(QMainWindow):
             self._playback.pause()
             self._btn_play.setText("▶")
             self._btn_play.setToolTip("继续播放")
+
+    def _on_playhead_seek_play(self, sec: float):
+        """双击时间线空白区域：跳转播放头并开始播放。"""
+        # 边界检查：无帧时静默忽略
+        if not self._compositor.frames:
+            return
+
+        # 焦点守卫（与 _on_space_shortcut 一致，_is_editor_active_and_safe 尚未提取）
+        if self._stacked_widget.currentWidget() is not self._editor_interface:
+            return
+        if QApplication.activeWindow() is not self:
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        if QApplication.activePopupWidget() is not None:
+            return
+        if isinstance(QApplication.focusWidget(), (
+            QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
+        )):
+            return
+
+        # 设置播放头位置（TimelineWidget 已在信号发射前更新 _playhead_s）
+        self._timeline.playhead = sec
+
+        # 延迟播放启动，确保信号处理完成后再操作播放器
+        QTimer.singleShot(0, lambda: self._start_playback_at(sec))
+
+    def _start_playback_at(self, sec: float):
+        """在指定秒数开始播放。"""
+        # 确保播放器存在
+        if not self._playback:
+            self._create_playback_controller()
+        elif not self._playback.is_paused:
+            # 如果正在播放，先停止
+            self._playback.pause()
+
+        start_frame = int(sec * self._compositor.fps)
+        self._playback.play(start_frame)
+        self._btn_play.setText("⏸")
+        self._btn_play.setToolTip("暂停")
 
     def _create_playback_controller(self):
         from ui.preview_widget import PlaybackController

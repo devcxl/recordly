@@ -287,6 +287,7 @@ def test_timeline_signal_connection_is_idempotent():
         zoom_clip_selected = _FakeSignal()
         clips_changed = _FakeSignal()
         status_message = _FakeSignal()
+        playhead_seek_play = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -301,6 +302,9 @@ def test_timeline_signal_connection_is_idempotent():
             pass
 
         def _on_clips_changed(self):
+            pass
+
+        def _on_playhead_seek_play(self):
             pass
 
         def update_status(self, _message):
@@ -771,3 +775,136 @@ def test_normalize_project_path_converts_file_to_directory():
     p = ProjectSession.normalize_path(os.path.join("relative", "project.json"))
     expected = os.path.normpath("relative")
     assert p == expected
+
+
+# ── playhead_seek_play 集成测试 ──────────────────────────
+
+
+def test_playhead_seek_play_ignores_empty_frames(monkeypatch):
+    """无帧时 playhead_seek_play 静默忽略，不触发 QTimer"""
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from types import SimpleNamespace
+
+    timer_calls = []
+    monkeypatch.setattr(main_window_module.QTimer, "singleShot",
+                        lambda ms, cb: timer_calls.append((ms, cb)))
+
+    window = SimpleNamespace(
+        _compositor=SimpleNamespace(frames=[]),
+    )
+
+    MainWindow._on_playhead_seek_play(window, 2.5)
+
+    assert len(timer_calls) == 0
+
+
+def test_playhead_seek_play_ignores_input_focus(monkeypatch):
+    """焦点在输入控件时 playhead_seek_play 静默忽略"""
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from types import SimpleNamespace
+    from PyQt5 import QtWidgets
+
+    timer_calls = []
+    monkeypatch.setattr(main_window_module.QTimer, "singleShot",
+                        lambda ms, cb: timer_calls.append((ms, cb)))
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None)
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None)
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget",
+        lambda: QtWidgets.QLineEdit())
+
+    editor = object()
+    window = SimpleNamespace(
+        _compositor=SimpleNamespace(frames=[object()]),
+        _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
+        _editor_interface=editor,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window)
+
+    MainWindow._on_playhead_seek_play(window, 2.5)
+
+    assert len(timer_calls) == 0
+
+
+def test_playhead_seek_play_schedules_delayed_playback(monkeypatch):
+    """正常路径：播放头位置已设，QTimer.singleShot(0, ...) 被调度"""
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from types import SimpleNamespace
+
+    timer_calls = []
+    monkeypatch.setattr(main_window_module.QTimer, "singleShot",
+                        lambda ms, cb: timer_calls.append((ms, cb)))
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeModalWidget", lambda: None)
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activePopupWidget", lambda: None)
+    monkeypatch.setattr(
+        main_window_module.QApplication, "focusWidget", lambda: None)
+
+    class FakeTimeline:
+        def __init__(self):
+            self.playhead = 0.0
+
+    timeline = FakeTimeline()
+    editor = object()
+
+    window = SimpleNamespace(
+        _compositor=SimpleNamespace(frames=[object()], fps=30),
+        _timeline=timeline,
+        _playback=SimpleNamespace(is_paused=True),
+        _btn_play=SimpleNamespace(setText=lambda t: None,
+                                   setToolTip=lambda t: None),
+        _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
+        _editor_interface=editor,
+    )
+    monkeypatch.setattr(
+        main_window_module.QApplication, "activeWindow", lambda: window)
+
+    MainWindow._on_playhead_seek_play(window, 2.5)
+
+    assert len(timer_calls) == 1
+    assert timer_calls[0][0] == 0
+    assert callable(timer_calls[0][1])
+    assert timeline.playhead == 2.5
+
+
+def test_start_playback_at_initiates_playback(monkeypatch):
+    """_start_playback_at：停止当前播放 → 从指定秒数开始播放"""
+    import app.main_window as main_window_module
+    from app.main_window import MainWindow
+    from types import SimpleNamespace
+
+    play_calls = []
+    pause_calls = []
+    btn_texts = []
+
+    class FakePlayback:
+        is_paused = False
+
+        def play(self, frame):
+            play_calls.append(frame)
+
+        def pause(self):
+            pause_calls.append(True)
+
+    playback = FakePlayback()
+
+    window = SimpleNamespace(
+        _compositor=SimpleNamespace(frames=[object()], fps=30),
+        _playback=playback,
+        _btn_play=SimpleNamespace(
+            setText=lambda t: btn_texts.append(t),
+            setToolTip=lambda t: None),
+    )
+
+    MainWindow._start_playback_at(window, 2.5)
+
+    assert pause_calls == [True]          # 先停止当前播放
+    assert play_calls == [75]             # 2.5 * 30
+    assert "⏸" in btn_texts
