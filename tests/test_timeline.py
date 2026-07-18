@@ -1091,3 +1091,190 @@ class TestTimelineGui:
         ))
 
         assert selected == [clip]
+
+    # ── mouseDoubleClickEvent 扩展：playhead_seek_play 信号 ────
+
+    def test_double_click_blank_area_emits_playhead_seek_play(self, qapp):
+        """空白区域双击 → playhead_seek_play 信号发射，携带正确时间"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=2.0),
+        ])])
+        seek_times = []
+        w.playhead_seek_play.connect(seek_times.append)
+        # 点击空白区域（x 对应 5.0s，y 在轨道区域）
+        pos = QPointF(w._time_to_x(5.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert len(seek_times) == 1
+        assert seek_times[0] == pytest.approx(5.0)
+
+    def test_double_click_blank_playhead_changed_blocked(self, qapp):
+        """blockSignals 阻止 super().mouseDoubleClickEvent 链式触发的 playhead_changed"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=2.0),
+        ])])
+        changed_times = []
+        w.playhead_changed.connect(changed_times.append)
+        # 点击空白区域（x 对应 5.0s）
+        pos = QPointF(w._time_to_x(5.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        # blockSignals 包裹 super() 调用 → mousePressEvent 内的 playhead_changed 被阻止
+        assert changed_times == []
+
+    def test_double_click_full_sequence_emits_once_each(self, qapp):
+        """完整双击序列：mousePressEvent 发射 playhead_changed 一次，
+        mouseDoubleClickEvent 中 blockSignals 阻止 super 链式发射，
+        最终 playhead_seek_play 发射一次"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=2.0),
+        ])])
+        changed_times = []
+        seek_times = []
+        w.playhead_changed.connect(changed_times.append)
+        w.playhead_seek_play.connect(seek_times.append)
+        # 空白区域位置（5.0s）
+        pos = QPointF(w._time_to_x(5.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        # 模拟 PyQt5 双击事件顺序：先 press，再 double-click
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        # mousePressEvent → playhead_changed 一次
+        # mouseDoubleClickEvent → super 的 chain 被 blockSignals 阻止
+        # mouseDoubleClickEvent → playhead_seek_play 一次
+        assert changed_times == [pytest.approx(5.0)]
+        assert seek_times == [pytest.approx(5.0)]
+
+    def test_double_click_on_clip_no_seek_play(self, qapp):
+        """clip 上方双击 → 不发射 playhead_seek_play"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=6.0),
+        ])])
+        seek_times = []
+        w.playhead_seek_play.connect(seek_times.append)
+        # 点击 clip 内部（2.0s，在 clip 范围内）
+        pos = QPointF(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert seek_times == []
+
+    def test_double_click_on_ruler_no_seek_play(self, qapp):
+        """标尺区域双击 → 不发射 playhead_seek_play"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=5.0),
+        ])])
+        seek_times = []
+        w.playhead_seek_play.connect(seek_times.append)
+        # 点击标尺区域（y < RULER_HEIGHT）
+        pos = QPointF(w._time_to_x(3.0), RULER_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert seek_times == []
+
+    def test_double_click_zoom_track_no_seek_play(self, qapp):
+        """zoom 轨道空白处双击 → zoom 逻辑优先，不发射 playhead_seek_play"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[])])
+        seek_times = []
+        zoom_times = []
+        w.playhead_seek_play.connect(seek_times.append)
+        w.zoom_double_clicked.connect(
+            lambda t, c: zoom_times.append((t, c)))
+        # 点击 zoom 轨道空白处
+        pos = QPointF(w._time_to_x(4.0), RULER_HEIGHT + TRACK_HEIGHT / 2)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert len(zoom_times) == 1
+        assert zoom_times[0][0] == pytest.approx(4.0)
+        assert zoom_times[0][1] is None
+        assert seek_times == []
+
+    def test_double_click_multi_track_blank_emits_seek_play(self, qapp):
+        """多轨道场景：点击非 zoom 轨道空白处 → 发射 playhead_seek_play"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([
+            Track(type="zoom", clips=[]),
+            Track(type="video", clips=[
+                Clip(type="video", start=0.0, end=2.0),
+            ]),
+            Track(type="audio", clips=[]),
+        ])
+        seek_times = []
+        w.playhead_seek_play.connect(seek_times.append)
+        # 点击第二个轨道（video）的空白区域
+        y = RULER_HEIGHT + TRACK_HEIGHT + TRACK_HEIGHT / 2
+        pos = QPointF(w._time_to_x(7.0), y)
+
+        w.mouseDoubleClickEvent(QMouseEvent(
+            QEvent.MouseButtonDblClick, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert seek_times == [pytest.approx(7.0)]

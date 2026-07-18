@@ -36,6 +36,7 @@ class TimelineWidget(QWidget):
     zoom_clip_selected = pyqtSignal(object)
     audio_add_requested = pyqtSignal()
     clips_changed = pyqtSignal()
+    playhead_seek_play = pyqtSignal(float)
     status_message = pyqtSignal(str)
 
     SnapDistance = 5
@@ -354,10 +355,24 @@ class TimelineWidget(QWidget):
             candidate = int((pos.y() - RULER_HEIGHT) // TRACK_HEIGHT)
             if 0 <= candidate < len(self._tracks):
                 ti = candidate
+
+        # --- 缩放轨道双击（现有行为，保持不变）---
         if ti >= 0 and self._tracks[ti].type == "zoom":
             clip = self._tracks[ti].clips[ci] if ci >= 0 else None
             self.zoom_double_clicked.emit(min(
                 self._x_to_time(int(pos.x())), self._duration), clip)
+        # --- 空白区域双击（新增：跳转 + 播放）---
+        elif ci < 0 and pos.y() >= RULER_HEIGHT:
+            self._playhead_s = min(self._x_to_time(int(pos.x())), self._duration)
+            self.update()
+            # super().mouseDoubleClickEvent 会触发 mousePressEvent 再次发射 playhead_changed，
+            # 用 blockSignals 避免重复发射（真实事件序列中 mousePressEvent 已独立发射过一次）
+            self.blockSignals(True)
+            super().mouseDoubleClickEvent(event)
+            self.blockSignals(False)
+            self.playhead_seek_play.emit(self._playhead_s)
+            return
+
         super().mouseDoubleClickEvent(event)
 
     def _make_move_cmd(self) -> MoveClipCommand | None:
