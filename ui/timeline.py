@@ -205,44 +205,54 @@ class TimelineWidget(QWidget):
         self._snap_alignment_time = None
         pos = event.localPos()
 
-        self._playhead_s = min(self._x_to_time(int(pos.x())), self._duration)
+        # 标尺区域：快速路径，移动播放头
+        if pos.y() < RULER_HEIGHT:
+            self._playhead_s = min(
+                self._x_to_time(int(pos.x())), self._duration)
+            self._drag_state = "playhead"
+            self.update()
+            self.playhead_changed.emit(self._playhead_s)
+            return
+
+        # 命中 clip 边缘：进入 resize 拖拽，不移动播放头
+        edge = self._hit_edge(pos)
+        if edge:
+            self._drag_track, self._drag_clip, self._drag_state = edge
+            self._drag_start_x = pos.x()
+            clip = self._tracks[self._drag_track].clips[self._drag_clip]
+            self._drag_orig_start = clip.start
+            self._drag_orig_end = clip.end
+            self._drag_orig_source_start = clip.source_start
+            self._drag_orig_source_end = clip.source_end
+            return
+
+        # 命中 clip 身体：进入 move 拖拽，不移动播放头
+        ti, ci = self._hit_test(pos)
+        if ti >= 0 and ci >= 0:
+            self._selected_track = ti
+            self._selected_clip = ci
+            self._drag_track = ti
+            self._drag_clip = ci
+            self._drag_state = "move"
+            self._drag_start_x = pos.x()
+            clip = self._tracks[ti].clips[ci]
+            self._drag_orig_start = clip.start
+            self._drag_orig_end = clip.end
+            self._drag_orig_source_start = clip.source_start
+            self._drag_orig_source_end = clip.source_end
+            if self._tracks[ti].type == "zoom":
+                self.zoom_clip_selected.emit(clip)
+            self.update()
+            return
+
+        # 空白区域：移动播放头
+        self._selected_track = -1
+        self._selected_clip = -1
+        self._playhead_s = min(
+            self._x_to_time(int(pos.x())), self._duration)
         self._drag_state = "playhead"
         self.update()
         self.playhead_changed.emit(self._playhead_s)
-
-        if pos.y() >= RULER_HEIGHT:
-            edge = self._hit_edge(pos)
-            if edge:
-                self._drag_track, self._drag_clip, self._drag_state = edge
-                self._drag_start_x = pos.x()
-                clip = self._tracks[self._drag_track].clips[self._drag_clip]
-                self._drag_orig_start = clip.start
-                self._drag_orig_end = clip.end
-                self._drag_orig_source_start = clip.source_start
-                self._drag_orig_source_end = clip.source_end
-                return
-
-            ti, ci = self._hit_test(pos)
-            if ti >= 0 and ci >= 0:
-                self._selected_track = ti
-                self._selected_clip = ci
-                self._drag_track = ti
-                self._drag_clip = ci
-                self._drag_state = "move"
-                self._drag_start_x = pos.x()
-                clip = self._tracks[ti].clips[ci]
-                self._drag_orig_start = clip.start
-                self._drag_orig_end = clip.end
-                self._drag_orig_source_start = clip.source_start
-                self._drag_orig_source_end = clip.source_end
-                if self._tracks[ti].type == "zoom":
-                    self.zoom_clip_selected.emit(clip)
-                self.update()
-                return
-
-            self._selected_track = -1
-            self._selected_clip = -1
-            self.update()
 
     def mouseMoveEvent(self, event):
         if self._drag_state in ("move", "resize_left", "resize_right", "playhead"):

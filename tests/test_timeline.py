@@ -1091,3 +1091,116 @@ class TestTimelineGui:
         ))
 
         assert selected == [clip]
+
+    # ── mousePressEvent 重构测试 ──────────────────────────
+
+    def test_click_clip_does_not_move_playhead(self, qapp):
+        """单击 clip 身体：playhead 不移动，_drag_state 为 'move'"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 10.0  # 设置一个远离 clip 的初始 playhead
+
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        x = w._time_to_x(3.0)  # clip 中间
+        pos = QPointF(x, y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w.playhead == pytest.approx(10.0)  # playhead 不变
+        assert w._drag_state == "move"
+        assert w._selected_track == 0
+        assert w._selected_clip == 0
+
+    @pytest.mark.parametrize("edge_x_time,expected_state", [
+        (1.0, "resize_left"),
+        (5.0, "resize_right"),
+    ])
+    def test_click_clip_edge_does_not_move_playhead(
+            self, qapp, edge_x_time, expected_state):
+        """单击 clip 边缘：playhead 不移动，_drag_state 为 resize 状态"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 10.0
+
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        x = w._time_to_x(edge_x_time)  # clip 边缘
+        pos = QPointF(x, y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w.playhead == pytest.approx(10.0)  # playhead 不变
+        assert w._drag_state == expected_state
+
+    def test_click_blank_area_moves_playhead(self, qapp):
+        """单击空白区域：playhead 移动到点击位置"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 10.0
+        click_time = 12.0
+
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        x = w._time_to_x(click_time)
+        pos = QPointF(x, y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w.playhead == pytest.approx(click_time)  # playhead 移动
+        assert w._drag_state == "playhead"
+        assert w._selected_track == -1
+        assert w._selected_clip == -1
+
+    def test_click_ruler_moves_playhead(self, qapp):
+        """单击标尺区域：playhead 移动到点击位置"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 10.0
+        click_time = 7.0
+
+        y = RULER_HEIGHT / 2  # 标尺区域内
+        x = w._time_to_x(click_time)
+        pos = QPointF(x, y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w.playhead == pytest.approx(click_time)  # playhead 移动
+        assert w._drag_state == "playhead"
