@@ -1,5 +1,6 @@
 """时间线组件 — 支持多 clip 轨道剪辑"""
 
+from dataclasses import asdict
 from math import isclose
 import os
 
@@ -7,8 +8,8 @@ from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
 
-from core.commands import UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, CompositeCommand
-from core.project import SPEED_OPTIONS
+from core.commands import AddClipCommand, UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, CompositeCommand
+from core.project import Clip, SPEED_OPTIONS
 from core.speed import plan_clip_speed_change, format_speed_label
 
 
@@ -31,6 +32,7 @@ CLIP_SNAP_DISTANCE_PX = 8.0
 class TimelineWidget(QWidget):
     playhead_changed = pyqtSignal(float)
     zoom_double_clicked = pyqtSignal(float, object)
+    zoom_add_requested = pyqtSignal(float)
     zoom_clip_selected = pyqtSignal(object)
     audio_add_requested = pyqtSignal()
     clips_changed = pyqtSignal()
@@ -160,6 +162,7 @@ class TimelineWidget(QWidget):
         self._undo_stack.append(cmd)
         self._redo_stack.clear()
         cmd.execute(self)
+        self._validate_selection()
         self.clips_changed.emit()
         self.update()
 
@@ -168,6 +171,7 @@ class TimelineWidget(QWidget):
             return
         cmd = self._undo_stack.pop()
         cmd.undo(self)
+        self._validate_selection()
         self._redo_stack.append(cmd)
         self.clips_changed.emit()
         self.update()
@@ -177,9 +181,21 @@ class TimelineWidget(QWidget):
             return
         cmd = self._redo_stack.pop()
         cmd.execute(self)
+        self._validate_selection()
         self._undo_stack.append(cmd)
         self.clips_changed.emit()
         self.update()
+
+    def _validate_selection(self):
+        if self._selected_clip < 0:
+            return
+        track_exists = 0 <= self._selected_track < len(self._tracks)
+        if (track_exists
+                and self._selected_clip < len(
+                    self._tracks[self._selected_track].clips)):
+            return
+        self._selected_track = -1
+        self._selected_clip = -1
 
     # ── 鼠标事件 ──────────────────────────────────────────
 
@@ -367,9 +383,20 @@ class TimelineWidget(QWidget):
 
     # ── 右键菜单 ──────────────────────────────────────────
 
-    def _show_context_menu(self, pos):
+    def _build_context_menu(self, pos) -> QMenu:
         ti, ci = self._hit_test(pos)
+        if ti < 0 and pos.x() >= TRACK_HEADER_WIDTH and pos.y() >= RULER_HEIGHT:
+            candidate = int((pos.y() - RULER_HEIGHT) // TRACK_HEIGHT)
+            if 0 <= candidate < len(self._tracks):
+                ti = candidate
         menu = QMenu(self)
+        if (ti >= 0 and ci < 0 and pos.x() >= TRACK_HEADER_WIDTH
+                and self._tracks[ti].type == "zoom"):
+            time_s = min(self._x_to_time(int(pos.x())), self._duration)
+            menu.addAction(
+                "添加缩放块",
+                lambda: self.zoom_add_requested.emit(time_s),
+            )
         if ti >= 0 and ci >= 0:
             clip = self._tracks[ti].clips[ci]
             menu.addAction("删除", lambda ti=ti, ci=ci: self.delete_clip(ti, ci))
@@ -386,6 +413,10 @@ class TimelineWidget(QWidget):
             menu.addAction("选中", lambda ti=ti, ci=ci: self._select_clip(ti, ci))
         menu.addAction("全选", self._select_all)
         menu.addAction("清除选中", lambda: setattr(self, '_selected_clip', -1) or self.update())
+        return menu
+
+    def _show_context_menu(self, pos):
+        menu = self._build_context_menu(pos)
         menu.exec_(self.mapToGlobal(pos))
 
     def _change_speed(self, track_index: int, clip_index: int, new_speed: float):
@@ -408,6 +439,13 @@ class TimelineWidget(QWidget):
     def delete_clip(self, track_index: int, clip_index: int):
         cmd = DeleteClipCommand(track_index=track_index, clip_index=clip_index)
         self._push_undo(cmd)
+
+    def add_clip(self, track_index: int, clip: Clip) -> Clip:
+        cmd = AddClipCommand(track_index=track_index, clip_data=asdict(clip))
+        self._push_undo(cmd)
+        assert cmd.clip_index is not None
+        self._select_clip(track_index, cmd.clip_index)
+        return self._tracks[track_index].clips[cmd.clip_index]
 
     def _split_clip(self, track_index: int, clip_index: int):
         clip = self._tracks[track_index].clips[clip_index]
