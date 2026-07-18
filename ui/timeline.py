@@ -365,11 +365,7 @@ class TimelineWidget(QWidget):
         elif ci < 0 and pos.y() >= RULER_HEIGHT:
             self._playhead_s = min(self._x_to_time(int(pos.x())), self._duration)
             self.update()
-            # super().mouseDoubleClickEvent 会触发 mousePressEvent 再次发射 playhead_changed，
-            # 用 blockSignals 避免重复发射（真实事件序列中 mousePressEvent 已独立发射过一次）
-            self.blockSignals(True)
-            super().mouseDoubleClickEvent(event)
-            self.blockSignals(False)
+            self.playhead_changed.emit(self._playhead_s)
             self.playhead_seek_play.emit(self._playhead_s)
             return
 

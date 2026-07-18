@@ -1118,8 +1118,8 @@ class TestTimelineGui:
         assert len(seek_times) == 1
         assert seek_times[0] == pytest.approx(5.0)
 
-    def test_double_click_blank_playhead_changed_blocked(self, qapp):
-        """blockSignals 阻止 super().mouseDoubleClickEvent 链式触发的 playhead_changed"""
+    def test_double_click_blank_emits_playhead_changed(self, qapp):
+        """空白区域双击 → 显式发射 playhead_changed"""
         from PyQt5.QtCore import QEvent, QPointF, Qt
         from PyQt5.QtGui import QMouseEvent
         from core.project import Clip, Track
@@ -1139,13 +1139,12 @@ class TestTimelineGui:
             Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
         ))
 
-        # blockSignals 包裹 super() 调用 → mousePressEvent 内的 playhead_changed 被阻止
-        assert changed_times == []
+        # 显式发射 playhead_changed，不再被 blockSignals 阻止
+        assert changed_times == [pytest.approx(5.0)]
 
-    def test_double_click_full_sequence_emits_once_each(self, qapp):
-        """完整双击序列：mousePressEvent 发射 playhead_changed 一次，
-        mouseDoubleClickEvent 中 blockSignals 阻止 super 链式发射，
-        最终 playhead_seek_play 发射一次"""
+    def test_double_click_full_sequence_emits_playhead_twice(self, qapp):
+        """完整双击序列：mousePressEvent 发射 playhead_changed，
+        mouseDoubleClickEvent 显式发射 playhead_changed + playhead_seek_play"""
         from PyQt5.QtCore import QEvent, QPointF, Qt
         from PyQt5.QtGui import QMouseEvent
         from core.project import Clip, Track
@@ -1173,9 +1172,8 @@ class TestTimelineGui:
         ))
 
         # mousePressEvent → playhead_changed 一次
-        # mouseDoubleClickEvent → super 的 chain 被 blockSignals 阻止
-        # mouseDoubleClickEvent → playhead_seek_play 一次
-        assert changed_times == [pytest.approx(5.0)]
+        # mouseDoubleClickEvent → playhead_changed 显式发射一次 + playhead_seek_play 一次
+        assert changed_times == [pytest.approx(5.0), pytest.approx(5.0)]
         assert seek_times == [pytest.approx(5.0)]
 
     def test_double_click_on_clip_no_seek_play(self, qapp):
