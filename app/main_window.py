@@ -12,7 +12,8 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QFileDialog, QApplication, QMessageBox, QToolBar, QAction,
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
-    QLabel, QProgressDialog, QScrollArea,
+    QLabel, QProgressDialog, QScrollArea, QShortcut, QLineEdit,
+    QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
@@ -314,6 +315,29 @@ class MainWindow(QMainWindow):
         self._setup_menus()
         self._setup_toolbar()
         self._setup_central_widget()
+        self._setup_space_shortcut()
+
+    def _setup_space_shortcut(self):
+        self._space_shortcut = QShortcut(
+            QKeySequence(Qt.Key_Space), self)
+        self._space_shortcut.setContext(Qt.WindowShortcut)
+        self._space_shortcut.setAutoRepeat(False)
+        self._space_shortcut.activated.connect(self._on_space_shortcut)
+
+    def _on_space_shortcut(self):
+        if self._stacked_widget.currentWidget() is not self._editor_interface:
+            return
+        if QApplication.activeWindow() is not self:
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        if QApplication.activePopupWidget() is not None:
+            return
+        if isinstance(QApplication.focusWidget(), (
+            QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
+        )):
+            return
+        self._on_play_toggle()
 
     def _setup_menus(self):
         menubar = self.menuBar()
