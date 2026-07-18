@@ -919,15 +919,11 @@ class TestTimelineGui:
             ]
 
     @pytest.mark.parametrize(
-        "x, expected_time",
-        [
-            (None, 0.0),
-            (3.2, 3.2),
-            (20.0, 10.0),
-        ],
+        "content_x",
+        [0, 97, 500],
     )
     def test_zoom_context_add_action_emits_clamped_time(
-            self, qapp, x, expected_time):
+            self, qapp, content_x):
         from PyQt5.QtCore import QPoint
         from core.project import Track
         from ui.timeline import (
@@ -939,7 +935,7 @@ class TestTimelineGui:
         w.set_tracks([Track(type="zoom")])
         emitted = []
         w.zoom_add_requested.connect(emitted.append)
-        click_x = TRACK_HEADER_WIDTH if x is None else w._time_to_x(x)
+        click_x = TRACK_HEADER_WIDTH + content_x
         pos = QPoint(click_x, RULER_HEIGHT + TRACK_HEIGHT // 2)
 
         menu = w._build_context_menu(pos)
@@ -948,10 +944,12 @@ class TestTimelineGui:
         )
         add_action.trigger()
 
+        expected_time = min(content_x / w._pixels_per_sec, w.duration)
         assert emitted == [pytest.approx(expected_time)]
 
     def test_zoom_add_clip_selects_actual_object_and_is_undoable(self, qapp):
         from dataclasses import asdict
+        from core.commands import AddClipCommand
         from core.project import Clip, Track
         from ui.timeline import TimelineWidget
 
@@ -964,6 +962,8 @@ class TestTimelineGui:
             start=2.0, end=4.0, rect=[10, 20, 300, 200],
             transition_duration=0.4,
         )
+        changes = []
+        w.clips_changed.connect(lambda: changes.append(True))
 
         created = w.add_clip(0, requested)
 
@@ -972,15 +972,56 @@ class TestTimelineGui:
         assert asdict(created) == asdict(requested)
         assert (w._selected_track, w._selected_clip) == (0, 1)
         assert w.can_undo is True
+        assert isinstance(w._undo_stack[-1], AddClipCommand)
+        assert changes == [True]
 
         created.rect = [50, 60, 640, 360]
         created.transition_duration = 0.8
         expected = asdict(created)
         w.undo()
         assert [clip.content for clip in w.tracks[0].clips] == ["existing"]
+        assert changes == [True, True]
 
         w.redo()
         assert asdict(w.tracks[0].clips[1]) == expected
+        assert changes == [True, True, True]
+
+    def test_zoom_add_undo_clears_selection_and_shortcuts_are_safe(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[
+            Clip(type="zoom", content="existing", start=0.0, end=1.0),
+        ])])
+        w.add_clip(0, Clip(type="zoom", start=2.0, end=4.0))
+
+        w.undo()
+
+        assert w.selected_index == -1
+        undo_count = len(w._undo_stack)
+        QTest.keyClick(w, Qt.Key_Delete)
+        QTest.keyClick(w, Qt.Key_S)
+        assert len(w._undo_stack) == undo_count
+
+    def test_zoom_show_context_menu_builds_and_executes_once(
+            self, qapp, monkeypatch):
+        from unittest.mock import MagicMock
+        from PyQt5.QtCore import QPoint
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        pos = QPoint(100, 40)
+        menu = MagicMock()
+        build_menu = MagicMock(return_value=menu)
+        monkeypatch.setattr(w, "_build_context_menu", build_menu)
+
+        w._show_context_menu(pos)
+
+        build_menu.assert_called_once_with(pos)
+        menu.exec_.assert_called_once_with(w.mapToGlobal(pos))
 
     def test_empty_zoom_track_can_add_clip_by_double_click(self, qapp):
         pytest.importorskip("PyQt5.QtWidgets")

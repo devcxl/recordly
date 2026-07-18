@@ -162,6 +162,7 @@ class TimelineWidget(QWidget):
         self._undo_stack.append(cmd)
         self._redo_stack.clear()
         cmd.execute(self)
+        self._validate_selection()
         self.clips_changed.emit()
         self.update()
 
@@ -170,6 +171,7 @@ class TimelineWidget(QWidget):
             return
         cmd = self._undo_stack.pop()
         cmd.undo(self)
+        self._validate_selection()
         self._redo_stack.append(cmd)
         self.clips_changed.emit()
         self.update()
@@ -179,9 +181,21 @@ class TimelineWidget(QWidget):
             return
         cmd = self._redo_stack.pop()
         cmd.execute(self)
+        self._validate_selection()
         self._undo_stack.append(cmd)
         self.clips_changed.emit()
         self.update()
+
+    def _validate_selection(self):
+        if self._selected_clip < 0:
+            return
+        track_exists = 0 <= self._selected_track < len(self._tracks)
+        if (track_exists
+                and self._selected_clip < len(
+                    self._tracks[self._selected_track].clips)):
+            return
+        self._selected_track = -1
+        self._selected_clip = -1
 
     # ── 鼠标事件 ──────────────────────────────────────────
 
