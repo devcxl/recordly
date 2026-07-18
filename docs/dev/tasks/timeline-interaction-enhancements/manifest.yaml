@@ -1,0 +1,110 @@
+feature: timeline-interaction-enhancements
+title: 时间线编辑器交互增强
+parent_issue:
+  number: 78
+  url: https://github.com/devcxl/recordly/issues/78
+planning_branch: chore/plan-tasks-timeline-interaction-enhancements
+
+tasks:
+  - id: T1
+    name: "T1: AddClipCommand 命令基础"
+    file: T1-add-clip-command.md
+    issue: 80
+    issue_url: https://github.com/devcxl/recordly/issues/80
+    depends_on: []
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/timeline-add-clip-command/
+    branch: feat/timeline-add-clip-command
+    estimate_hours: 2
+  - id: T2
+    name: "T2: MainWindow Space 播放快捷键"
+    file: T2-mainwindow-space-shortcut.md
+    issue: 81
+    issue_url: https://github.com/devcxl/recordly/issues/81
+    depends_on: []
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/mainwindow-space-shortcut/
+    branch: feat/mainwindow-space-shortcut
+    estimate_hours: 2
+  - id: T3
+    name: "T3: Timeline X 播放头切割"
+    file: T3-timeline-x-split.md
+    issue: 82
+    issue_url: https://github.com/devcxl/recordly/issues/82
+    depends_on: [T1, T2]
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/timeline-x-split/
+    branch: feat/timeline-x-split
+    estimate_hours: 2
+  - id: T4
+    name: "T4: Timeline 视频片段吸附与对齐线"
+    file: T4-timeline-video-snapping.md
+    issue: 83
+    issue_url: https://github.com/devcxl/recordly/issues/83
+    depends_on: [T3]
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/timeline-video-snapping/
+    branch: feat/timeline-video-snapping
+    estimate_hours: 2
+  - id: T5
+    name: "T5: Timeline 缩放块创建入口"
+    file: T5-timeline-zoom-add-entry.md
+    issue: 84
+    issue_url: https://github.com/devcxl/recordly/issues/84
+    depends_on: [T1, T4]
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/timeline-zoom-add-entry/
+    branch: feat/timeline-zoom-add-entry
+    estimate_hours: 2
+  - id: T6
+    name: "T6: MainWindow 缩放创建集成"
+    file: T6-mainwindow-zoom-integration.md
+    issue: 85
+    issue_url: https://github.com/devcxl/recordly/issues/85
+    depends_on: [T5]
+    labels: [enhancement, ready-for-agent]
+    worktree_root: .worktree/mainwindow-zoom-integration/
+    branch: feat/mainwindow-zoom-integration
+    estimate_hours: 2
+
+batches:
+  - batch: 1
+    tasks: [T1, T2]
+    parallel: true
+  - batch: 2
+    tasks: [T3]
+    parallel: false
+  - batch: 3
+    tasks: [T4]
+    parallel: false
+  - batch: 4
+    tasks: [T5]
+    parallel: false
+  - batch: 5
+    tasks: [T6]
+    parallel: false
+
+topological_order: [T1, T2, T3, T4, T5, T6]
+
+issue_mapping:
+  T1: 80
+  T2: 81
+  T3: 82
+  T4: 83
+  T5: 84
+  T6: 85
+
+dag_validation:
+  algorithm: Kahn
+  acyclic: true
+  node_count: 6
+  edge_count: 6
+  checked_edges:
+    - [T1, T3]
+    - [T2, T3]
+    - [T3, T4]
+    - [T1, T5]
+    - [T4, T5]
+    - [T5, T6]
+  parent_relation_verified: true
+  parent_relation_method: "GitHub GraphQL Issue.subIssues"
