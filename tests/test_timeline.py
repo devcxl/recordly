@@ -213,22 +213,28 @@ class TestTimelineGui:
             ))
 
     @pytest.mark.parametrize(
-        "target, moving, press_time, candidate_start, expected_start, alignment",
+        "pixels_per_sec, target, moving, press_time, candidate_start, "
+        "expected_start, alignment",
         [
-            ((1.0, 3.0), (6.0, 8.0), 7.0, 3.25, 3.0, 3.0),
-            ((1.0, 3.0), (6.0, 8.0), 7.0, 3.265625, 3.265625, None),
-            ((8.0, 10.0), (3.0, 5.0), 4.0, 5.75, 6.0, 8.0),
-            ((8.0, 10.0), (3.0, 5.0), 4.0, 5.734375, 5.734375, None),
+            (32.0, (1.0, 3.0), (6.0, 8.0), 7.0, 3.25, 3.0, 3.0),
+            (32.0, (1.0, 3.0), (6.0, 8.0), 7.0,
+             3.265625, 3.265625, None),
+            (32.0, (8.0, 10.0), (3.0, 5.0), 4.0, 5.75, 6.0, 8.0),
+            (32.0, (8.0, 10.0), (3.0, 5.0), 4.0,
+             5.734375, 5.734375, None),
+            (64.0, (1.0, 3.0), (6.0, 8.0), 7.0, 3.125, 3.0, 3.0),
+            (64.0, (1.0, 3.0), (6.0, 8.0), 7.0,
+             3.1328125, 3.1328125, None),
         ],
     )
     def test_video_drag_snap_threshold_for_both_edges(
-            self, qapp, target, moving, press_time, candidate_start,
-            expected_start, alignment):
+            self, qapp, pixels_per_sec, target, moving, press_time,
+            candidate_start, expected_start, alignment):
         from core.project import Clip, Track
         from ui.timeline import TimelineWidget
 
         w = TimelineWidget()
-        w._pixels_per_sec = 32.0
+        w._pixels_per_sec = pixels_per_sec
         w.duration = 20.0
         w.set_tracks([Track(type="video", clips=[
             Clip(type="video", start=target[0], end=target[1]),
@@ -286,7 +292,7 @@ class TestTimelineGui:
 
         assert w._snap_alignment_time is None
 
-    def test_snap_alignment_clears_when_drag_is_cancelled(self, qapp):
+    def test_new_mouse_press_clears_snap_alignment(self, qapp):
         from PyQt5.QtCore import QEvent, QPointF, Qt
         from PyQt5.QtGui import QMouseEvent
         from core.project import Clip, Track
@@ -394,6 +400,48 @@ class TestTimelineGui:
         assert (clip.start, clip.end, clip.source_start, clip.source_end,
                 clip.speed, clip.content) == (
             4.0, 6.0, 10.0, 14.0, 2.0, "recording",
+        )
+
+    def test_five_pixel_snap_creates_one_undoable_move_command(self, qapp):
+        from core.commands import MoveClipCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        clip = Clip(
+            type="video", content="recording", start=3.005, end=5.005,
+            source_start=10.0, source_end=14.0, speed=2.0,
+        )
+        w = TimelineWidget()
+        w._pixels_per_sec = 1000.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            clip,
+        ])])
+        changes = []
+        w.clips_changed.connect(lambda: changes.append(True))
+        original_undo_count = len(w._undo_stack)
+
+        self._drag_clip(w, 0, 1, 4.005, 3.005, release=True)
+
+        assert (clip.start, clip.end) == pytest.approx((3.0, 5.0))
+        assert len(w._undo_stack) == original_undo_count + 1
+        assert isinstance(w._undo_stack[-1], MoveClipCommand)
+        assert changes == [True]
+        assert (clip.source_start, clip.source_end, clip.speed, clip.content) == (
+            10.0, 14.0, 2.0, "recording",
+        )
+
+        w.undo()
+        assert (clip.start, clip.end) == pytest.approx((3.005, 5.005))
+        assert (clip.source_start, clip.source_end, clip.speed, clip.content) == (
+            10.0, 14.0, 2.0, "recording",
+        )
+
+        w.redo()
+        assert (clip.start, clip.end) == pytest.approx((3.0, 5.0))
+        assert (clip.source_start, clip.source_end, clip.speed, clip.content) == (
+            10.0, 14.0, 2.0, "recording",
         )
 
     @pytest.mark.parametrize(

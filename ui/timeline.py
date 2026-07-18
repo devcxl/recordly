@@ -1,5 +1,6 @@
 """时间线组件 — 支持多 clip 轨道剪辑"""
 
+from math import isclose
 import os
 
 from PyQt5.QtWidgets import QWidget, QMenu
@@ -346,7 +347,13 @@ class TimelineWidget(QWidget):
     def _make_move_cmd(self) -> MoveClipCommand | None:
         if self._drag_state in ("move", "resize_left", "resize_right"):
             clip = self._tracks[self._drag_track].clips[self._drag_clip]
-            if abs(clip.start - self._drag_orig_start) > 0.01 or abs(clip.end - self._drag_orig_end) > 0.01:
+            position_changed = (
+                not isclose(clip.start, self._drag_orig_start,
+                            abs_tol=1e-9, rel_tol=0.0)
+                or not isclose(clip.end, self._drag_orig_end,
+                               abs_tol=1e-9, rel_tol=0.0)
+            )
+            if position_changed:
                 return MoveClipCommand(
                     track_index=self._drag_track, clip_index=self._drag_clip,
                     old_start=self._drag_orig_start, new_start=clip.start,
