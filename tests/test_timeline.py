@@ -867,6 +867,121 @@ class TestTimelineGui:
         assert len(changes) == 1
         assert w.can_undo is True
 
+    def test_zoom_context_menu_contains_add_action_in_empty_content(self, qapp):
+        from PyQt5.QtCore import QPoint
+        from core.project import Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom")])
+        pos = QPoint(w._time_to_x(3.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
+
+        menu = w._build_context_menu(pos)
+
+        assert "添加缩放块" in [action.text() for action in menu.actions()]
+
+    @pytest.mark.parametrize("track_type", ["video", "audio"])
+    def test_non_zoom_context_menu_does_not_contain_add_action(
+            self, qapp, track_type):
+        from PyQt5.QtCore import QPoint
+        from core.project import Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type=track_type)])
+        pos = QPoint(w._time_to_x(3.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
+
+        menu = w._build_context_menu(pos)
+
+        assert "添加缩放块" not in [action.text() for action in menu.actions()]
+
+    def test_zoom_context_menu_excludes_header_and_existing_clip(self, qapp):
+        from PyQt5.QtCore import QPoint
+        from core.project import Clip, Track
+        from ui.timeline import (
+            RULER_HEIGHT, TRACK_HEADER_WIDTH, TRACK_HEIGHT, TimelineWidget,
+        )
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[
+            Clip(type="zoom", start=1.0, end=3.0),
+        ])])
+        y = RULER_HEIGHT + TRACK_HEIGHT // 2
+        positions = [
+            QPoint(TRACK_HEADER_WIDTH - 1, y),
+            QPoint(w._time_to_x(2.0), y),
+        ]
+
+        for pos in positions:
+            menu = w._build_context_menu(pos)
+            assert "添加缩放块" not in [
+                action.text() for action in menu.actions()
+            ]
+
+    @pytest.mark.parametrize(
+        "x, expected_time",
+        [
+            (None, 0.0),
+            (3.2, 3.2),
+            (20.0, 10.0),
+        ],
+    )
+    def test_zoom_context_add_action_emits_clamped_time(
+            self, qapp, x, expected_time):
+        from PyQt5.QtCore import QPoint
+        from core.project import Track
+        from ui.timeline import (
+            RULER_HEIGHT, TRACK_HEADER_WIDTH, TRACK_HEIGHT, TimelineWidget,
+        )
+
+        w = TimelineWidget()
+        w.duration = 10.0
+        w.set_tracks([Track(type="zoom")])
+        emitted = []
+        w.zoom_add_requested.connect(emitted.append)
+        click_x = TRACK_HEADER_WIDTH if x is None else w._time_to_x(x)
+        pos = QPoint(click_x, RULER_HEIGHT + TRACK_HEIGHT // 2)
+
+        menu = w._build_context_menu(pos)
+        add_action = next(
+            action for action in menu.actions() if action.text() == "添加缩放块"
+        )
+        add_action.trigger()
+
+        assert emitted == [pytest.approx(expected_time)]
+
+    def test_zoom_add_clip_selects_actual_object_and_is_undoable(self, qapp):
+        from dataclasses import asdict
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="zoom", clips=[
+            Clip(type="zoom", content="existing", start=0.0, end=1.0),
+        ])])
+        requested = Clip(
+            id="manual-zoom", type="zoom", content="手动缩放",
+            start=2.0, end=4.0, rect=[10, 20, 300, 200],
+            transition_duration=0.4,
+        )
+
+        created = w.add_clip(0, requested)
+
+        assert created is w.tracks[0].clips[1]
+        assert created is not requested
+        assert asdict(created) == asdict(requested)
+        assert (w._selected_track, w._selected_clip) == (0, 1)
+        assert w.can_undo is True
+
+        created.rect = [50, 60, 640, 360]
+        created.transition_duration = 0.8
+        expected = asdict(created)
+        w.undo()
+        assert [clip.content for clip in w.tracks[0].clips] == ["existing"]
+
+        w.redo()
+        assert asdict(w.tracks[0].clips[1]) == expected
+
     def test_empty_zoom_track_can_add_clip_by_double_click(self, qapp):
         pytest.importorskip("PyQt5.QtWidgets")
         from PyQt5.QtCore import QEvent, QPointF, Qt
