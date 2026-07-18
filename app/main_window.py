@@ -722,6 +722,7 @@ class MainWindow(QMainWindow):
         pairs = (
             (self._timeline.playhead_changed, self._on_timeline_seek),
             (self._timeline.zoom_double_clicked, self._on_zoom_double_clicked),
+            (self._timeline.zoom_add_requested, self._on_zoom_double_clicked),
             (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
             (self._timeline.clips_changed, self._on_clips_changed),
             (self._timeline.status_message, self.update_status),
@@ -919,22 +920,30 @@ class MainWindow(QMainWindow):
         ratio = self.config.zoom_rect_ratio
         w = int(self._compositor.width * ratio)
         h = int(self._compositor.height * ratio)
-        cx = self._compositor.width // 2
-        cy = self._compositor.height // 2
+        rect = [
+            (self._compositor.width - w) // 2,
+            (self._compositor.height - h) // 2,
+            w,
+            h,
+        ]
         clip = existing_clip
         if clip is None:
-            clip = Clip(
+            zoom_track_index = next((
+                index for index, track in enumerate(self._timeline.tracks)
+                if track.type == "zoom"
+            ), None)
+            if zoom_track_index is None:
+                return
+            requested_clip = Clip(
                 type="zoom", start=time_s,
                 end=min(time_s + 2.0, self._timeline.duration),
                 content="手动缩放",
-                rect=[cx - w // 2, cy - h // 2, w, h],
+                rect=rect,
+                transition_duration=0.4,
             )
-            for track in self._timeline.tracks:
-                if track.type == "zoom":
-                    track.clips.append(clip)
-                    break
+            clip = self._timeline.add_clip(zoom_track_index, requested_clip)
         elif not clip.rect:
-            clip.rect = [cx - w // 2, cy - h // 2, w, h]
+            clip.rect = rect
 
         self._editing_zoom_clip = clip
         self._compositor.load_manual_zoom_clips(
