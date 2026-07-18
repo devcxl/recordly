@@ -20,6 +20,26 @@ class UndoCommand(ABC):
 
 
 @dataclass
+class AddClipCommand(UndoCommand):
+    track_index: int
+    clip_data: dict
+    clip_index: int | None = None
+
+    def execute(self, timeline):
+        t = timeline._tracks[self.track_index]
+        if self.clip_index is None:
+            self.clip_index = len(t.clips)
+        from core.project import Clip
+        t.clips.insert(self.clip_index, Clip(**self.clip_data))
+
+    def undo(self, timeline):
+        from dataclasses import asdict
+        t = timeline._tracks[self.track_index]
+        self.clip_data = asdict(t.clips[self.clip_index])
+        del t.clips[self.clip_index]
+
+
+@dataclass
 class MoveClipCommand(UndoCommand):
     track_index: int
     clip_index: int
