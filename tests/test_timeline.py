@@ -182,6 +182,323 @@ class TestTimelineData:
 class TestTimelineGui:
     """TimelineWidget 渲染测试 — 需要真实 PyQt5+GL 环境"""
 
+    @staticmethod
+    def _drag_clip(timeline, track_index, clip_index, press_time,
+                   candidate_start, release=False):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import RULER_HEIGHT, TRACK_HEADER_WIDTH, TRACK_HEIGHT
+
+        clip = timeline.tracks[track_index].clips[clip_index]
+        y = RULER_HEIGHT + track_index * TRACK_HEIGHT + TRACK_HEIGHT / 2
+        press = QPointF(
+            TRACK_HEADER_WIDTH + press_time * timeline._pixels_per_sec, y)
+        move = QPointF(
+            press.x() + (candidate_start - clip.start)
+            * timeline._pixels_per_sec,
+            y,
+        )
+        timeline.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        timeline.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, move,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        if release:
+            timeline.mouseReleaseEvent(QMouseEvent(
+                QEvent.MouseButtonRelease, move,
+                Qt.LeftButton, Qt.NoButton, Qt.NoModifier,
+            ))
+
+    @pytest.mark.parametrize(
+        "target, moving, press_time, candidate_start, expected_start, alignment",
+        [
+            ((1.0, 3.0), (6.0, 8.0), 7.0, 3.25, 3.0, 3.0),
+            ((1.0, 3.0), (6.0, 8.0), 7.0, 3.265625, 3.265625, None),
+            ((8.0, 10.0), (3.0, 5.0), 4.0, 5.75, 6.0, 8.0),
+            ((8.0, 10.0), (3.0, 5.0), 4.0, 5.734375, 5.734375, None),
+        ],
+    )
+    def test_video_drag_snap_threshold_for_both_edges(
+            self, qapp, target, moving, press_time, candidate_start,
+            expected_start, alignment):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=target[0], end=target[1]),
+            Clip(type="video", start=moving[0], end=moving[1]),
+        ])])
+
+        self._drag_clip(w, 0, 1, press_time, candidate_start)
+
+        moving_clip = w.tracks[0].clips[1]
+        assert moving_clip.start == pytest.approx(expected_start)
+        assert moving_clip.end == pytest.approx(expected_start + 2.0)
+        assert w._snap_alignment_time == alignment
+
+    @pytest.mark.parametrize(
+        "target_ends, expected_alignment",
+        [
+            ((5.2, 5.1), 5.1),
+            ((5.2, 4.8), 5.2),
+        ],
+    )
+    def test_video_drag_snap_uses_nearest_then_clip_order(
+            self, qapp, target_ends, expected_alignment):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=4.0, end=target_ends[0]),
+            Clip(type="video", start=4.2, end=target_ends[1]),
+            Clip(type="video", start=10.0, end=12.0),
+        ])])
+
+        self._drag_clip(w, 0, 2, 11.0, 5.0)
+
+        moving_clip = w.tracks[0].clips[2]
+        assert moving_clip.start == pytest.approx(expected_alignment)
+        assert moving_clip.end == pytest.approx(expected_alignment + 2.0)
+        assert w._snap_alignment_time == pytest.approx(expected_alignment)
+
+    def test_snap_alignment_clears_after_drag_release(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        self._drag_clip(w, 0, 1, 7.0, 3.25, release=True)
+
+        assert w._snap_alignment_time is None
+
+    def test_snap_alignment_clears_when_drag_is_cancelled(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+        self._drag_clip(w, 0, 1, 7.0, 3.25)
+        assert w._snap_alignment_time == pytest.approx(3.0)
+
+        ruler_press = QPointF(w._time_to_x(10.0), RULER_HEIGHT / 2)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, ruler_press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w._drag_state == "playhead"
+        assert w._snap_alignment_time is None
+
+    def test_set_tracks_clears_snap_alignment(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        tracks = [Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])]
+        w.set_tracks(tracks)
+        self._drag_clip(w, 0, 1, 7.0, 3.25)
+        assert w._snap_alignment_time == pytest.approx(3.0)
+
+        w.set_tracks([])
+
+        assert w._snap_alignment_time is None
+
+    def test_snap_alignment_paints_only_in_track_area(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+        from core.project import Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video")])
+        w.resize(w.minimumWidth(), w.minimumHeight())
+
+        def render(alignment):
+            w._snap_alignment_time = alignment
+            image = QImage(w.size(), QImage.Format_ARGB32)
+            image.fill(Qt.transparent)
+            painter = QPainter(image)
+            w.render(painter)
+            painter.end()
+            return image
+
+        without_line = render(None)
+        with_line = render(10.0)
+        x = w._time_to_x(10.0)
+
+        assert any(
+            without_line.pixel(x, y) != with_line.pixel(x, y)
+            for y in range(RULER_HEIGHT, RULER_HEIGHT + TRACK_HEIGHT)
+        )
+        assert all(
+            without_line.pixel(x, y) == with_line.pixel(x, y)
+            for y in range(RULER_HEIGHT)
+        )
+
+    def test_drag_undo_redo_preserves_non_position_fields(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        clip = Clip(
+            type="video", content="recording", start=1.0, end=3.0,
+            source_start=10.0, source_end=14.0, speed=2.0,
+        )
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[clip])])
+
+        self._drag_clip(w, 0, 0, 2.0, 4.0, release=True)
+
+        assert len(w._undo_stack) == 1
+        assert (clip.start, clip.end, clip.source_start, clip.source_end,
+                clip.speed, clip.content) == (
+            4.0, 6.0, 10.0, 14.0, 2.0, "recording",
+        )
+
+        w.undo()
+        assert (clip.start, clip.end, clip.source_start, clip.source_end,
+                clip.speed, clip.content) == (
+            1.0, 3.0, 10.0, 14.0, 2.0, "recording",
+        )
+
+        w.redo()
+        assert (clip.start, clip.end, clip.source_start, clip.source_end,
+                clip.speed, clip.content) == (
+            4.0, 6.0, 10.0, 14.0, 2.0, "recording",
+        )
+
+    @pytest.mark.parametrize(
+        "track_type, moving_type",
+        [("audio", "video"), ("video", "audio"), ("zoom", "zoom")],
+    )
+    def test_drag_snap_requires_video_track_and_clip(
+            self, qapp, track_type, moving_type):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type=track_type, clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type=moving_type, start=6.0, end=8.0),
+        ])])
+
+        self._drag_clip(w, 0, 1, 7.0, 3.25)
+
+        assert w.tracks[0].clips[1].start == pytest.approx(3.25)
+        assert w._snap_alignment_time is None
+
+    def test_drag_snap_does_not_use_other_video_tracks(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([
+            Track(type="video", clips=[
+                Clip(type="video", start=1.0, end=3.0),
+            ]),
+            Track(type="video", clips=[
+                Clip(type="video", start=6.0, end=8.0),
+            ]),
+        ])
+
+        self._drag_clip(w, 1, 0, 7.0, 3.25)
+
+        assert w.tracks[1].clips[0].start == pytest.approx(3.25)
+        assert w._snap_alignment_time is None
+
+    def test_resize_does_not_snap_clip_edges(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        press = QPointF(w._time_to_x(6.0), y)
+        move = QPointF(press.x() + (3.25 - 6.0) * w._pixels_per_sec, y)
+
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, move,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w._drag_state == "resize_left"
+        assert w.tracks[0].clips[1].start == pytest.approx(3.25)
+        assert w._snap_alignment_time is None
+
+    def test_snap_alignment_clears_after_leaving_threshold(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+        self._drag_clip(w, 0, 1, 7.0, 3.25)
+        assert w._snap_alignment_time == pytest.approx(3.0)
+
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        move = QPointF(
+            w._drag_start_x + (3.5 - w._drag_orig_start)
+            * w._pixels_per_sec,
+            y,
+        )
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, move,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+        assert w.tracks[0].clips[1].start == pytest.approx(3.5)
+        assert w._snap_alignment_time is None
+
     def test_widget_creation(self):
         pytest.importorskip("PyQt5.QtWidgets", reason="无 PyQt5 环境")
         from ui.timeline import TimelineWidget
