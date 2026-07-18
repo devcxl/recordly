@@ -1,5 +1,6 @@
 """时间线组件 — 支持多 clip 轨道剪辑"""
 
+from math import isclose
 import os
 
 from PyQt5.QtWidgets import QWidget, QMenu
@@ -24,6 +25,7 @@ TRACK_HEADER_WIDTH = 80
 TRACK_HEIGHT = 48
 RULER_HEIGHT = 20
 PADDING = 4
+CLIP_SNAP_DISTANCE_PX = 8.0
 
 
 class TimelineWidget(QWidget):
@@ -52,6 +54,7 @@ class TimelineWidget(QWidget):
         self._drag_orig_end = 0.0
         self._drag_orig_source_start = 0.0
         self._drag_orig_source_end = None
+        self._snap_alignment_time = None
         self._undo_stack = []
         self._redo_stack = []
 
@@ -88,6 +91,7 @@ class TimelineWidget(QWidget):
         self._tracks = tracks
         self._selected_track = -1
         self._selected_clip = -1
+        self._snap_alignment_time = None
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._update_height()
@@ -182,6 +186,7 @@ class TimelineWidget(QWidget):
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
+        self._snap_alignment_time = None
         pos = event.localPos()
 
         self._playhead_s = min(self._x_to_time(int(pos.x())), self._duration)
@@ -212,6 +217,8 @@ class TimelineWidget(QWidget):
                 clip = self._tracks[ti].clips[ci]
                 self._drag_orig_start = clip.start
                 self._drag_orig_end = clip.end
+                self._drag_orig_source_start = clip.source_start
+                self._drag_orig_source_end = clip.source_end
                 if self._tracks[ti].type == "zoom":
                     self.zoom_clip_selected.emit(clip)
                 self.update()
@@ -242,6 +249,9 @@ class TimelineWidget(QWidget):
                     max(0.0, self._duration - clip_duration),
                 ))
                 new_end = new_start + (self._drag_orig_end - self._drag_orig_start)
+                track = self._tracks[self._drag_track]
+                new_start, new_end = self._snap_move_candidate(
+                    track, self._drag_clip, new_start, new_end)
                 clip.start = new_start
                 clip.end = new_end
             elif self._drag_state == "resize_left":
@@ -269,9 +279,39 @@ class TimelineWidget(QWidget):
         else:
             self.setCursor(Qt.ArrowCursor)
 
+    def _snap_move_candidate(self, track, clip_index: int,
+                             start: float, end: float) -> tuple[float, float]:
+        self._snap_alignment_time = None
+        clip = track.clips[clip_index]
+        if self._drag_state != "move" or track.type != "video" or clip.type != "video":
+            return start, end
+
+        best = None
+        duration = end - start
+        max_start = max(0.0, self._duration - duration)
+        for index, other in enumerate(track.clips):
+            if index == clip_index:
+                continue
+            candidates = (
+                (abs(start - other.end), other.end, other.end),
+                (abs(end - other.start), other.start - duration, other.start),
+            )
+            for distance, snapped_start, target in candidates:
+                distance_px = distance * self._pixels_per_sec
+                if (distance_px <= CLIP_SNAP_DISTANCE_PX
+                        and 0.0 <= snapped_start <= max_start
+                        and (best is None or distance_px < best[0])):
+                    best = distance_px, snapped_start, target
+
+        if best is None:
+            return start, end
+        _, snapped_start, self._snap_alignment_time = best
+        return snapped_start, snapped_start + duration
+
     def mouseReleaseEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
+        self._snap_alignment_time = None
 
         if self._drag_state not in ("move", "resize_left", "resize_right"):
             self._drag_state = None
@@ -307,7 +347,13 @@ class TimelineWidget(QWidget):
     def _make_move_cmd(self) -> MoveClipCommand | None:
         if self._drag_state in ("move", "resize_left", "resize_right"):
             clip = self._tracks[self._drag_track].clips[self._drag_clip]
-            if abs(clip.start - self._drag_orig_start) > 0.01 or abs(clip.end - self._drag_orig_end) > 0.01:
+            position_changed = (
+                not isclose(clip.start, self._drag_orig_start,
+                            abs_tol=1e-9, rel_tol=0.0)
+                or not isclose(clip.end, self._drag_orig_end,
+                               abs_tol=1e-9, rel_tol=0.0)
+            )
+            if position_changed:
                 return MoveClipCommand(
                     track_index=self._drag_track, clip_index=self._drag_clip,
                     old_start=self._drag_orig_start, new_start=clip.start,
@@ -487,6 +533,14 @@ class TimelineWidget(QWidget):
 
         for i, track in enumerate(self._tracks):
             self._draw_track(p, track, i)
+
+        if self._snap_alignment_time is not None:
+            x = self._time_to_x(self._snap_alignment_time)
+            p.save()
+            p.setRenderHint(QPainter.Antialiasing, False)
+            p.setPen(QPen(QColor("#f5c451"), 1, Qt.DashLine))
+            p.drawLine(x, RULER_HEIGHT, x, content_h)
+            p.restore()
 
         self._draw_playhead(p)
 
