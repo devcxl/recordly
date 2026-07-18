@@ -5,6 +5,26 @@ import os
 import pytest
 
 
+class _FakeSignal:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, slot):
+        self.slots.append(slot)
+
+    def disconnect(self, slot=None):
+        if slot is None:
+            self.slots.clear()
+        elif slot in self.slots:
+            self.slots.remove(slot)
+        else:
+            raise TypeError
+
+    def emit(self, *args):
+        for slot in self.slots:
+            slot(*args)
+
+
 def test_space_shortcut_uses_window_context_without_auto_repeat(qapp):
     from app.main_window import MainWindow
     from PyQt5.QtCore import Qt
@@ -260,24 +280,13 @@ def test_recording_start_error_restores_idle_state():
 def test_timeline_signal_connection_is_idempotent():
     from app.main_window import MainWindow
 
-    class FakeSignal:
-        def __init__(self):
-            self.slots = []
-
-        def connect(self, slot):
-            self.slots.append(slot)
-
-        def disconnect(self, slot):
-            if slot not in self.slots:
-                raise TypeError
-            self.slots.remove(slot)
-
     class FakeTimeline:
-        playhead_changed = FakeSignal()
-        zoom_double_clicked = FakeSignal()
-        zoom_clip_selected = FakeSignal()
-        clips_changed = FakeSignal()
-        status_message = FakeSignal()
+        playhead_changed = _FakeSignal()
+        zoom_double_clicked = _FakeSignal()
+        zoom_add_requested = _FakeSignal()
+        zoom_clip_selected = _FakeSignal()
+        clips_changed = _FakeSignal()
+        status_message = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -303,9 +312,181 @@ def test_timeline_signal_connection_is_idempotent():
 
     assert len(window._timeline.playhead_changed.slots) == 1
     assert len(window._timeline.zoom_double_clicked.slots) == 1
+    assert window._timeline.zoom_add_requested.slots == [
+        window._on_zoom_double_clicked
+    ]
     assert len(window._timeline.zoom_clip_selected.slots) == 1
     assert len(window._timeline.clips_changed.slots) == 1
     assert window._timeline.status_message.slots == [window.update_status]
+
+
+@pytest.mark.parametrize(
+    ("start", "expected_end"),
+    [(3.25, 5.25), (9.25, 10.0)],
+)
+def test_zoom_blank_creation_uses_add_clip_defaults_and_returned_object(
+        start, expected_end):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from core.project import Clip, Track
+
+    class FakeTimeline:
+        duration = 10.0
+
+        def __init__(self):
+            self.tracks = [Track(type="video"), Track(type="zoom")]
+            self.add_calls = []
+
+        def add_clip(self, track_index, requested):
+            actual = Clip(**asdict(requested))
+            self.tracks[track_index].clips.append(actual)
+            self.add_calls.append((track_index, requested, actual))
+            return actual
+
+        def update(self):
+            pass
+
+    timeline = FakeTimeline()
+    loaded = []
+    shown = []
+    seeks = []
+    preview = SimpleNamespace(
+        overlay=SimpleNamespace(rect_changed=_FakeSignal()),
+        show_zoom_rect=lambda *args: shown.append(args),
+    )
+    window = SimpleNamespace(
+        config=SimpleNamespace(zoom_rect_ratio=0.4),
+        _timeline=timeline,
+        _compositor=SimpleNamespace(
+            width=1600,
+            height=900,
+            load_manual_zoom_clips=lambda clips: loaded.append(clips),
+        ),
+        _playback=SimpleNamespace(
+            current_frame=17,
+            seek=lambda frame: seeks.append(frame),
+        ),
+        _preview=preview,
+        _editing_zoom_clip=None,
+        _on_zoom_rect_changed=lambda *_args: None,
+    )
+
+    MainWindow._on_zoom_double_clicked(window, start)
+
+    track_index, requested, actual = timeline.add_calls[0]
+    assert track_index == 1
+    assert (requested.start, requested.end) == (start, expected_end)
+    assert requested.content == "手动缩放"
+    assert requested.transition_duration == 0.4
+    assert requested.rect == [480, 270, 640, 360]
+    assert window._editing_zoom_clip is actual
+    assert actual is not requested
+    assert loaded[-1] == [actual]
+    assert shown == [(actual.rect, 1600, 900)]
+    assert seeks == [17]
+
+
+def test_existing_zoom_clip_only_fills_empty_rect_without_add_command():
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from core.project import Clip, Track
+
+    clip = Clip(type="zoom", start=1.0, end=3.0)
+    timeline = SimpleNamespace(
+        tracks=[Track(type="zoom", clips=[clip])],
+        add_clip=lambda *_args: pytest.fail("已有 Clip 不应创建命令"),
+        update=lambda: None,
+    )
+    window = SimpleNamespace(
+        config=SimpleNamespace(zoom_rect_ratio=0.5),
+        _timeline=timeline,
+        _compositor=SimpleNamespace(
+            width=1920,
+            height=1080,
+            load_manual_zoom_clips=lambda _clips: None,
+        ),
+        _playback=None,
+        _preview=SimpleNamespace(
+            overlay=SimpleNamespace(rect_changed=_FakeSignal()),
+            show_zoom_rect=lambda *_args: None,
+        ),
+        _editing_zoom_clip=None,
+        _on_zoom_rect_changed=lambda *_args: None,
+    )
+
+    MainWindow._on_zoom_double_clicked(window, clip.start, clip)
+
+    assert clip.rect == [480, 270, 960, 540]
+    assert window._editing_zoom_clip is clip
+
+
+def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from core.project import Clip, Track
+    from ui.timeline import TimelineWidget
+
+    class FakeCompositor:
+        width = 1280
+        height = 720
+
+        def load_manual_zoom_clips(self, clips):
+            self.zoom_clips = clips
+
+        def load_clips(self, clips):
+            self.video_clips = clips
+
+    class FakePreview:
+        def __init__(self):
+            self.overlay = SimpleNamespace(rect_changed=_FakeSignal())
+            self.hidden = 0
+
+        def show_zoom_rect(self, *_args):
+            pass
+
+        def hide_zoom_rect(self):
+            self.hidden += 1
+
+    timeline = TimelineWidget()
+    timeline.set_tracks([
+        Track(type="video", clips=[Clip(type="video", start=0, end=10)]),
+        Track(type="zoom"),
+    ])
+    timeline.duration = 10.0
+    preview = FakePreview()
+    window = SimpleNamespace(
+        config=SimpleNamespace(zoom_rect_ratio=0.5),
+        _timeline=timeline,
+        _compositor=FakeCompositor(),
+        _playback=None,
+        _preview=preview,
+        _editing_zoom_clip=None,
+        _audio_regions=[],
+        _on_zoom_rect_changed=lambda *_args: None,
+    )
+
+    MainWindow._on_zoom_double_clicked(window, 2.0)
+    created = window._editing_zoom_clip
+    assert timeline.can_undo is True
+    assert created is timeline.tracks[1].clips[0]
+
+    created.rect = [20, 30, 800, 450]
+    created.transition_duration = 0.8
+    expected = asdict(created)
+    timeline.clips_changed.connect(
+        lambda: MainWindow._on_clips_changed(window))
+
+    timeline.undo()
+    assert timeline.tracks[1].clips == []
+    assert window._editing_zoom_clip is None
+    assert preview.hidden == 1
+
+    timeline.redo()
+    restored = timeline.tracks[1].clips[0]
+    assert asdict(restored) == expected
+    assert window._compositor.zoom_clips == [restored]
 
 
 def test_zoom_clip_selection_opens_that_clip_for_editing():
