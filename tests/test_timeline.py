@@ -868,8 +868,40 @@ class TestTimelineGui:
         assert [(clip.start, clip.end) for clip in w.tracks[0].clips] == [
             (1.0, 3.0), (3.0, 5.0),
         ]
+        assert (w._selected_track, w._selected_clip) == (0, 1)
 
-    def test_x_key_without_playhead_video_only_emits_status(self, qapp):
+    def test_shortcut_registry_uses_default_then_custom_split_binding(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from core.project import Clip, Track
+        from core.shortcuts import ShortcutRegistry
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 3.0
+
+        QTest.keyClick(w, Qt.Key_X)
+
+        assert len(w.tracks[0].clips) == 2
+
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=5.0),
+        ])])
+        w.playhead = 3.0
+        w.set_shortcut_registry(
+            ShortcutRegistry({"split_at_playhead": "Ctrl+K"}),
+        )
+
+        QTest.keyClick(w, Qt.Key_X)
+        assert len(w.tracks[0].clips) == 1
+
+        QTest.keyClick(w, Qt.Key_K, Qt.ControlModifier)
+        assert len(w.tracks[0].clips) == 2
+
+    def test_x_key_without_playhead_clip_only_emits_status(self, qapp):
         from copy import deepcopy
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
@@ -896,14 +928,14 @@ class TestTimelineGui:
 
         QTest.keyClick(w, Qt.Key_X, Qt.NoModifier)
 
-        assert messages == ["播放头下无视频片段"]
+        assert messages == ["播放头下无片段"]
         assert changes == []
         assert w.tracks == original_tracks
         assert (w._selected_track, w._selected_clip) == (0, 0)
         assert w._undo_stack == [undo_command]
         assert w._redo_stack == [redo_command]
 
-    def test_playhead_video_uses_track_then_clip_order(self, qapp):
+    def test_playhead_clip_uses_track_then_clip_order_excluding_zoom(self, qapp):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
         from core.project import Clip, Track
@@ -911,13 +943,13 @@ class TestTimelineGui:
 
         w = TimelineWidget()
         w.set_tracks([
-            Track(type="audio", clips=[
-                Clip(type="video", content="wrong track", start=0.0, end=8.0),
+            Track(type="zoom", clips=[
+                Clip(type="zoom", content="zoom track", start=0.0, end=8.0),
             ]),
-            Track(type="video", clips=[
-                Clip(type="audio", content="wrong clip", start=0.0, end=8.0),
-                Clip(type="video", content="first", start=1.0, end=7.0),
-                Clip(type="video", content="second", start=2.0, end=6.0),
+            Track(type="audio", clips=[
+                Clip(type="zoom", content="zoom clip", start=0.0, end=8.0),
+                Clip(type="audio", content="first", start=1.0, end=7.0),
+                Clip(type="audio_extra", content="second", start=2.0, end=6.0),
             ]),
             Track(type="video", clips=[
                 Clip(type="video", content="later track", start=0.0, end=8.0),
@@ -929,7 +961,7 @@ class TestTimelineGui:
 
         assert [(clip.content, clip.start, clip.end)
                 for clip in w.tracks[1].clips] == [
-            ("wrong clip", 0.0, 8.0),
+            ("zoom clip", 0.0, 8.0),
             ("first", 1.0, 4.0),
             ("first", 4.0, 7.0),
             ("second", 2.0, 6.0),
@@ -937,15 +969,23 @@ class TestTimelineGui:
         assert len(w.tracks[0].clips) == 1
         assert len(w.tracks[2].clips) == 1
 
-    def test_x_key_ignores_audio_covering_playhead(self, qapp):
+    @pytest.mark.parametrize("track_type, clip_type", [
+        ("audio", "audio"),
+        ("audio_extra", "audio_extra"),
+    ])
+    def test_x_key_splits_audio_clips_with_source_ranges(
+            self, qapp, track_type, clip_type):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
         from core.project import Clip, Track
         from ui.timeline import TimelineWidget
 
         w = TimelineWidget()
-        w.set_tracks([Track(type="audio", clips=[
-            Clip(type="audio", start=1.0, end=5.0),
+        w.set_tracks([Track(type=track_type, clips=[
+            Clip(
+                type=clip_type, start=1.0, end=5.0,
+                source_start=10.0, source_end=18.0, speed=2.0,
+            ),
         ])])
         w.playhead = 3.0
         messages = []
@@ -953,11 +993,28 @@ class TestTimelineGui:
 
         QTest.keyClick(w, Qt.Key_X, Qt.NoModifier)
 
-        assert len(w.tracks[0].clips) == 1
-        assert messages == ["播放头下无视频片段"]
+        assert [(clip.start, clip.end, clip.source_start, clip.source_end)
+                for clip in w.tracks[0].clips] == [
+            (1.0, 3.0, 10.0, 14.0),
+            (3.0, 5.0, 14.0, 18.0),
+        ]
+        assert (w._selected_track, w._selected_clip) == (0, 1)
+        assert messages == []
+
+        w.undo()
+        assert [(clip.start, clip.end, clip.source_start, clip.source_end)
+                for clip in w.tracks[0].clips] == [
+            (1.0, 5.0, 10.0, 18.0),
+        ]
+        w.redo()
+        assert [(clip.start, clip.end, clip.source_start, clip.source_end)
+                for clip in w.tracks[0].clips] == [
+            (1.0, 3.0, 10.0, 14.0),
+            (3.0, 5.0, 14.0, 18.0),
+        ]
 
     @pytest.mark.parametrize("playhead", [1.0, 5.0])
-    def test_playhead_video_edges_are_not_split(self, qapp, playhead):
+    def test_playhead_clip_edges_are_not_split(self, qapp, playhead):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
         from core.project import Clip, Track
@@ -974,7 +1031,7 @@ class TestTimelineGui:
         QTest.keyClick(w, Qt.Key_X, Qt.NoModifier)
 
         assert len(w.tracks[0].clips) == 1
-        assert messages == ["播放头下无视频片段"]
+        assert messages == ["播放头下无片段"]
 
     @pytest.mark.parametrize("modifier_names", [
         ("ControlModifier",),
@@ -1005,16 +1062,16 @@ class TestTimelineGui:
         assert messages == []
         assert w.can_undo is False
 
-    def test_x_key_source_ranges_and_undo_redo_match_s_path(self, qapp):
+    def test_s_key_splits_selected_audio_with_x_source_and_undo_redo(self, qapp):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
         from core.project import Clip, Track
         from ui.timeline import TimelineWidget
 
-        def make_timeline():
+        def make_timeline(track_type, clip_type):
             timeline = TimelineWidget()
-            timeline.set_tracks([Track(type="video", clips=[Clip(
-                id="source", type="video", content="recording",
+            timeline.set_tracks([Track(type=track_type, clips=[Clip(
+                id="source", type=clip_type, content="recording",
                 start=1.0, end=5.0, source_start=10.0,
                 source_end=18.0, speed=2.0,
             )])])
@@ -1026,18 +1083,19 @@ class TestTimelineGui:
                      clip.source_end, clip.speed, clip.content)
                     for clip in timeline.tracks[0].clips]
 
-        x_timeline = make_timeline()
-        s_timeline = make_timeline()
+        x_timeline = make_timeline("video", "video")
+        s_timeline = make_timeline("audio", "audio")
         s_timeline._selected_track = 0
         s_timeline._selected_clip = 0
 
         QTest.keyClick(x_timeline, Qt.Key_X, Qt.NoModifier)
-        s_timeline._split_clip(0, 0)
+        QTest.keyClick(s_timeline, Qt.Key_S, Qt.NoModifier)
 
         assert split_state(x_timeline) == split_state(s_timeline) == [
             (1.0, 3.0, 10.0, 14.0, 2.0, "recording"),
             (3.0, 5.0, 14.0, 18.0, 2.0, "recording"),
         ]
+        assert (s_timeline._selected_track, s_timeline._selected_clip) == (0, 1)
         assert x_timeline.can_undo is True
         x_timeline.undo()
         assert split_state(x_timeline) == [
@@ -1046,6 +1104,155 @@ class TestTimelineGui:
         assert x_timeline.can_redo is True
         x_timeline.redo()
         assert split_state(x_timeline) == split_state(s_timeline)
+
+    @pytest.mark.parametrize("key_name, expected_range", [
+        ("Key_Delete", None),
+        ("Key_Backspace", None),
+        ("Key_I", (3.0, 5.0)),
+        ("Key_O", (1.0, 3.0)),
+        ("Key_Left", (0.5, 2.5)),
+        ("Key_Right", (1.5, 3.5)),
+    ])
+    def test_default_timeline_shortcuts_route_to_selected_clip_actions(
+            self, qapp, key_name, expected_range):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        clip_end = 5.0 if key_name in ("Key_I", "Key_O") else 3.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=clip_end),
+        ])])
+        w.playhead = 3.0 if key_name in ("Key_I", "Key_O") else 1.0
+        w._selected_track = 0
+        w._selected_clip = 0
+
+        QTest.keyClick(w, getattr(Qt, key_name))
+
+        if expected_range is None:
+            assert w.tracks[0].clips == []
+        else:
+            clip = w.tracks[0].clips[0]
+            assert (clip.start, clip.end) == pytest.approx(expected_range)
+
+    @pytest.mark.parametrize("action_id, default_key_name, handler_name, args", [
+        ("split_at_playhead", "Key_X", "split_at_playhead", ()),
+        ("split_selected", "Key_S", "split_selected", ()),
+        ("delete_clip", "Key_Delete", "delete_selected", ()),
+        ("delete_clip_alt", "Key_Backspace", "delete_selected", ()),
+        ("trim_in", "Key_I", "trim_in", ()),
+        ("trim_out", "Key_O", "trim_out", ()),
+        ("nudge_left", "Key_Left", "nudge_selected", (-0.5,)),
+        ("nudge_right", "Key_Right", "nudge_selected", (0.5,)),
+    ])
+    def test_custom_timeline_shortcuts_route_all_actions_and_disable_old_keys(
+            self, qapp, monkeypatch, action_id, default_key_name,
+            handler_name, args):
+        from unittest.mock import MagicMock
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from core.shortcuts import ShortcutRegistry
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        handler = MagicMock()
+        monkeypatch.setattr(w, handler_name, handler)
+        w.set_shortcut_registry(ShortcutRegistry({action_id: "Ctrl+K"}))
+
+        QTest.keyClick(w, getattr(Qt, default_key_name))
+        handler.assert_not_called()
+
+        QTest.keyClick(w, Qt.Key_K, Qt.ControlModifier)
+        handler.assert_called_once_with(*args)
+
+    def test_unmatched_timeline_key_is_delegated_to_parent(self, qapp):
+        from PyQt5.QtCore import QEvent, Qt
+        from PyQt5.QtGui import QKeyEvent
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        event = QKeyEvent(QEvent.KeyPress, Qt.Key_P, Qt.NoModifier)
+        event.ignore()
+
+        w.keyPressEvent(event)
+
+        assert event.isAccepted() is False
+
+    def test_nudge_selected_keeps_split_source_ranges_through_undo_redo(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtTest import QTest
+        from core.commands import MoveClipCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(
+                type="video", start=1.0, end=5.0,
+                source_start=10.0, source_end=18.0, speed=2.0,
+            ),
+        ])])
+        w.playhead = 3.0
+        w.split_at_playhead()
+
+        QTest.keyClick(w, Qt.Key_Right)
+
+        right = w.tracks[0].clips[1]
+        assert (right.start, right.end) == pytest.approx((3.5, 5.5))
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
+        assert isinstance(w._undo_stack[-1], MoveClipCommand)
+
+        w.undo()
+        assert (right.start, right.end) == pytest.approx((3.0, 5.0))
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
+
+        w.redo()
+        assert (right.start, right.end) == pytest.approx((3.5, 5.5))
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
+
+    @pytest.mark.parametrize("candidate_start", [1.0, 5.0])
+    def test_split_right_clip_body_click_drags_with_one_undoable_move(
+            self, qapp, candidate_start):
+        from core.commands import MoveClipCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 10.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(
+                type="video", start=1.0, end=5.0,
+                source_start=10.0, source_end=18.0, speed=2.0,
+            ),
+        ])])
+        w.playhead = 3.0
+        w.split_at_playhead()
+        undo_count = len(w._undo_stack)
+        w._selected_track = -1
+        w._selected_clip = -1
+
+        self._drag_clip(w, 0, 1, 4.0, candidate_start, release=True)
+
+        right = w.tracks[0].clips[1]
+        assert (w._selected_track, w._selected_clip) == (0, 1)
+        assert (right.start, right.end) == pytest.approx(
+            (candidate_start, candidate_start + 2.0),
+        )
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
+        assert len(w._undo_stack) == undo_count + 1
+        assert isinstance(w._undo_stack[-1], MoveClipCommand)
+
+        w.undo()
+        assert (right.start, right.end) == pytest.approx((3.0, 5.0))
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
+
+        w.redo()
+        assert (right.start, right.end) == pytest.approx(
+            (candidate_start, candidate_start + 2.0),
+        )
+        assert (right.source_start, right.source_end) == (14.0, 18.0)
 
     def test_x_key_only_applies_with_timeline_focus(self, qapp):
         from PyQt5.QtCore import Qt
