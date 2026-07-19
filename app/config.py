@@ -3,8 +3,11 @@
 import os
 from dataclasses import dataclass, field
 
+from core.shortcuts import ShortcutRegistry
+
 try:
     from PyQt5.QtCore import QSettings
+    from PyQt5.QtGui import QKeySequence
     HAS_QT = True
 except ImportError:
     HAS_QT = False
@@ -16,6 +19,23 @@ except ImportError:
         def setValue(self, key, value):
             self._data[key] = value
         def sync(self): pass
+
+
+def _default_shortcuts() -> dict[str, str]:
+    return ShortcutRegistry().bindings()
+
+
+def _load_shortcut(value: object, default: str) -> str:
+    if not isinstance(value, str) or not value:
+        return default
+    if not HAS_QT:
+        return value
+
+    portable_text = QKeySequence(
+        value,
+        QKeySequence.PortableText,
+    ).toString(QKeySequence.PortableText)
+    return portable_text or default
 
 
 @dataclass
@@ -31,6 +51,10 @@ class AppConfig:
     cursor_style: str = "dot"
     trail_enabled: bool = True
     zoom_rect_ratio: float = 0.5
+    shortcuts: dict[str, str] = field(default_factory=_default_shortcuts)
+
+    def __post_init__(self):
+        self.shortcuts = ShortcutRegistry(self.shortcuts).bindings()
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -47,6 +71,9 @@ class AppConfig:
         cfg.cursor_style = s.value("cursor_style", cls.cursor_style)
         cfg.trail_enabled = s.value("trail_enabled", "true").lower() == "true"
         cfg.zoom_rect_ratio = float(s.value("zoom_rect_ratio", cls.zoom_rect_ratio))
+        for action in ShortcutRegistry().actions():
+            value = s.value(f"shortcuts/{action.action_id}", None)
+            cfg.shortcuts[action.action_id] = _load_shortcut(value, action.default_keys)
         cfg.recordings_dir = os.path.expanduser(cfg.recordings_dir)
         cfg.projects_dir = os.path.expanduser(cfg.projects_dir)
         return cfg
@@ -64,3 +91,14 @@ class AppConfig:
         s.setValue("cursor_style", self.cursor_style)
         s.setValue("trail_enabled", "true" if self.trail_enabled else "false")
         s.setValue("zoom_rect_ratio", self.zoom_rect_ratio)
+        for action in ShortcutRegistry().actions():
+            portable_text = _load_shortcut(
+                self.shortcuts.get(action.action_id, action.default_keys),
+                action.default_keys,
+            )
+            self.shortcuts[action.action_id] = portable_text
+            s.setValue(
+                f"shortcuts/{action.action_id}",
+                portable_text,
+            )
+        s.sync()
