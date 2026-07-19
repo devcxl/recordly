@@ -25,6 +25,16 @@ class _FakeSignal:
             slot(*args)
 
 
+def _native_shortcut_text(*portable_texts):
+    from PyQt5.QtGui import QKeySequence
+
+    return " / ".join(
+        QKeySequence(portable_text, QKeySequence.PortableText).toString(
+            QKeySequence.NativeText)
+        for portable_text in portable_texts
+    )
+
+
 def _make_shortcut_window(bindings):
     from app.main_window import MainWindow
     from core.shortcuts import ShortcutRegistry
@@ -1202,8 +1212,9 @@ def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     assert redo_act is not None
 
     # 初始文本使用注册表中的当前键位
-    assert undo_act.text() == "撤销\tCtrl+K"
-    assert redo_act.text() == "重做\tCtrl+L / Ctrl+M"
+    assert undo_act.text() == f"撤销\t{_native_shortcut_text('Ctrl+K')}"
+    assert redo_act.text() == (
+        f"重做\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}")
 
     # 调用 _refresh_undo_redo_state 验证动态文本更新（含 \t 快捷键提示）
     MainWindow._refresh_undo_redo_state(test_window)
@@ -1211,11 +1222,11 @@ def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     assert undo_act.isEnabled() is True
     assert "添加片段" in undo_act.text()
     assert "撤销" in undo_act.text()
-    assert "\tCtrl+K" in undo_act.text()
+    assert f"\t{_native_shortcut_text('Ctrl+K')}" in undo_act.text()
     assert redo_act.isEnabled() is True
     assert "删除片段" in redo_act.text()
     assert "重做" in redo_act.text()
-    assert "\tCtrl+L / Ctrl+M" in redo_act.text()
+    assert f"\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}" in redo_act.text()
 
 
 def test_refresh_undo_redo_state_updates_menu_and_toolbar():
@@ -1283,12 +1294,14 @@ def test_refresh_undo_redo_state_updates_menu_and_toolbar():
     assert "移动片段" in logs["undo.text"]
     assert "撤销" in logs["undo.text"]
     assert logs["redo.enabled"] is False
-    assert logs["redo.text"] == "重做\tCtrl+L / Ctrl+M"
+    assert logs["redo.text"] == (
+        f"重做\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}")
     assert logs["btn_undo.enabled"] is True
     assert "移动片段" in logs["btn_undo.tip"]
-    assert "Ctrl+K" in logs["btn_undo.tip"]
+    assert _native_shortcut_text("Ctrl+K") in logs["btn_undo.tip"]
     assert logs["btn_redo.enabled"] is False
-    assert logs["btn_redo.tip"] == "重做 (Ctrl+L / Ctrl+M)"
+    assert logs["btn_redo.tip"] == (
+        f"重做 ({_native_shortcut_text('Ctrl+L', 'Ctrl+M')})")
 
 
 def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
@@ -1324,8 +1337,9 @@ def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
     assert window._btn_redo.text() == "↪"
     assert window._btn_undo.isEnabled() is False
     assert window._btn_redo.isEnabled() is False
-    assert "Ctrl+Z" in window._btn_undo.toolTip()
-    assert "Ctrl+Shift+Z / Ctrl+Y" in window._btn_redo.toolTip()
+    assert _native_shortcut_text("Ctrl+Z") in window._btn_undo.toolTip()
+    assert _native_shortcut_text(
+        "Ctrl+Shift+Z", "Ctrl+Y") in window._btn_redo.toolTip()
 
     # 验证按钮被添加到 toolbar
     actions = toolbar.actions()
