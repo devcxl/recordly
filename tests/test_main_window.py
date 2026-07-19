@@ -171,6 +171,9 @@ def test_settings_acceptance_updates_shared_registry_and_rebinds(monkeypatch):
             preview_quality=0.75,
         ),
         _shortcut_registry=registry,
+        _timeline=SimpleNamespace(
+            set_shortcut_registry=lambda value: calls.append(("timeline", value)),
+        ),
         _rebind_window_shortcuts=lambda: calls.append("rebind"),
         _refresh_undo_redo_state=lambda: calls.append("refresh"),
         _compositor=SimpleNamespace(
@@ -189,7 +192,9 @@ def test_settings_acceptance_updates_shared_registry_and_rebinds(monkeypatch):
 
     assert window._shortcut_registry.binding("undo") == "Ctrl+K"
     assert window.config.shortcuts == updated_bindings
-    assert calls[:2] == ["rebind", "refresh"]
+    assert calls[:3] == [
+        ("timeline", window._shortcut_registry), "rebind", "refresh",
+    ]
 
 
 @pytest.mark.parametrize("blocked_by", ["home", "inactive", "modal", "popup"])

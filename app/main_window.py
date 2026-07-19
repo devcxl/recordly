@@ -249,6 +249,7 @@ class MainWindow(QMainWindow):
         self._preview.setMinimumSize(640, 480)
 
         self._timeline = TimelineWidget()
+        self._timeline.set_shortcut_registry(self._shortcut_registry)
         self._timeline_scroll = QScrollArea()
         self._timeline_scroll.setWidget(self._timeline)
         self._timeline_scroll.setWidgetResizable(True)
@@ -281,6 +282,7 @@ class MainWindow(QMainWindow):
         if dialog.exec_() == SettingsDialog.Accepted:
             if self._shortcut_registry.replace_bindings(self.config.shortcuts).ok:
                 self.config.shortcuts = self._shortcut_registry.bindings()
+                self._timeline.set_shortcut_registry(self._shortcut_registry)
                 self._rebind_window_shortcuts()
                 self._refresh_undo_redo_state()
             self._compositor.fps = self.config.default_fps
