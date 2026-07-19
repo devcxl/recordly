@@ -4,10 +4,14 @@ from PyQt5.QtWidgets import (
     QDialog, QTabWidget, QVBoxLayout, QHBoxLayout,
     QWidget, QLabel, QSpinBox, QSlider, QComboBox,
     QCheckBox, QPushButton, QFileDialog, QLineEdit,
+    QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView,
+    QDialogButtonBox, QMessageBox,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QKeySequence
 from app.config import AppConfig
 from core.project import Project
+from core.shortcuts import ShortcutRegistry
 
 
 _STYLE = """
@@ -38,26 +42,134 @@ QSlider::sub-page:horizontal { background: #0078D4; border-radius: 3px; }
 """
 
 
+class _ShortcutCaptureDialog(QDialog):
+    """捕获并校验单个快捷键的私有对话框。"""
+
+    _MODIFIER_KEYS = {
+        Qt.Key_Control,
+        Qt.Key_Alt,
+        Qt.Key_Shift,
+        Qt.Key_Meta,
+        Qt.Key_AltGr,
+    }
+
+    def __init__(self, draft_registry, action_id, parent=None):
+        super().__init__(parent)
+        self._draft_registry = draft_registry
+        self._action_id = action_id
+        self._portable_text = None
+        self.setWindowTitle("按下新快捷键")
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("请按下新的快捷键"))
+        self._sequence_label = QLabel("等待输入…")
+        self._sequence_label.setAlignment(Qt.AlignCenter)
+        self._sequence_label.setFocusPolicy(Qt.StrongFocus)
+        self._sequence_label.installEventFilter(self)
+        layout.addWidget(self._sequence_label)
+        self._error_label = QLabel()
+        self._error_label.setStyleSheet("color: #ff6b6b;")
+        self._error_label.hide()
+        layout.addWidget(self._error_label)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._confirm_button = buttons.button(QDialogButtonBox.Ok)
+        self._confirm_button.setEnabled(False)
+        for button in buttons.buttons():
+            button.setFocusPolicy(Qt.NoFocus)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._sequence_label.setFocus(Qt.OtherFocusReason)
+
+    def eventFilter(self, watched, event):
+        if watched is self._sequence_label and event.type() == QEvent.KeyPress:
+            self.keyPressEvent(event)
+            return True
+        return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.reject()
+            event.accept()
+            return
+        if event.key() in self._MODIFIER_KEYS:
+            self._show_error("请按下包含非修饰键的快捷键")
+            event.accept()
+            return
+
+        portable_text = QKeySequence(
+            int(event.modifiers()) | event.key(),
+        ).toString(QKeySequence.PortableText)
+        if not portable_text:
+            self._show_error("快捷键无效，请重新输入")
+            event.accept()
+            return
+
+        self._portable_text = portable_text
+        self._sequence_label.setText(
+            SettingsDialog._native_shortcut_text(portable_text))
+        self._error_label.hide()
+        self._confirm_button.setEnabled(True)
+        event.accept()
+
+    def _on_accept(self):
+        if self._portable_text is None:
+            self._show_error("请按下包含非修饰键的快捷键")
+            return
+
+        validation = self._draft_registry.validate(
+            self._action_id,
+            self._portable_text,
+        )
+        if validation.ok:
+            self.accept()
+            return
+
+        if validation.code == "SHORTCUT_CONFLICT":
+            action = next(
+                action
+                for action in self._draft_registry.actions()
+                if action.action_id == validation.conflicting_action_id
+            )
+            self._show_error(f"与「{action.display_name}」冲突，请重新设置")
+            return
+        self._show_error("快捷键无效，请重新输入")
+
+    def _show_error(self, message):
+        self._error_label.setText(message)
+        self._error_label.show()
+
+
 class SettingsDialog(QDialog):
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         self._config = config
+        self._shortcut_draft = ShortcutRegistry(config.shortcuts)
+        self._shortcut_actions = self._shortcut_draft.actions()
         self.setWindowTitle("设置")
-        self.setFixedSize(520, 420)
+        self.setMinimumSize(720, 560)
+        self.resize(720, 560)
         self.setStyleSheet(_STYLE)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_general_tab(), "通用")
-        tabs.addTab(self._build_cursor_tab(), "光标")
-        tabs.addTab(self._build_zoom_tab(), "缩放")
-        tabs.addTab(self._build_preview_tab(), "预览")
-        tabs.addTab(self._build_about_tab(), "关于")
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._build_general_tab(), "通用")
+        self._tabs.addTab(self._build_shortcut_tab(), "快捷键")
+        self._tabs.addTab(self._build_cursor_tab(), "光标")
+        self._tabs.addTab(self._build_zoom_tab(), "缩放")
+        self._tabs.addTab(self._build_preview_tab(), "预览")
+        self._tabs.addTab(self._build_about_tab(), "关于")
 
-        layout.addWidget(tabs, 1)
+        layout.addWidget(self._tabs, 1)
 
         btn_bar = QHBoxLayout()
         btn_bar.setContentsMargins(16, 12, 16, 12)
@@ -77,6 +189,137 @@ class SettingsDialog(QDialog):
         row.addStretch()
         row.addWidget(widget)
         return row
+
+    # ── 快捷键 ─────────────────────────────────────────────
+
+    def _build_shortcut_tab(self):
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setSpacing(12)
+        layout.setContentsMargins(24, 20, 24, 20)
+
+        self._shortcut_table = QTableWidget(len(self._shortcut_actions), 5)
+        self._shortcut_table.setHorizontalHeaderLabels(
+            ["分类", "操作", "当前快捷键", "编辑", "恢复默认"])
+        self._shortcut_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._shortcut_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._shortcut_table.verticalHeader().setVisible(False)
+        self._shortcut_table.setAlternatingRowColors(True)
+        header = self._shortcut_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+
+        for row, action in enumerate(self._shortcut_actions):
+            self._shortcut_table.setItem(
+                row, 0, QTableWidgetItem(action.category))
+            self._shortcut_table.setItem(
+                row, 1, QTableWidgetItem(action.display_name))
+            self._shortcut_table.setItem(
+                row,
+                2,
+                QTableWidgetItem(self._native_shortcut_text(
+                    self._shortcut_draft.binding(action.action_id))),
+            )
+            edit_button = QPushButton("编辑")
+            edit_button.clicked.connect(
+                lambda _checked=False, action_id=action.action_id:
+                self._edit_shortcut(action_id))
+            self._shortcut_table.setCellWidget(row, 3, edit_button)
+            reset_button = QPushButton("恢复默认")
+            reset_button.clicked.connect(
+                lambda _checked=False, action_id=action.action_id:
+                self._reset_shortcut(action_id))
+            self._shortcut_table.setCellWidget(row, 4, reset_button)
+
+        self._shortcut_table.cellDoubleClicked.connect(
+            self._on_shortcut_cell_double_clicked)
+        layout.addWidget(self._shortcut_table, 1)
+
+        self._shortcut_error_label = QLabel()
+        self._shortcut_error_label.setStyleSheet("color: #ff6b6b;")
+        self._shortcut_error_label.hide()
+        layout.addWidget(self._shortcut_error_label)
+
+        restore_all_button = QPushButton("恢复全部默认")
+        restore_all_button.clicked.connect(self._reset_all_shortcuts)
+        layout.addWidget(restore_all_button, alignment=Qt.AlignRight)
+        return w
+
+    @staticmethod
+    def _native_shortcut_text(portable_text):
+        return QKeySequence(
+            portable_text,
+            QKeySequence.PortableText,
+        ).toString(QKeySequence.NativeText)
+
+    def _on_shortcut_cell_double_clicked(self, row, column):
+        if column == 2:
+            self._edit_shortcut(self._shortcut_actions[row].action_id)
+
+    def _edit_shortcut(self, action_id):
+        capture_dialog = _ShortcutCaptureDialog(
+            self._shortcut_draft,
+            action_id,
+            self,
+        )
+        if capture_dialog.exec_() != QDialog.Accepted:
+            return
+
+        bindings = self._shortcut_draft.bindings()
+        bindings[action_id] = capture_dialog._portable_text
+        validation = self._shortcut_draft.replace_bindings(bindings)
+        if not validation.ok:
+            self._show_shortcut_validation_error(validation)
+            return
+
+        self._refresh_shortcut_table()
+        self._shortcut_error_label.hide()
+
+    def _refresh_shortcut_table(self):
+        for row, action in enumerate(self._shortcut_actions):
+            self._shortcut_table.item(row, 2).setText(
+                self._native_shortcut_text(
+                    self._shortcut_draft.binding(action.action_id)))
+
+    def _show_shortcut_validation_error(self, validation):
+        if validation.code == "SHORTCUT_CONFLICT":
+            action = next(
+                action
+                for action in self._shortcut_actions
+                if action.action_id == validation.conflicting_action_id
+            )
+            message = f"与「{action.display_name}」冲突，请重新设置"
+        elif validation.code == "SHORTCUT_EMPTY_SEQUENCE":
+            message = "请按下包含非修饰键的快捷键"
+        else:
+            message = "快捷键无效，请重新输入"
+        self._shortcut_error_label.setText(message)
+        self._shortcut_error_label.show()
+
+    def _reset_shortcut(self, action_id):
+        validation = self._shortcut_draft.reset_binding(action_id)
+        if not validation.ok:
+            self._show_shortcut_validation_error(validation)
+            return
+        self._refresh_shortcut_table()
+        self._shortcut_error_label.hide()
+
+    def _reset_all_shortcuts(self):
+        confirmation = QMessageBox.question(
+            self,
+            "恢复全部默认快捷键",
+            "确定要恢复全部默认快捷键吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirmation != QMessageBox.Yes:
+            return
+        self._shortcut_draft.reset_all()
+        self._refresh_shortcut_table()
+        self._shortcut_error_label.hide()
 
     # ── 通用 ───────────────────────────────────────────────
 
@@ -237,6 +480,12 @@ class SettingsDialog(QDialog):
     # ── 保存 ───────────────────────────────────────────────
 
     def _on_save(self):
+        registry = ShortcutRegistry()
+        validation = registry.replace_bindings(self._shortcut_draft.bindings())
+        if not validation.ok:
+            self._show_shortcut_validation_error(validation)
+            return
+
         self._config.default_fps = self._fps_spin.value()
         self._config.default_bitrate = self._bitrate_edit.text()
         self._config.projects_dir = self._projects_dir_edit.text()
@@ -246,5 +495,6 @@ class SettingsDialog(QDialog):
         self._config.trail_enabled = self._trail_check.isChecked()
         self._config.zoom_rect_ratio = self._zoom_ratio_slider.value() / 100.0
         self._config.preview_quality = self._quality_slider.value() / 100.0
+        self._config.shortcuts = registry.bindings()
         self._config.save()
         self.accept()
