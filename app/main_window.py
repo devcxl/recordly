@@ -23,6 +23,7 @@ from PyQt5.QtGui import QDesktopServices
 from app.config import AppConfig
 from core.compositor import Compositor
 from core.exporter import ExportSettings
+from core.shortcuts import ShortcutRegistry
 from core.project import (
     Clip, Track, AudioRegion, CropRegion, Project, SourceInfo,
     sync_audio_regions_from_clips,
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
         self._crop_active = False
         os.makedirs(config.projects_dir, exist_ok=True)
         self._project_manager = ProjectManager(config.projects_dir)
+        self._shortcut_registry = ShortcutRegistry(config.shortcuts)
 
         self._setup_window()
         self._setup_interfaces()
@@ -277,6 +279,10 @@ class MainWindow(QMainWindow):
         from ui.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self.config, self)
         if dialog.exec_() == SettingsDialog.Accepted:
+            if self._shortcut_registry.replace_bindings(self.config.shortcuts).ok:
+                self.config.shortcuts = self._shortcut_registry.bindings()
+                self._rebind_window_shortcuts()
+                self._refresh_undo_redo_state()
             self._compositor.fps = self.config.default_fps
             if self._is_recording:
                 self._show_notification(
@@ -315,24 +321,56 @@ class MainWindow(QMainWindow):
         self._setup_menus()
         self._setup_toolbar()
         self._setup_central_widget()
-        self._setup_space_shortcut()
-        self._setup_undo_redo_shortcuts()
+        self._rebind_window_shortcuts()
+        self._refresh_undo_redo_state()
 
-    def _setup_space_shortcut(self):
-        self._space_shortcut = QShortcut(
-            QKeySequence(Qt.Key_Space), self)
-        self._space_shortcut.setContext(Qt.WindowShortcut)
-        self._space_shortcut.setAutoRepeat(False)
-        self._space_shortcut.activated.connect(self._on_space_shortcut)
+    def _rebind_window_shortcuts(self):
+        """按当前注册表销毁并重建窗口级快捷键。"""
+        for shortcut in getattr(self, "_window_shortcuts", []):
+            try:
+                shortcut.activated.disconnect()
+            except TypeError:
+                pass
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
 
-    def _on_space_shortcut(self):
+        handlers_by_action = {
+            "play_pause": self._on_play_toggle,
+            "undo": self._on_undo,
+            "redo": self._on_redo,
+            "redo_alt": self._on_redo,
+        }
+        actions_by_sequence = {}
+        for action in self._shortcut_registry.actions("window"):
+            sequence = QKeySequence(
+                self._shortcut_registry.binding(action.action_id),
+                QKeySequence.PortableText,
+            )
+            portable_text = sequence.toString(QKeySequence.PortableText)
+            if portable_text:
+                actions_by_sequence.setdefault(portable_text, []).append(
+                    handlers_by_action[action.action_id])
+
+        self._window_shortcuts = []
+        for portable_text, handlers in actions_by_sequence.items():
+            shortcut = QShortcut(
+                QKeySequence(portable_text, QKeySequence.PortableText), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(
+                lambda handlers=tuple(handlers): self._dispatch_window_shortcut(
+                    handlers))
+            self._window_shortcuts.append(shortcut)
+
+    def _dispatch_window_shortcut(self, handlers):
         if not self._is_editor_active_and_safe():
             return
-        self._on_play_toggle()
+        for handler in handlers:
+            handler()
 
     def _is_editor_active_and_safe(self) -> bool:
         """编辑器在前台且无文本输入焦点时返回 True。
-        提取自 _on_space_shortcut，供所有编辑器级快捷键复用。"""
+        供所有编辑器级快捷键复用。"""
         if self._stacked_widget.currentWidget() is not self._editor_interface:
             return False
         if QApplication.activeWindow() is not self:
@@ -346,30 +384,6 @@ class MainWindow(QMainWindow):
         )):
             return False
         return True
-
-    def _setup_undo_redo_shortcuts(self):
-        self._shortcut_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
-        self._shortcut_undo.setContext(Qt.WindowShortcut)
-        self._shortcut_undo.setAutoRepeat(False)
-        self._shortcut_undo.activated.connect(self._maybe_undo)
-
-        self._shortcut_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
-        self._shortcut_redo.setContext(Qt.WindowShortcut)
-        self._shortcut_redo.setAutoRepeat(False)
-        self._shortcut_redo.activated.connect(self._maybe_redo)
-
-        self._shortcut_redo_alt = QShortcut(QKeySequence("Ctrl+Y"), self)
-        self._shortcut_redo_alt.setContext(Qt.WindowShortcut)
-        self._shortcut_redo_alt.setAutoRepeat(False)
-        self._shortcut_redo_alt.activated.connect(self._maybe_redo)
-
-    def _maybe_undo(self):
-        if self._is_editor_active_and_safe():
-            self._on_undo()
-
-    def _maybe_redo(self):
-        if self._is_editor_active_and_safe():
-            self._on_redo()
 
     def _setup_menus(self):
         menubar = self.menuBar()
@@ -392,11 +406,12 @@ class MainWindow(QMainWindow):
 
     def _setup_edit_menu(self, menubar):
         edit_menu = menubar.addMenu("编辑")
-        self._undo_action = QAction("撤销", self)
+        self._undo_action = QAction(f"撤销\t{self._shortcut_text('undo')}", self)
         self._undo_action.triggered.connect(self._on_undo)
         edit_menu.addAction(self._undo_action)
 
-        self._redo_action = QAction("重做", self)
+        self._redo_action = QAction(
+            f"重做\t{self._shortcut_text('redo', 'redo_alt')}", self)
         self._redo_action.triggered.connect(self._on_redo)
         edit_menu.addAction(self._redo_action)
 
@@ -425,13 +440,14 @@ class MainWindow(QMainWindow):
     def _add_undo_redo_toolbar_buttons(self):
         self._btn_undo = QToolButton()
         self._btn_undo.setText("↩")
-        self._btn_undo.setToolTip("撤销 (Ctrl+Z)")
+        self._btn_undo.setToolTip(f"撤销 ({self._shortcut_text('undo')})")
         self._btn_undo.setEnabled(False)
         self._btn_undo.clicked.connect(self._on_undo)
 
         self._btn_redo = QToolButton()
         self._btn_redo.setText("↪")
-        self._btn_redo.setToolTip("重做 (Ctrl+Shift+Z)")
+        self._btn_redo.setToolTip(
+            f"重做 ({self._shortcut_text('redo', 'redo_alt')})")
         self._btn_redo.setEnabled(False)
         self._btn_redo.clicked.connect(self._on_redo)
 
@@ -542,19 +558,38 @@ class MainWindow(QMainWindow):
         undo_desc = tl.undo_description
         redo_desc = tl.redo_description
 
+        undo_shortcut = self._shortcut_text("undo")
+        redo_shortcut = self._shortcut_text("redo", "redo_alt")
+
         self._undo_action.setEnabled(can_undo)
-        self._undo_action.setText(f"撤销 {undo_desc}\tCtrl+Z" if undo_desc else "撤销\tCtrl+Z")
+        self._undo_action.setText(
+            f"撤销 {undo_desc}\t{undo_shortcut}"
+            if undo_desc else f"撤销\t{undo_shortcut}")
 
         self._redo_action.setEnabled(can_redo)
-        self._redo_action.setText(f"重做 {redo_desc}\tCtrl+Shift+Z" if redo_desc else "重做\tCtrl+Shift+Z")
+        self._redo_action.setText(
+            f"重做 {redo_desc}\t{redo_shortcut}"
+            if redo_desc else f"重做\t{redo_shortcut}")
 
         self._btn_undo.setEnabled(can_undo)
         self._btn_undo.setToolTip(
-            f"撤销 {undo_desc} (Ctrl+Z)" if undo_desc else "撤销 (Ctrl+Z)")
+            f"撤销 {undo_desc} ({undo_shortcut})"
+            if undo_desc else f"撤销 ({undo_shortcut})")
 
         self._btn_redo.setEnabled(can_redo)
         self._btn_redo.setToolTip(
-            f"重做 {redo_desc} (Ctrl+Shift+Z)" if redo_desc else "重做 (Ctrl+Shift+Z)")
+            f"重做 {redo_desc} ({redo_shortcut})"
+            if redo_desc else f"重做 ({redo_shortcut})")
+
+    def _shortcut_text(self, *action_ids: str) -> str:
+        """返回一个或多个注册表键位的本机显示文本。"""
+        return " / ".join(
+            QKeySequence(
+                self._shortcut_registry.binding(action_id),
+                QKeySequence.PortableText,
+            ).toString(QKeySequence.NativeText)
+            for action_id in action_ids
+        )
 
     def _refresh_home_page(self):
         """刷新首页项目列表"""
@@ -943,7 +978,7 @@ class MainWindow(QMainWindow):
         if not self._compositor.frames:
             return
 
-        # 焦点守卫（与 _on_space_shortcut 一致，_is_editor_active_and_safe 尚未提取）
+        # 焦点守卫（与窗口级快捷键一致）
         if self._stacked_widget.currentWidget() is not self._editor_interface:
             return
         if QApplication.activeWindow() is not self:
