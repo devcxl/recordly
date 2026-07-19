@@ -25,64 +25,171 @@ class _FakeSignal:
             slot(*args)
 
 
-def test_space_shortcut_uses_window_context_without_auto_repeat(qapp):
-    from app.main_window import MainWindow
-    from PyQt5.QtCore import Qt
+def _native_shortcut_text(*portable_texts):
     from PyQt5.QtGui import QKeySequence
-    from PyQt5.QtWidgets import QMainWindow
 
-    class ShortcutWindow(QMainWindow):
-        _setup_space_shortcut = MainWindow._setup_space_shortcut
-        _on_space_shortcut = MainWindow._on_space_shortcut
-        _is_editor_active_and_safe = MainWindow._is_editor_active_and_safe
-
-    window = ShortcutWindow()
-    window._setup_space_shortcut()
-
-    assert window._space_shortcut.key() == QKeySequence(Qt.Key_Space)
-    assert window._space_shortcut.context() == Qt.WindowShortcut
-    assert window._space_shortcut.autoRepeat() is False
+    return " / ".join(
+        QKeySequence(portable_text, QKeySequence.PortableText).toString(
+            QKeySequence.NativeText)
+        for portable_text in portable_texts
+    )
 
 
-def test_space_shortcut_toggles_play_once_in_active_editor(qapp, monkeypatch):
-    import app.main_window as main_window_module
+def _make_shortcut_window(bindings):
     from app.main_window import MainWindow
+    from core.shortcuts import ShortcutRegistry
     from PyQt5.QtWidgets import QMainWindow
 
     class ShortcutWindow(QMainWindow):
-        _setup_space_shortcut = MainWindow._setup_space_shortcut
-        _on_space_shortcut = MainWindow._on_space_shortcut
+        _rebind_window_shortcuts = MainWindow._rebind_window_shortcuts
+        _dispatch_window_shortcut = MainWindow._dispatch_window_shortcut
         _is_editor_active_and_safe = MainWindow._is_editor_active_and_safe
 
         def __init__(self):
             super().__init__()
-            self.play_toggle_calls = 0
+            self.calls = []
+            self._shortcut_registry = ShortcutRegistry(bindings)
             self._editor_interface = object()
             self._stacked_widget = type(
                 "Stack", (), {"currentWidget": lambda stack: self._editor_interface}
             )()
 
         def _on_play_toggle(self):
-            self.play_toggle_calls += 1
+            self.calls.append("play_pause")
 
-    window = ShortcutWindow()
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activeWindow", lambda: window
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activeModalWidget", lambda: None
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activePopupWidget", lambda: None
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "focusWidget", lambda: None
-    )
-    window._setup_space_shortcut()
+        def _on_undo(self):
+            self.calls.append("undo")
 
-    window._space_shortcut.activated.emit()
+        def _on_redo(self):
+            self.calls.append("redo")
 
-    assert window.play_toggle_calls == 1
+    return ShortcutWindow()
+
+
+def _allow_editor_shortcuts(monkeypatch, window):
+    import app.main_window as main_window_module
+
+    monkeypatch.setattr(main_window_module.QApplication, "activeWindow", lambda: window)
+    monkeypatch.setattr(main_window_module.QApplication, "activeModalWidget", lambda: None)
+    monkeypatch.setattr(main_window_module.QApplication, "activePopupWidget", lambda: None)
+    monkeypatch.setattr(main_window_module.QApplication, "focusWidget", lambda: None)
+
+
+def test_window_shortcuts_group_bindings_with_context_without_auto_repeat(qapp):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QKeySequence
+    from core.shortcuts import ShortcutRegistry
+
+    bindings = ShortcutRegistry().bindings()
+    bindings.update({
+        "play_pause": "Ctrl+K",
+        "undo": "Ctrl+K",
+        "redo": "Ctrl+Shift+K",
+        "redo_alt": "Ctrl+Shift+K",
+    })
+    window = _make_shortcut_window(bindings)
+
+    window._rebind_window_shortcuts()
+
+    assert len(window._window_shortcuts) == 2
+    assert {
+        shortcut.key().toString(QKeySequence.PortableText)
+        for shortcut in window._window_shortcuts
+    } == {"Ctrl+K", "Ctrl+Shift+K"}
+    assert all(shortcut.context() == Qt.WindowShortcut
+               for shortcut in window._window_shortcuts)
+    assert all(shortcut.autoRepeat() is False
+               for shortcut in window._window_shortcuts)
+
+
+def test_window_shortcuts_dispatch_grouped_actions_in_catalog_order(qapp, monkeypatch):
+    from core.shortcuts import ShortcutRegistry
+
+    bindings = ShortcutRegistry().bindings()
+    for action_id in ("play_pause", "undo", "redo", "redo_alt"):
+        bindings[action_id] = "Ctrl+K"
+    window = _make_shortcut_window(bindings)
+    _allow_editor_shortcuts(monkeypatch, window)
+
+    window._rebind_window_shortcuts()
+    window._window_shortcuts[0].activated.emit()
+
+    assert window.calls == ["play_pause", "undo", "redo", "redo"]
+
+
+def test_rebind_disables_old_shortcuts_and_activates_new_binding(qapp, monkeypatch):
+    from PyQt5.QtGui import QKeySequence
+    from core.shortcuts import ShortcutRegistry
+
+    window = _make_shortcut_window(ShortcutRegistry().bindings())
+    _allow_editor_shortcuts(monkeypatch, window)
+    window._rebind_window_shortcuts()
+    old_shortcut = next(
+        shortcut for shortcut in window._window_shortcuts
+        if shortcut.key().toString(QKeySequence.PortableText) == "Space"
+    )
+    bindings = window._shortcut_registry.bindings()
+    bindings["play_pause"] = "Ctrl+K"
+    assert window._shortcut_registry.replace_bindings(bindings).ok
+
+    window._rebind_window_shortcuts()
+    new_shortcut = next(
+        shortcut for shortcut in window._window_shortcuts
+        if shortcut.key().toString(QKeySequence.PortableText) == "Ctrl+K"
+    )
+    old_shortcut.activated.emit()
+    new_shortcut.activated.emit()
+
+    assert old_shortcut.isEnabled() is False
+    assert window.calls == ["play_pause"]
+
+
+def test_settings_acceptance_updates_shared_registry_and_rebinds(monkeypatch):
+    from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from core.shortcuts import ShortcutRegistry
+    import ui.settings_dialog as settings_dialog_module
+
+    updated_bindings = ShortcutRegistry().bindings()
+    updated_bindings["undo"] = "Ctrl+K"
+    calls = []
+
+    class AcceptedDialog:
+        Accepted = 1
+
+        def __init__(self, config, _parent):
+            config.shortcuts = updated_bindings
+
+        def exec_(self):
+            return self.Accepted
+
+    registry = ShortcutRegistry()
+    window = SimpleNamespace(
+        config=SimpleNamespace(
+            shortcuts=registry.bindings(),
+            default_fps=60,
+            preview_quality=0.75,
+        ),
+        _shortcut_registry=registry,
+        _rebind_window_shortcuts=lambda: calls.append("rebind"),
+        _refresh_undo_redo_state=lambda: calls.append("refresh"),
+        _compositor=SimpleNamespace(
+            fps=0,
+            set_preview_quality=lambda value: calls.append(("quality", value)),
+        ),
+        _is_recording=False,
+        _recording_controller=SimpleNamespace(
+            recorder=SimpleNamespace(set_target_fps=lambda value: calls.append(("fps", value))),
+        ),
+        _apply_cursor_config=lambda: calls.append("cursor"),
+    )
+    monkeypatch.setattr(settings_dialog_module, "SettingsDialog", AcceptedDialog)
+
+    MainWindow._on_open_settings(window)
+
+    assert window._shortcut_registry.binding("undo") == "Ctrl+K"
+    assert window.config.shortcuts == updated_bindings
+    assert calls[:2] == ["rebind", "refresh"]
 
 
 @pytest.mark.parametrize("blocked_by", ["home", "inactive", "modal", "popup"])
@@ -118,7 +225,7 @@ def test_space_shortcut_ignores_non_editor_contexts(qapp, monkeypatch, blocked_b
         main_window_module.QApplication, "focusWidget", lambda: None
     )
 
-    MainWindow._on_space_shortcut(window)
+    MainWindow._dispatch_window_shortcut(window, [window._on_play_toggle])
 
 
 @pytest.mark.parametrize(
@@ -153,7 +260,7 @@ def test_space_shortcut_ignores_input_focus(qapp, monkeypatch, widget_type):
         main_window_module.QApplication, "focusWidget", lambda: focus_widget
     )
 
-    MainWindow._on_space_shortcut(window)
+    MainWindow._dispatch_window_shortcut(window, [window._on_play_toggle])
 
 
 def test_frame_update_shows_time_and_follows_playhead():
@@ -1058,84 +1165,19 @@ def test_is_editor_active_and_safe_allows_safe_editor(qapp, monkeypatch):
     assert MainWindow._is_editor_active_and_safe(window) is True
 
 
-def test_maybe_undo_redo_guards_before_delegating():
-    """_maybe_undo / _maybe_redo 在守卫不通过时不调用 _on_undo / _on_redo"""
-    from types import SimpleNamespace, MethodType
-    from app.main_window import MainWindow
-
-    calls = []
-
-    class FakeWindow:
-        _editor_interface = SimpleNamespace()
-        _stacked_widget = SimpleNamespace(
-            currentWidget=lambda: SimpleNamespace(),  # 不是编辑器
-        )
-
-        def _on_undo(self):
-            calls.append("undo")
-
-        def _on_redo(self):
-            calls.append("redo")
-
-    window = FakeWindow()
-    window._is_editor_active_and_safe = MethodType(
-        MainWindow._is_editor_active_and_safe, window)
-
-    MainWindow._maybe_undo(window)
-    MainWindow._maybe_redo(window)
-
-    assert calls == []
-
-
-def test_maybe_undo_redo_calls_methods_when_safe(qapp, monkeypatch):
-    """守卫通过时 _maybe_undo / _maybe_redo 调用 _on_undo / _on_redo"""
-    from types import SimpleNamespace, MethodType
-    import app.main_window as main_window_module
-    from app.main_window import MainWindow
-
-    calls = []
-    editor = SimpleNamespace()
-
-    class FakeWindow:
-        _editor_interface = editor
-        _stacked_widget = SimpleNamespace(currentWidget=lambda: editor)
-
-        def _on_undo(self):
-            calls.append("undo")
-
-        def _on_redo(self):
-            calls.append("redo")
-
-    window = FakeWindow()
-    window._is_editor_active_and_safe = MethodType(
-        MainWindow._is_editor_active_and_safe, window)
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activeWindow", lambda: window,
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activeModalWidget", lambda: None,
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "activePopupWidget", lambda: None,
-    )
-    monkeypatch.setattr(
-        main_window_module.QApplication, "focusWidget", lambda: None,
-    )
-
-    MainWindow._maybe_undo(window)
-    MainWindow._maybe_redo(window)
-
-    assert calls == ["undo", "redo"]
-
-
 def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     """编辑菜单包含 undo/redo action，支持快捷键和动态文本更新"""
-    from types import SimpleNamespace
+    from types import MethodType, SimpleNamespace
     from app.main_window import MainWindow
+    from core.shortcuts import ShortcutRegistry
     from PyQt5.QtWidgets import QMenuBar, QWidget, QToolButton
 
     menubar = QMenuBar()
     test_window = QWidget()
+    bindings = ShortcutRegistry().bindings()
+    bindings.update({"undo": "Ctrl+K", "redo": "Ctrl+L", "redo_alt": "Ctrl+M"})
+    test_window._shortcut_registry = ShortcutRegistry(bindings)
+    test_window._shortcut_text = MethodType(MainWindow._shortcut_text, test_window)
     test_window._undo_action = None
     test_window._redo_action = None
     test_window._on_undo = lambda: None
@@ -1169,9 +1211,10 @@ def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     assert undo_act is not None
     assert redo_act is not None
 
-    # 初始文本（无描述时仅为"撤销"/"重做"）
-    assert undo_act.text() == "撤销"
-    assert redo_act.text() == "重做"
+    # 初始文本使用注册表中的当前键位
+    assert undo_act.text() == f"撤销\t{_native_shortcut_text('Ctrl+K')}"
+    assert redo_act.text() == (
+        f"重做\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}")
 
     # 调用 _refresh_undo_redo_state 验证动态文本更新（含 \t 快捷键提示）
     MainWindow._refresh_undo_redo_state(test_window)
@@ -1179,17 +1222,18 @@ def test_undo_redo_menu_items_show_shortcuts_and_descriptions():
     assert undo_act.isEnabled() is True
     assert "添加片段" in undo_act.text()
     assert "撤销" in undo_act.text()
-    assert "\tCtrl+Z" in undo_act.text()
+    assert f"\t{_native_shortcut_text('Ctrl+K')}" in undo_act.text()
     assert redo_act.isEnabled() is True
     assert "删除片段" in redo_act.text()
     assert "重做" in redo_act.text()
-    assert "\tCtrl+Shift+Z" in redo_act.text()
+    assert f"\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}" in redo_act.text()
 
 
 def test_refresh_undo_redo_state_updates_menu_and_toolbar():
     """_refresh_undo_redo_state 根据 can_undo/can_redo 更新所有 UI 元素"""
-    from types import SimpleNamespace
+    from types import MethodType, SimpleNamespace
     from app.main_window import MainWindow
+    from core.shortcuts import ShortcutRegistry
 
     logs = {}
 
@@ -1227,6 +1271,8 @@ def test_refresh_undo_redo_state_updates_menu_and_toolbar():
             self._tip = t
             logs[f"{self._name}.tip"] = t
 
+    bindings = ShortcutRegistry().bindings()
+    bindings.update({"undo": "Ctrl+K", "redo": "Ctrl+L", "redo_alt": "Ctrl+M"})
     window = SimpleNamespace(
         _timeline=SimpleNamespace(
             can_undo=True,
@@ -1238,7 +1284,9 @@ def test_refresh_undo_redo_state_updates_menu_and_toolbar():
         _redo_action=FakeAction("redo"),
         _btn_undo=FakeButton("btn_undo"),
         _btn_redo=FakeButton("btn_redo"),
+        _shortcut_registry=ShortcutRegistry(bindings),
     )
+    window._shortcut_text = MethodType(MainWindow._shortcut_text, window)
 
     MainWindow._refresh_undo_redo_state(window)
 
@@ -1246,18 +1294,21 @@ def test_refresh_undo_redo_state_updates_menu_and_toolbar():
     assert "移动片段" in logs["undo.text"]
     assert "撤销" in logs["undo.text"]
     assert logs["redo.enabled"] is False
-    assert logs["redo.text"] == "重做\tCtrl+Shift+Z"
+    assert logs["redo.text"] == (
+        f"重做\t{_native_shortcut_text('Ctrl+L', 'Ctrl+M')}")
     assert logs["btn_undo.enabled"] is True
     assert "移动片段" in logs["btn_undo.tip"]
-    assert "Ctrl+Z" in logs["btn_undo.tip"]
+    assert _native_shortcut_text("Ctrl+K") in logs["btn_undo.tip"]
     assert logs["btn_redo.enabled"] is False
-    assert logs["btn_redo.tip"] == "重做 (Ctrl+Shift+Z)"
+    assert logs["btn_redo.tip"] == (
+        f"重做 ({_native_shortcut_text('Ctrl+L', 'Ctrl+M')})")
 
 
 def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
     """验证工具栏包含 undo/redo 按钮，且在播放控制按钮之前"""
-    from types import SimpleNamespace
+    from types import MethodType, SimpleNamespace
     from app.main_window import MainWindow
+    from core.shortcuts import ShortcutRegistry
     from PyQt5.QtWidgets import QToolBar, QWidget, QToolButton
 
     # 使用真实 QToolBar 来追踪添加的控件
@@ -1274,6 +1325,8 @@ def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
     window._btn_redo = None
     window._on_undo = lambda: None
     window._on_redo = lambda: None
+    window._shortcut_registry = ShortcutRegistry()
+    window._shortcut_text = MethodType(MainWindow._shortcut_text, window)
 
     MainWindow._add_undo_redo_toolbar_buttons(window)
 
@@ -1284,8 +1337,9 @@ def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
     assert window._btn_redo.text() == "↪"
     assert window._btn_undo.isEnabled() is False
     assert window._btn_redo.isEnabled() is False
-    assert "Ctrl+Z" in window._btn_undo.toolTip()
-    assert "Ctrl+Shift+Z" in window._btn_redo.toolTip()
+    assert _native_shortcut_text("Ctrl+Z") in window._btn_undo.toolTip()
+    assert _native_shortcut_text(
+        "Ctrl+Shift+Z", "Ctrl+Y") in window._btn_redo.toolTip()
 
     # 验证按钮被添加到 toolbar
     actions = toolbar.actions()
