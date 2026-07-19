@@ -6,10 +6,11 @@ import os
 
 from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush, QKeySequence
 
 from core.commands import AddClipCommand, UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, CompositeCommand
 from core.project import Clip, SPEED_OPTIONS
+from core.shortcuts import ShortcutRegistry
 from core.speed import plan_clip_speed_change, format_speed_label
 
 
@@ -60,6 +61,7 @@ class TimelineWidget(QWidget):
         self._snap_alignment_time = None
         self._undo_stack = []
         self._redo_stack = []
+        self._shortcut_registry = ShortcutRegistry()
 
         self.setMinimumHeight(RULER_HEIGHT + TRACK_HEIGHT + 10)
         self._update_width()
@@ -99,6 +101,9 @@ class TimelineWidget(QWidget):
         self._redo_stack.clear()
         self._update_height()
         self.update()
+
+    def set_shortcut_registry(self, registry: ShortcutRegistry):
+        self._shortcut_registry = registry
 
     def _update_height(self):
         h = RULER_HEIGHT + len(self._tracks) * TRACK_HEIGHT + 10
@@ -482,16 +487,50 @@ class TimelineWidget(QWidget):
             return
         cmd = SplitClipCommand(track_index=track_index, clip_index=clip_index, split_time=self._playhead_s)
         self._push_undo(cmd)
+        self._select_clip(track_index, clip_index + 1)
 
-    def _find_playhead_video(self) -> tuple[int, int] | None:
+    def _find_playhead_clip(self) -> tuple[int, int] | None:
         for track_index, track in enumerate(self._tracks):
-            if track.type != "video":
+            if track.type == "zoom":
                 continue
             for clip_index, clip in enumerate(track.clips):
-                if (clip.type == "video"
+                if (clip.type != "zoom"
                         and clip.start < self._playhead_s < clip.end):
                     return track_index, clip_index
         return None
+
+    def split_at_playhead(self):
+        target = self._find_playhead_clip()
+        if target is not None:
+            self._split_clip(*target)
+        else:
+            self.status_message.emit("播放头下无片段")
+
+    def split_selected(self):
+        if self._selected_clip >= 0:
+            self._split_clip(self._selected_track, self._selected_clip)
+
+    def delete_selected(self):
+        if self._selected_clip >= 0:
+            self.delete_clip(self._selected_track, self._selected_clip)
+            self._selected_clip = -1
+
+    def nudge_selected(self, delta: float):
+        if self._selected_clip < 0:
+            return
+        clip = self._tracks[self._selected_track].clips[self._selected_clip]
+        new_start = max(0.0, clip.start + delta)
+        shift = new_start - clip.start
+        cmd = MoveClipCommand(
+            self._selected_track, self._selected_clip,
+            clip.start, new_start,
+            clip.end, clip.end + shift,
+            old_source_start=clip.source_start,
+            new_source_start=clip.source_start,
+            old_source_end=clip.source_end,
+            new_source_end=clip.source_end,
+        )
+        self._push_undo(cmd)
 
     def _select_clip(self, track_index: int, clip_index: int):
         self._selected_track = track_index
@@ -547,42 +586,40 @@ class TimelineWidget(QWidget):
     # ── 键盘事件 ──────────────────────────────────────────
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_X and event.modifiers() == Qt.NoModifier:
-            target = self._find_playhead_video()
-            if target is not None:
-                self._split_clip(*target)
-            else:
-                self.status_message.emit("播放头下无视频片段")
+        portable_text = QKeySequence(
+            int(event.modifiers()) | event.key(),
+        ).toString(QKeySequence.PortableText)
+        action_id = next(
+            (
+                action.action_id
+                for action in self._shortcut_registry.actions(scope="timeline")
+                if QKeySequence(
+                    self._shortcut_registry.binding(action.action_id),
+                ).toString(QKeySequence.PortableText) == portable_text
+            ),
+            None,
+        )
+
+        if action_id == "split_at_playhead":
+            self.split_at_playhead()
             return
-        if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
-            if self._selected_clip >= 0:
-                self.delete_clip(self._selected_track, self._selected_clip)
-                self._selected_clip = -1
+        if action_id == "split_selected":
+            self.split_selected()
             return
-        if event.key() == Qt.Key_S and (event.modifiers() & Qt.ControlModifier) == 0:
-            if self._selected_clip >= 0:
-                self._split_clip(self._selected_track, self._selected_clip)
+        if action_id in ("delete_clip", "delete_clip_alt"):
+            self.delete_selected()
             return
-        if event.key() == Qt.Key_I:
+        if action_id == "trim_in":
             self.trim_in()
             return
-        if event.key() == Qt.Key_O:
+        if action_id == "trim_out":
             self.trim_out()
             return
-        if event.key() == Qt.Key_Left and self._selected_clip >= 0:
-            clip = self._tracks[self._selected_track].clips[self._selected_clip]
-            new_start = max(0.0, clip.start - 0.5)
-            shift = new_start - clip.start
-            cmd = MoveClipCommand(self._selected_track, self._selected_clip,
-                                  clip.start, new_start,
-                                  clip.end, clip.end + shift)
-            self._push_undo(cmd)
+        if action_id == "nudge_left":
+            self.nudge_selected(-0.5)
             return
-        if event.key() == Qt.Key_Right and self._selected_clip >= 0:
-            clip = self._tracks[self._selected_track].clips[self._selected_clip]
-            cmd = MoveClipCommand(self._selected_track, self._selected_clip,
-                                  clip.start, clip.start + 0.5, clip.end, clip.end + 0.5)
-            self._push_undo(cmd)
+        if action_id == "nudge_right":
+            self.nudge_selected(0.5)
             return
         super().keyPressEvent(event)
 
