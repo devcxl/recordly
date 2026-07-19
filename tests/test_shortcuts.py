@@ -70,11 +70,13 @@ class TestShortcutRegistry:
         assert registry.validate("undo", "Ctrl+Z").ok
 
         unknown = registry.validate("missing", "Ctrl+K")
-        empty = registry.validate("undo", "")
+        empty = registry.validate("undo", " ")
+        invalid = registry.validate("undo", None)
         conflict = registry.validate("undo", "Ctrl+Y")
 
         assert unknown.code == "SHORTCUT_UNKNOWN_ACTION"
         assert empty.code == "SHORTCUT_EMPTY_SEQUENCE"
+        assert invalid.code == "SHORTCUT_INVALID_SEQUENCE"
         assert conflict.code == "SHORTCUT_CONFLICT"
         assert conflict.conflicting_action_id == "redo_alt"
 
@@ -114,3 +116,28 @@ class TestShortcutRegistry:
         assert result.code == "SHORTCUT_CONFLICT"
         assert result.conflicting_action_id == "undo"
         assert registry.bindings() == original_bindings
+
+    def test_replace_bindings_rejects_invalid_mappings_atomically(self):
+        registry = ShortcutRegistry()
+        original_bindings = registry.bindings()
+
+        unknown_action = registry.bindings()
+        unknown_action["missing"] = "Ctrl+K"
+        missing_action = registry.bindings()
+        del missing_action["undo"]
+        empty_sequence = registry.bindings()
+        empty_sequence["undo"] = " "
+        invalid_sequence = registry.bindings()
+        invalid_sequence["undo"] = None
+
+        test_cases = (
+            (unknown_action, "SHORTCUT_UNKNOWN_ACTION"),
+            (missing_action, "SHORTCUT_EMPTY_SEQUENCE"),
+            (empty_sequence, "SHORTCUT_EMPTY_SEQUENCE"),
+            (invalid_sequence, "SHORTCUT_INVALID_SEQUENCE"),
+        )
+        for bindings, expected_code in test_cases:
+            result = registry.replace_bindings(bindings)
+
+            assert result.code == expected_code
+            assert registry.bindings() == original_bindings

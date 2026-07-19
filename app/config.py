@@ -35,7 +35,7 @@ def _load_shortcut(value: object, default: str) -> str:
         value,
         QKeySequence.PortableText,
     ).toString(QKeySequence.PortableText)
-    return value if portable_text else default
+    return portable_text or default
 
 
 @dataclass
@@ -53,6 +53,9 @@ class AppConfig:
     zoom_rect_ratio: float = 0.5
     shortcuts: dict[str, str] = field(default_factory=_default_shortcuts)
 
+    def __post_init__(self):
+        self.shortcuts = ShortcutRegistry(self.shortcuts).bindings()
+
     @classmethod
     def load(cls) -> "AppConfig":
         s = QSettings("Recordly", "Recordly")
@@ -69,7 +72,7 @@ class AppConfig:
         cfg.trail_enabled = s.value("trail_enabled", "true").lower() == "true"
         cfg.zoom_rect_ratio = float(s.value("zoom_rect_ratio", cls.zoom_rect_ratio))
         for action in ShortcutRegistry().actions():
-            value = s.value(f"shortcuts/{action.action_id}", action.default_keys)
+            value = s.value(f"shortcuts/{action.action_id}", None)
             cfg.shortcuts[action.action_id] = _load_shortcut(value, action.default_keys)
         cfg.recordings_dir = os.path.expanduser(cfg.recordings_dir)
         cfg.projects_dir = os.path.expanduser(cfg.projects_dir)
@@ -89,8 +92,13 @@ class AppConfig:
         s.setValue("trail_enabled", "true" if self.trail_enabled else "false")
         s.setValue("zoom_rect_ratio", self.zoom_rect_ratio)
         for action in ShortcutRegistry().actions():
+            portable_text = _load_shortcut(
+                self.shortcuts.get(action.action_id, action.default_keys),
+                action.default_keys,
+            )
+            self.shortcuts[action.action_id] = portable_text
             s.setValue(
                 f"shortcuts/{action.action_id}",
-                self.shortcuts.get(action.action_id, action.default_keys),
+                portable_text,
             )
         s.sync()

@@ -73,6 +73,17 @@ class TestAppConfig:
         assert len(first_config.shortcuts) == 12
         assert second_config.shortcuts["undo"] == "Ctrl+Z"
 
+    def test_explicit_shortcuts_are_completed_and_ignore_unknown_actions(self):
+        from app.config import AppConfig
+        from core.shortcuts import ShortcutRegistry
+
+        config = AppConfig(shortcuts={"undo": "Ctrl+K", "missing": "Ctrl+M"})
+
+        assert config.shortcuts["undo"] == "Ctrl+K"
+        assert config.shortcuts.keys() == ShortcutRegistry().bindings().keys()
+        assert config.shortcuts["redo"] == "Ctrl+Shift+Z"
+        assert "missing" not in config.shortcuts
+
     def test_load_uses_defaults_for_missing_shortcuts_and_keeps_old_fields(self, monkeypatch):
         import app.config as config_module
         from core.shortcuts import ShortcutRegistry
@@ -122,6 +133,7 @@ class TestAppConfig:
         monkeypatch.setattr(config_module, "QSettings", FakeSettings)
         config = config_module.AppConfig()
         config.shortcuts["undo"] = "Ctrl+K"
+        config.shortcuts["redo_alt"] = "ctrl+y"
 
         config.save()
         loaded = config_module.AppConfig.load()
@@ -132,8 +144,38 @@ class TestAppConfig:
             if key.startswith("shortcuts/")
         }
         assert saved_shortcut_ids == set(config.shortcuts)
+        assert config.shortcuts["redo_alt"] == "Ctrl+Y"
+        assert storage["shortcuts/redo_alt"] == "Ctrl+Y"
         assert loaded.shortcuts == config.shortcuts
         assert sync_calls == [True]
+
+    def test_load_normalizes_shortcut_for_registry_conflict_detection(self, monkeypatch):
+        import app.config as config_module
+        from core.shortcuts import ShortcutRegistry
+
+        storage = {"shortcuts/redo_alt": "ctrl+y"}
+
+        class FakeSettings:
+            def __init__(self, *_args):
+                pass
+
+            def value(self, key, default=None):
+                return storage.get(key, default)
+
+            def setValue(self, key, value):
+                storage[key] = value
+
+            def sync(self):
+                pass
+
+        monkeypatch.setattr(config_module, "QSettings", FakeSettings)
+
+        loaded = config_module.AppConfig.load()
+        validation = ShortcutRegistry(loaded.shortcuts).validate("undo", "Ctrl+Y")
+
+        assert loaded.shortcuts["redo_alt"] == "Ctrl+Y"
+        assert validation.code == "SHORTCUT_CONFLICT"
+        assert validation.conflicting_action_id == "redo_alt"
 
     def test_load_replaces_invalid_shortcut_value_with_default(self, monkeypatch):
         import app.config as config_module

@@ -69,7 +69,7 @@ class ShortcutRegistry:
         """返回当前绑定的独立快照。"""
         return dict(self._bindings)
 
-    def validate(self, action_id: str, portable_text: str) -> ShortcutValidation:
+    def validate(self, action_id: str, portable_text: object) -> ShortcutValidation:
         """校验单个绑定，不修改当前映射。"""
         sequence_validation = self._validate_sequence(action_id, portable_text)
         if not sequence_validation.ok:
@@ -84,7 +84,7 @@ class ShortcutRegistry:
                 )
         return ShortcutValidation(ok=True)
 
-    def replace_bindings(self, bindings: Mapping[str, str]) -> ShortcutValidation:
+    def replace_bindings(self, bindings: Mapping[str, object]) -> ShortcutValidation:
         """完整校验后原子替换全部动作绑定。"""
         unknown_action_id = next(
             (action_id for action_id in bindings if action_id not in _ACTIONS_BY_ID),
@@ -95,7 +95,10 @@ class ShortcutRegistry:
 
         candidate_bindings: dict[str, str] = {}
         for action in _ACTIONS:
-            portable_text = bindings.get(action.action_id)
+            if action.action_id not in bindings:
+                return ShortcutValidation(ok=False, code="SHORTCUT_EMPTY_SEQUENCE")
+
+            portable_text = bindings[action.action_id]
             sequence_validation = self._validate_sequence(action.action_id, portable_text)
             if not sequence_validation.ok:
                 return sequence_validation
