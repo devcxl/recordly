@@ -119,3 +119,89 @@ def test_window_shortcut_dispatch_keeps_editor_safety_guard(qapp, monkeypatch):
         main_window_module.QApplication, "activeModalWidget", lambda: object())
     MainWindow._dispatch_window_shortcut(window, [lambda: calls.append("blocked")])
     assert calls == ["run"]
+
+
+def test_rebound_window_qshortcut_uses_real_events_and_safety_guards(
+        qapp, monkeypatch):
+    from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QKeySequence
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QDialog, QLineEdit, QStackedWidget, QWidget
+    from app.config import AppConfig
+    from app.main_window import MainWindow
+    import ui.settings_dialog as settings_dialog_module
+
+    class ShortcutIntegrationWindow(MainWindow):
+        def _setup_navigation(self):
+            self._home_interface = QWidget()
+            self._stacked_widget = QStackedWidget()
+            self._stacked_widget.addWidget(self._home_interface)
+            self._stacked_widget.addWidget(self._editor_interface)
+            self._stacked_widget.setCurrentWidget(self._editor_interface)
+            self.setCentralWidget(self._stacked_widget)
+            self._rebind_window_shortcuts()
+
+        def _setup_tray(self):
+            pass
+
+        def _check_deps(self):
+            pass
+
+        def _update_ui_state(self):
+            pass
+
+    class AcceptedSettingsDialog:
+        Accepted = QDialog.Accepted
+
+        def __init__(self, config, _parent):
+            bindings = config.shortcuts.copy()
+            bindings["play_pause"] = "Ctrl+K"
+            config.shortcuts = bindings
+
+        def exec_(self):
+            return self.Accepted
+
+    monkeypatch.setattr(
+        settings_dialog_module, "SettingsDialog", AcceptedSettingsDialog)
+    window = ShortcutIntegrationWindow(AppConfig(projects_dir=str(Path.cwd())))
+    calls = []
+    window._on_play_toggle = lambda: calls.append("play")
+    window.show()
+    window.activateWindow()
+    qapp.processEvents()
+
+    window._on_open_settings()
+
+    assert {
+        shortcut.key().toString(QKeySequence.PortableText)
+        for shortcut in window._window_shortcuts
+    } == {"Ctrl+K", "Ctrl+Z", "Ctrl+Shift+Z", "Ctrl+Y"}
+    QTest.keyClick(window, Qt.Key_Space)
+    qapp.processEvents()
+    assert calls == []
+    QTest.keyClick(window, Qt.Key_K, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == ["play"]
+
+    window._stacked_widget.setCurrentWidget(window._home_interface)
+    QTest.keyClick(window, Qt.Key_K, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == ["play"]
+
+    window._stacked_widget.setCurrentWidget(window._editor_interface)
+    input_field = QLineEdit(window._editor_interface)
+    input_field.show()
+    input_field.setFocus()
+    QTest.keyClick(input_field, Qt.Key_K, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == ["play"]
+
+    dialog = QDialog(window)
+    dialog.setModal(True)
+    dialog.show()
+    qapp.processEvents()
+    QTest.keyClick(dialog, Qt.Key_K, Qt.ControlModifier)
+    qapp.processEvents()
+    assert calls == ["play"]
+    dialog.close()
+    window.hide()
