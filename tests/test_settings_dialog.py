@@ -99,6 +99,7 @@ def test_shortcut_capture_keeps_draft_on_conflict_or_invalid_key(qapp):
 
 
 def test_editing_shortcut_updates_only_draft_until_settings_save(qapp, monkeypatch):
+    from PyQt5.QtGui import QKeySequence
     from PyQt5.QtWidgets import QDialog
 
     from app.config import AppConfig
@@ -128,12 +129,18 @@ def test_editing_shortcut_updates_only_draft_until_settings_save(qapp, monkeypat
     dialog._shortcut_table.cellWidget(undo_row, 3).click()
 
     assert dialog._shortcut_draft.binding("undo") == "Ctrl+K"
-    assert dialog._shortcut_table.item(undo_row, 2).text() == "Ctrl+K"
+    assert dialog._shortcut_table.item(undo_row, 2).text() == QKeySequence(
+        "Ctrl+K",
+        QKeySequence.PortableText,
+    ).toString(QKeySequence.NativeText)
 
     dialog._shortcut_table.cellDoubleClicked.emit(undo_row, 2)
 
     assert dialog._shortcut_draft.binding("undo") == "Ctrl+L"
-    assert dialog._shortcut_table.item(undo_row, 2).text() == "Ctrl+L"
+    assert dialog._shortcut_table.item(undo_row, 2).text() == QKeySequence(
+        "Ctrl+L",
+        QKeySequence.PortableText,
+    ).toString(QKeySequence.NativeText)
     assert config.shortcuts["undo"] == "Ctrl+Z"
 
 
