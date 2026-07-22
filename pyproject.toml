@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recordly"
-version = "1.0.5"
+version = "0.3.0"
 description = "开源屏幕录制与回放工具"
 readme = "README.md"
 license = {text = "MIT"}

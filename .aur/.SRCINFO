@@ -1,6 +1,6 @@
 pkgbase = recordly
 	pkgdesc = 开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出
-	pkgver = 1.0.5
+	pkgver = 0.3.0
 	pkgrel = 1
 	url = https://github.com/devcxl/recordly
 	arch = any
@@ -13,7 +13,7 @@ pkgbase = recordly
 	makedepends = python-pip
 	depends = ffmpeg
 	depends = portaudio
-	source = recordly-1.0.5.tar.gz::https://github.com/devcxl/recordly/archive/v1.0.5.tar.gz
+	source = recordly-0.3.0.tar.gz::https://github.com/devcxl/recordly/archive/v0.3.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = recordly
