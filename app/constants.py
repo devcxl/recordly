@@ -1,7 +1,7 @@
 """Recordly 应用常量和版本信息"""
 
 APP_NAME = "Recordly"
-APP_VERSION = "0.3.0"
+APP_VERSION = "1.1.0"
 ORG_NAME = "Recordly"
 
 # 默认窗口尺寸
