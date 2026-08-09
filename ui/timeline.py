@@ -55,6 +55,8 @@ class TimelineWidget(QWidget):
         self._source_duration: float | None = None
         self._selected_track = -1
         self._selected_clip = -1
+        self._multi_selected: set[tuple[int, int]] = set()
+        self._batch_drag_orig: dict[tuple[int, int], tuple[float, float]] = {}
         self._drag_track = -1
         self._drag_clip = -1
         self._drag_state = None
@@ -112,6 +114,7 @@ class TimelineWidget(QWidget):
         self._tracks = tracks
         self._selected_track = -1
         self._selected_clip = -1
+        self._multi_selected = set()
         self._snap_alignment_time = None
         if clear_history:
             self._undo_stack.clear()
@@ -335,6 +338,19 @@ class TimelineWidget(QWidget):
         # 命中 clip 身体：进入 move 拖拽，不移动播放头
         ti, ci = self._hit_test(pos)
         if ti >= 0 and ci >= 0:
+            ctrl_held = bool(event.modifiers() & Qt.ControlModifier)
+            if ctrl_held:
+                if (ti, ci) in self._multi_selected:
+                    self._multi_selected.discard((ti, ci))
+                    self._selected_track = -1
+                    self._selected_clip = -1
+                    self.update()
+                    return
+                self._multi_selected.add((ti, ci))
+            elif (ti, ci) not in self._multi_selected:
+                # 普通点击：若点击 clip 已在多选中则保留多选（拖拽组起点），
+                # 否则重置为单选
+                self._multi_selected = {(ti, ci)}
             self._selected_track = ti
             self._selected_clip = ci
             self._drag_track = ti
@@ -378,6 +394,27 @@ class TimelineWidget(QWidget):
             dt = (pos.x() - self._drag_start_x) / self._pixels_per_sec
 
             if self._drag_state == "move":
+                # 批量移动：多个选中 clip 一起平移（保持相对位置）
+                if len(self._multi_selected) > 1 and not (
+                        self._drag_track, self._drag_clip) in self._batch_drag_orig:
+                    self._batch_drag_orig = {
+                        (ti, ci): (clip_.start, clip_.end)
+                        for ti, ci in self._multi_selected
+                        for clip_ in [self._tracks[ti].clips[ci]]
+                    }
+                if self._batch_drag_orig:
+                    clip_duration = (self._drag_orig_end
+                                     - self._drag_orig_start)
+                    new_start = max(0.0, min(
+                        self._drag_orig_start + dt,
+                        max(0.0, self._duration - clip_duration),
+                    ))
+                    clip.start = new_start
+                    clip.end = new_start + clip_duration
+                    self._move_batch(dt)
+                    self.update()
+                    return
+
                 # 跨轨拖拽：y 坐标进入其他轨道时切换目标轨道
                 target_track = self._track_at_y(pos.y())
                 if (target_track >= 0 and target_track != self._drag_track
@@ -431,6 +468,20 @@ class TimelineWidget(QWidget):
         else:
             self.setCursor(Qt.ArrowCursor)
 
+    def _move_batch(self, dt: float):
+        """批量移动：所有选中 clip 按同一 dt 平移，各自 clamp 到边界。"""
+        for (ti, ci), (orig_start, orig_end) in self._batch_drag_orig.items():
+            if (ti, ci) == (self._drag_track, self._drag_clip):
+                continue  # 主 clip 由主路径处理
+            duration = orig_end - orig_start
+            new_start = max(0.0, min(
+                orig_start + dt,
+                max(0.0, self._duration - duration),
+            ))
+            clip = self._tracks[ti].clips[ci]
+            clip.start = new_start
+            clip.end = new_start + duration
+
     def _snap_move_candidate(self, track, clip_index: int,
                              start: float, end: float) -> tuple[float, float]:
         self._snap_alignment_time = None
@@ -477,6 +528,39 @@ class TimelineWidget(QWidget):
             self._drag_clip = -1
             self._drag_orig_track = -1
             self._drag_orig_clip = -1
+            self._batch_drag_orig = {}
+            self.update()
+            return
+
+        if self._batch_drag_orig:
+            cmds = []
+            for (ti, ci), (orig_start, orig_end) in (
+                    self._batch_drag_orig.items()):
+                clip = self._tracks[ti].clips[ci]
+                if (isclose(clip.start, orig_start, abs_tol=1e-9,
+                            rel_tol=0.0)
+                        and isclose(clip.end, orig_end, abs_tol=1e-9,
+                                    rel_tol=0.0)):
+                    continue
+                cmds.append(MoveClipCommand(
+                    track_index=ti, clip_index=ci,
+                    old_start=orig_start, new_start=clip.start,
+                    old_end=orig_end, new_end=clip.end,
+                    old_source_start=clip.source_start,
+                    new_source_start=clip.source_start,
+                    old_source_end=clip.source_end,
+                    new_source_end=clip.source_end,
+                ))
+            if cmds:
+                batch_cmd = (
+                    cmds[0] if len(cmds) == 1 else CompositeCommand(cmds))
+                self._undo_stack.append(batch_cmd)
+                self._redo_stack.clear()
+                self.clips_changed.emit()
+            self._batch_drag_orig = {}
+            self._drag_state = None
+            self._drag_track = -1
+            self._drag_clip = -1
             self.update()
             return
 
@@ -635,12 +719,32 @@ class TimelineWidget(QWidget):
             self._split_clip(self._selected_track, self._selected_clip)
 
     def delete_selected(self):
+        """删除所有选中 clip（含多选），整体作为一个 undo 步。"""
+        targets = self._collect_selected_clips()
+        if not targets:
+            return
+        cmds = [DeleteClipCommand(track_index=ti, clip_index=ci)
+                for ti, ci in targets]
+        self._push_undo(CompositeCommand(cmds) if len(cmds) > 1 else cmds[0])
+        self._selected_track = -1
+        self._selected_clip = -1
+        self._multi_selected = set()
+
+    def _collect_selected_clips(self) -> list[tuple[int, int]]:
+        """返回当前选中（含多选）的 (track, clip) 列表，按轨道/索引逆序排序，
+        保证批量删除时索引不回移。"""
+        selected = set()
         if self._selected_clip >= 0:
-            self.delete_clip(self._selected_track, self._selected_clip)
-            self._selected_clip = -1
+            selected.add((self._selected_track, self._selected_clip))
+        selected |= self._multi_selected
+        return sorted(selected, key=lambda item: (item[0], item[1]),
+                      reverse=True)
 
     def nudge_selected(self, delta: float):
         if self._selected_clip < 0:
+            return
+        if len(self._multi_selected) > 1:
+            self._nudge_batch(delta)
             return
         clip = self._tracks[self._selected_track].clips[self._selected_clip]
         new_start = max(0.0, clip.start + delta)
@@ -656,6 +760,25 @@ class TimelineWidget(QWidget):
         )
         self._push_undo(cmd)
 
+    def _nudge_batch(self, delta: float):
+        cmds = []
+        for ti, ci in sorted(self._multi_selected,
+                             key=lambda item: (item[0], item[1]),
+                             reverse=True):
+            clip = self._tracks[ti].clips[ci]
+            new_start = max(0.0, clip.start + delta)
+            shift = new_start - clip.start
+            cmds.append(MoveClipCommand(
+                ti, ci,
+                clip.start, new_start,
+                clip.end, clip.end + shift,
+                old_source_start=clip.source_start,
+                new_source_start=clip.source_start,
+                old_source_end=clip.source_end,
+                new_source_end=clip.source_end,
+            ))
+        self._push_undo(CompositeCommand(cmds))
+
     def _select_clip(self, track_index: int, clip_index: int):
         self._selected_track = track_index
         self._selected_clip = clip_index
@@ -664,6 +787,11 @@ class TimelineWidget(QWidget):
     def _select_all(self):
         self._selected_track = -2
         self._selected_clip = -2
+        self._multi_selected = {
+            (ti, ci)
+            for ti, track in enumerate(self._tracks)
+            for ci in range(len(track.clips))
+        }
         self.update()
 
     def trim_in(self):
@@ -853,7 +981,9 @@ class TimelineWidget(QWidget):
             return
 
         color = TRACK_COLORS.get(clip.type, QColor("#888888"))
-        selected = (track_idx == self._selected_track and clip_idx == self._selected_clip)
+        selected = ((track_idx, clip_idx) in self._multi_selected
+                    or (track_idx == self._selected_track
+                        and clip_idx == self._selected_clip))
 
         if selected:
             p.setBrush(QBrush(color.lighter(130)))
