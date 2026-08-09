@@ -410,6 +410,33 @@ class TestTimestampBasedTiming:
         assert list(c.iter_frame_meta(render_fps=30))[-1][2] == pytest.approx(
             299 / 30)
 
+    def test_timeline_duration_extends_output_frames(self):
+        """audio_extra 等非 video 轨道尾部时长应计入导出帧数。"""
+        c = Compositor(1, 1, 25)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 25,
+            index=i,
+        ) for i in range(250)]
+        c.load_frames(frames)
+        c.load_clips([Clip(type="video", start=0, end=10)],
+                     timeline_duration=12.0)
+
+        assert c.total_output_frames_for(30) == 360
+        assert c.total_output_frames == 300
+
+    def test_timeline_duration_none_uses_clip_end(self):
+        c = Compositor(1, 1, 25)
+        frames = [CapturedFrame(
+            data=np.zeros((1, 1, 3), dtype=np.uint8),
+            timestamp=i / 25,
+            index=i,
+        ) for i in range(250)]
+        c.load_frames(frames)
+        c.load_clips([Clip(type="video", start=0, end=10)])
+
+        assert c.total_output_frames_for(30) == 300
+
 
 class TestExportComposition:
     def test_compose_can_output_target_size_in_rgb(self):

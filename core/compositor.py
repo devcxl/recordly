@@ -61,6 +61,7 @@ class Compositor:
         self._base_time = 0.0
         self._frame_times: list[float] = []
         self._clips: list | None = None
+        self._timeline_duration: float | None = None
         self._crop_region = None  # CropRegion | None
         self._monitor_left = 0
         self._monitor_top = 0
@@ -284,9 +285,12 @@ class Compositor:
     def load_manual_zoom_clips(self, clips: list):
         self._manual_zoom_clips = sorted(clips or [], key=lambda c: c.start)
 
-    def load_clips(self, clips: list):
-        """加载时间线 video clip 列表（用于速度感知渲染）"""
+    def load_clips(self, clips: list, timeline_duration: float | None = None):
+        """加载时间线 video clip 列表（用于速度感知渲染）。
+        timeline_duration: 时间线总时长（含 audio_extra 等非 video 轨道尾部），
+        为 None 时退化为按 video clip 末点计算。"""
         self._clips = sorted(clips or [], key=lambda c: c.start)
+        self._timeline_duration = timeline_duration
 
     def set_crop(self, crop):
         from core.project import CropRegion
@@ -572,6 +576,8 @@ class Compositor:
             return 0
         if self._clips:
             duration = max(c.end for c in self._clips)
+            if self._timeline_duration is not None:
+                duration = max(duration, self._timeline_duration)
         else:
             duration = self.source_duration
             if duration <= 0 and self._frames:

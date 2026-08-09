@@ -851,6 +851,21 @@ class TestTimelineGui:
         assert w.can_undo is False
         assert w.can_redo is False
 
+    def test_set_tracks_clear_history_false_preserves_undo(self):
+        """内部轨道重建（如额外音频）不应清空撤销/重做历史。"""
+        pytest.importorskip("PyQt5.QtWidgets")
+        from ui.timeline import TimelineWidget
+        from core.commands import MoveClipCommand
+
+        w = TimelineWidget()
+        w._undo_stack.append(MoveClipCommand(0, 0, 0, 1, 1, 2))
+        w._redo_stack.append(MoveClipCommand(0, 0, 1, 0, 2, 1))
+
+        w.set_tracks([], clear_history=False)
+
+        assert w.can_undo is True
+        assert w.can_redo is True
+
     def test_x_key_splits_playhead_video_without_selection(self, qapp):
         from PyQt5.QtCore import Qt
         from PyQt5.QtTest import QTest
