@@ -893,6 +893,7 @@ class MainWindow(QMainWindow):
         tracks.append(Track(type="zoom", name="缩放", clips=zoom_clips))
 
         self._timeline.set_tracks(tracks)
+        self._timeline.source_duration = self._compositor.source_duration
         self._timeline.duration = duration
         self._compositor.load_clips(tracks[0].clips, duration)
         self._compositor.load_manual_zoom_clips(zoom_clips)
@@ -1528,6 +1529,8 @@ class MainWindow(QMainWindow):
     def _restore_timeline_and_playback(self, comp, project):
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
+        self._timeline.source_duration = getattr(
+            comp, "source_duration", None)
         for track in project.timeline:
             if track.type == "video":
                 comp.load_clips(track.clips, project.duration)
