@@ -491,14 +491,18 @@ class TestTimelineGui:
         assert w._snap_alignment_time == alignment
 
     @pytest.mark.parametrize(
-        "target_ends, expected_alignment",
+        "target_ends, expected_start, expected_alignment",
         [
-            ((5.2, 5.1), 5.1),
-            ((5.2, 4.8), 5.2),
+            # 吸附到 5.1（与 clip1.end 最近）后与 clip0 (4.0,5.2) 重叠，
+            # 被重叠 clamp 推到 5.2（clip0.end 右缘）
+            ((5.2, 5.1), 5.2, 5.1),
+            # 5.2 与 4.8 距离相等，取 clip 顺序第一个（clip0.end=5.2），
+            # 且 (5.2,7.2) 不与任何 clip 重叠，无需 clamp
+            ((5.2, 4.8), 5.2, 5.2),
         ],
     )
     def test_video_drag_snap_uses_nearest_then_clip_order(
-            self, qapp, target_ends, expected_alignment):
+            self, qapp, target_ends, expected_start, expected_alignment):
         from core.project import Clip, Track
         from ui.timeline import TimelineWidget
 
@@ -514,8 +518,8 @@ class TestTimelineGui:
         self._drag_clip(w, 0, 2, 11.0, 5.0)
 
         moving_clip = w.tracks[0].clips[2]
-        assert moving_clip.start == pytest.approx(expected_alignment)
-        assert moving_clip.end == pytest.approx(expected_alignment + 2.0)
+        assert moving_clip.start == pytest.approx(expected_start)
+        assert moving_clip.end == pytest.approx(expected_start + 2.0)
         assert w._snap_alignment_time == pytest.approx(expected_alignment)
 
     def test_snap_alignment_clears_after_drag_release(self, qapp):
@@ -1227,7 +1231,7 @@ class TestTimelineGui:
         assert (right.start, right.end) == pytest.approx((3.5, 5.5))
         assert (right.source_start, right.source_end) == (14.0, 18.0)
 
-    @pytest.mark.parametrize("candidate_start", [1.0, 5.0])
+    @pytest.mark.parametrize("candidate_start", [4.0, 5.0])
     def test_split_right_clip_body_click_drags_with_one_undoable_move(
             self, qapp, candidate_start):
         from core.commands import MoveClipCommand
@@ -1785,3 +1789,172 @@ class TestTimelineZoomAndLimits:
             Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
         ))
         assert clip.source_end <= w.source_duration
+
+
+class TestTimelineCrossTrackAndOverlap:
+    """T3b: 跨轨拖拽、重叠检测、吸附播放头"""
+
+    @staticmethod
+    def _drag_to(w, track_index, clip_index, press_time, target_time,
+                 target_y):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT
+
+        clip = w.tracks[track_index].clips[clip_index]
+        press = QPointF(
+            w._time_to_x(press_time),
+            RULER_HEIGHT + track_index * TRACK_HEIGHT + TRACK_HEIGHT / 2,
+        )
+        move = QPointF(w._time_to_x(target_time), target_y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, move,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+
+    def test_drag_clip_to_another_track(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([
+            Track(type="video", clips=[
+                Clip(type="video", start=1.0, end=3.0),
+                Clip(type="video", start=6.0, end=8.0),
+            ]),
+            Track(type="video", clips=[
+                Clip(type="video", start=10.0, end=12.0),
+            ]),
+        ])
+
+        target_y = RULER_HEIGHT + TRACK_HEIGHT + TRACK_HEIGHT / 2
+        self._drag_to(w, 0, 1, 7.0, 5.0, target_y)
+
+        assert len(w.tracks[0].clips) == 1
+        assert len(w.tracks[1].clips) == 2
+        moved = w.tracks[1].clips[-1]
+        assert (moved.start, moved.end) == (4.0, 6.0)
+        assert (w._drag_track, w._drag_clip) == (1, 1)
+
+    def test_drag_release_creates_cross_track_move_command(self, qapp):
+        from core.commands import MoveClipCommand
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([
+            Track(type="video", clips=[
+                Clip(type="video", start=1.0, end=3.0),
+                Clip(type="video", start=6.0, end=8.0),
+            ]),
+            Track(type="video", clips=[
+                Clip(type="video", start=10.0, end=12.0),
+            ]),
+        ])
+        target_y = RULER_HEIGHT + TRACK_HEIGHT + TRACK_HEIGHT / 2
+        self._drag_to(w, 0, 1, 7.0, 4.0, target_y)
+
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        w.mouseReleaseEvent(QMouseEvent(
+            QEvent.MouseButtonRelease,
+            QPointF(w._time_to_x(4.0), target_y),
+            Qt.LeftButton, Qt.NoButton, Qt.NoModifier,
+        ))
+
+        assert len(w._undo_stack) == 1
+        cmd = w._undo_stack[-1]
+        assert isinstance(cmd, MoveClipCommand)
+        assert (cmd.old_track, cmd.new_track) == (0, 1)
+
+        w.undo()
+        assert len(w.tracks[0].clips) == 2
+        assert len(w.tracks[1].clips) == 1
+        back = w.tracks[0].clips[1]
+        assert (back.start, back.end) == (6.0, 8.0)
+
+        w.redo()
+        assert len(w.tracks[0].clips) == 1
+        assert len(w.tracks[1].clips) == 2
+
+    def test_drag_clip_does_not_drop_to_incompatible_track(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([
+            Track(type="video", clips=[
+                Clip(type="video", start=6.0, end=8.0),
+            ]),
+            Track(type="audio", clips=[
+                Clip(type="audio", start=1.0, end=3.0),
+            ]),
+        ])
+        target_y = RULER_HEIGHT + TRACK_HEIGHT + TRACK_HEIGHT / 2
+        self._drag_to(w, 0, 0, 7.0, 4.0, target_y)
+
+        assert len(w.tracks[0].clips) == 1
+        assert len(w.tracks[1].clips) == 1
+
+    def test_drag_overlap_clamps_to_gap(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        # 拖到 2.0：与 (1,3) 重叠，应 clamp 到右侧 3.0
+        self._drag_to(w, 0, 1, 7.0, 2.0,
+                      None if False else 40)
+
+        assert w.tracks[0].clips[1].start == pytest.approx(3.0)
+
+    def test_drag_overlap_clamps_to_left_gap(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=4.0, end=6.0),
+            Clip(type="video", start=10.0, end=12.0),
+        ])])
+
+        # 拖到 5.0：与 (4,6) 重叠，左空间 (0,4) 比右空间 (6,10) 近 → clamp 到 4.0 左侧
+        self._drag_to(w, 0, 1, 11.0, 5.0,
+                      None if False else 40)
+
+        clip = w.tracks[0].clips[1]
+        assert (clip.start, clip.end) == (2.0, 4.0)
+
+    def test_drag_snaps_to_playhead(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.playhead = 5.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        # press 6.5s、target 5.5s → new_start = 6.0 + (5.5-6.5) = 5.0
+        # 恰好与播放头 5.0 对齐，吸附触发
+        self._drag_to(w, 0, 0, 6.5, 5.5,
+                      None if False else 40)
+
+        clip = w.tracks[0].clips[0]
+        assert clip.start == pytest.approx(5.0)
+        assert w._snap_alignment_time == pytest.approx(5.0)

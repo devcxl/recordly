@@ -207,6 +207,45 @@ class TimelineWidget(QWidget):
                     return ti, ci
         return -1, -1
 
+    def _track_at_y(self, y: float) -> int:
+        """根据 y 坐标返回轨道索引；标尺/空白返回 -1。"""
+        if y < RULER_HEIGHT:
+            return -1
+        candidate = int((y - RULER_HEIGHT) // TRACK_HEIGHT)
+        if 0 <= candidate < len(self._tracks):
+            return candidate
+        return -1
+
+    def _can_drop_to_track(self, track_type: str, clip_type: str) -> bool:
+        """判断 clip 是否允许拖到目标轨道（类型兼容）。"""
+        if track_type == clip_type:
+            return True
+        return (track_type == "audio_extra" and clip_type == "audio") or (
+            track_type == "audio" and clip_type == "audio_extra")
+
+    def _constrain_no_overlap(self, track, clip_index: int,
+                              start: float, end: float) -> tuple[float, float]:
+        """将 [start, end] clamp 到不与该轨道其他 clip 重叠的最近位置。"""
+        duration = end - start
+        blocked_ranges = []
+        for index, other in enumerate(track.clips):
+            if index == clip_index:
+                continue
+            if start < other.end and end > other.start:
+                blocked_ranges.append(other)
+        if not blocked_ranges:
+            return start, end
+
+        right_limit = max(other.end for other in blocked_ranges)
+        left_limit = min(other.start for other in blocked_ranges)
+        left_candidate = left_limit - duration
+        right_candidate = right_limit
+        left_shift = abs(start - left_candidate)
+        right_shift = abs(start - right_candidate)
+        if left_candidate >= 0.0 and left_shift <= right_shift:
+            return left_candidate, left_candidate + duration
+        return right_candidate, right_candidate + duration
+
     def _hit_edge(self, pos: QPointF) -> tuple[int, int, str] | None:
         for ti, track in enumerate(self._tracks):
             for ci in range(len(track.clips)):
@@ -283,6 +322,8 @@ class TimelineWidget(QWidget):
         edge = self._hit_edge(pos)
         if edge:
             self._drag_track, self._drag_clip, self._drag_state = edge
+            self._drag_orig_track = self._drag_track
+            self._drag_orig_clip = self._drag_clip
             self._drag_start_x = pos.x()
             clip = self._tracks[self._drag_track].clips[self._drag_clip]
             self._drag_orig_start = clip.start
@@ -298,6 +339,9 @@ class TimelineWidget(QWidget):
             self._selected_clip = ci
             self._drag_track = ti
             self._drag_clip = ci
+            self._drag_orig_track = ti
+            self._drag_orig_clip = ci
+            self._drag_orig_track = ti
             self._drag_state = "move"
             self._drag_start_x = pos.x()
             clip = self._tracks[ti].clips[ci]
@@ -334,6 +378,19 @@ class TimelineWidget(QWidget):
             dt = (pos.x() - self._drag_start_x) / self._pixels_per_sec
 
             if self._drag_state == "move":
+                # 跨轨拖拽：y 坐标进入其他轨道时切换目标轨道
+                target_track = self._track_at_y(pos.y())
+                if (target_track >= 0 and target_track != self._drag_track
+                        and self._can_drop_to_track(
+                            self._tracks[target_track].type, clip.type)):
+                    self._tracks[self._drag_track].clips.pop(self._drag_clip)
+                    self._tracks[target_track].clips.append(clip)
+                    self._drag_track = target_track
+                    self._drag_clip = len(
+                        self._tracks[target_track].clips) - 1
+                    self._selected_track = target_track
+                    self._selected_clip = self._drag_clip
+
                 clip_duration = self._drag_orig_end - self._drag_orig_start
                 new_start = max(0.0, min(
                     self._drag_orig_start + dt,
@@ -342,6 +399,8 @@ class TimelineWidget(QWidget):
                 new_end = new_start + (self._drag_orig_end - self._drag_orig_start)
                 track = self._tracks[self._drag_track]
                 new_start, new_end = self._snap_move_candidate(
+                    track, self._drag_clip, new_start, new_end)
+                new_start, new_end = self._constrain_no_overlap(
                     track, self._drag_clip, new_start, new_end)
                 clip.start = new_start
                 clip.end = new_end
@@ -382,19 +441,25 @@ class TimelineWidget(QWidget):
         best = None
         duration = end - start
         max_start = max(0.0, self._duration - duration)
+        candidates = [
+            (abs(start - self._playhead_s), self._playhead_s, self._playhead_s),
+            (abs(end - self._playhead_s),
+             self._playhead_s - duration, self._playhead_s),
+        ]
         for index, other in enumerate(track.clips):
             if index == clip_index:
                 continue
-            candidates = (
+            candidates.extend((
                 (abs(start - other.end), other.end, other.end),
-                (abs(end - other.start), other.start - duration, other.start),
-            )
-            for distance, snapped_start, target in candidates:
-                distance_px = distance * self._pixels_per_sec
-                if (distance_px <= CLIP_SNAP_DISTANCE_PX
-                        and 0.0 <= snapped_start <= max_start
-                        and (best is None or distance_px < best[0])):
-                    best = distance_px, snapped_start, target
+                (abs(end - other.start),
+                 other.start - duration, other.start),
+            ))
+        for distance, snapped_start, target in candidates:
+            distance_px = distance * self._pixels_per_sec
+            if (distance_px <= CLIP_SNAP_DISTANCE_PX
+                    and 0.0 <= snapped_start <= max_start
+                    and (best is None or distance_px < best[0])):
+                best = distance_px, snapped_start, target
 
         if best is None:
             return start, end
@@ -410,6 +475,8 @@ class TimelineWidget(QWidget):
             self._drag_state = None
             self._drag_track = -1
             self._drag_clip = -1
+            self._drag_orig_track = -1
+            self._drag_orig_clip = -1
             self.update()
             return
 
@@ -455,10 +522,14 @@ class TimelineWidget(QWidget):
                             abs_tol=1e-9, rel_tol=0.0)
                 or not isclose(clip.end, self._drag_orig_end,
                                abs_tol=1e-9, rel_tol=0.0)
+                or self._drag_track != self._drag_orig_track
             )
             if position_changed:
                 return MoveClipCommand(
-                    track_index=self._drag_track, clip_index=self._drag_clip,
+                    track_index=self._drag_orig_track,
+                    clip_index=self._drag_orig_clip,
+                    old_track=self._drag_orig_track,
+                    new_track=self._drag_track,
                     old_start=self._drag_orig_start, new_start=clip.start,
                     old_end=self._drag_orig_end, new_end=clip.end,
                     old_source_start=self._drag_orig_source_start,
