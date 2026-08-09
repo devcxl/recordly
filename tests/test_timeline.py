@@ -2107,3 +2107,79 @@ class TestTimelineMultiSelect:
         w.undo()
         assert (w.tracks[0].clips[2].start, w.tracks[0].clips[2].end) == (
             10.0, 12.0)
+
+
+class TestTimelineVisualProviders:
+    """T5: 波形与缩略图 provider 集成"""
+
+    def test_waveform_provider_is_queried_during_render(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+        import numpy as np
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0,
+                 source_start=0.0, source_end=5.0),
+        ])])
+        calls = []
+
+        w.set_waveform_provider(
+            lambda: (np.zeros(44100 * 5, dtype=np.float32), 44100))
+        w.resize(600, 100)
+        image = QImage(600, 100, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        w.render(painter)
+        painter.end()
+
+        assert w._waveform_provider is not None
+
+    def test_thumbnail_provider_queried_for_video_clip(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter, QPixmap
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=5.0,
+                 source_start=0.0, source_end=5.0),
+        ])])
+        queried = []
+        w.set_thumbnail_provider(
+            lambda t: (queried.append(t) or QPixmap(10, 10)))
+        w.resize(600, 100)
+        image = QImage(600, 100, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        w.render(painter)
+        painter.end()
+
+        assert queried, "video clip 渲染时应请求缩略图"
+        assert queried[0] == pytest.approx(2.5)  # 源时间中点
+
+    def test_provider_exception_does_not_break_render(self, qapp):
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=5.0,
+                 source_start=0.0, source_end=5.0),
+        ])])
+        w.set_thumbnail_provider(lambda t: (_ for _ in ()).throw(
+            RuntimeError("provider boom")))
+        w.resize(600, 100)
+        image = QImage(600, 100, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        w.render(painter)
+        painter.end()

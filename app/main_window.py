@@ -782,6 +782,7 @@ class MainWindow(QMainWindow):
             total = len(self._compositor.frames)
             self._frame_label.setText(f"1 / {total}")
             self._populate_timeline()
+            self._bind_thumbnail_provider()
             self._create_playback_controller()
             self._playback.seek(0)
             self._connect_timeline_signals()
@@ -1029,6 +1030,12 @@ class MainWindow(QMainWindow):
         audio_result = (
             self._recorded_data.get("audio") if self._recorded_data else None
         )
+        audio_data = getattr(audio_result, "data", None)
+        if audio_data is not None and len(audio_data) > 0:
+            if hasattr(self._timeline, "set_waveform_provider"):
+                self._timeline.set_waveform_provider(
+                    lambda: (audio_data, getattr(audio_result, "samplerate",
+                                                 44100)))
         self._playback = PlaybackController(
             self._preview,
             self._compositor,
@@ -1037,6 +1044,38 @@ class MainWindow(QMainWindow):
         )
         self._preview.set_fps(int(self._compositor.fps))
         self._playback.set_on_frame_changed(self._update_frame_counter)
+
+    def _bind_thumbnail_provider(self):
+        """将 compositor 帧解码绑定为时间线缩略图提供者。"""
+        comp = self._compositor
+        frames = getattr(comp, "frames", []) or []
+
+        def provider(source_time_s):
+            if not frames:
+                return None
+            try:
+                if comp._clips is not None:
+                    idx = comp._source_index_at(source_time_s)
+                else:
+                    idx = comp._nearest_source_index(source_time_s)
+                if idx is None or not (0 <= idx < len(frames)):
+                    return None
+                frame = frames[idx]
+                data = frame.data if hasattr(frame, "data") else None
+                if data is None:
+                    return None
+                import numpy as np
+                from PyQt5.QtGui import QImage, QPixmap
+                rgb = np.ascontiguousarray(data[:, :, ::-1])
+                h, w, _ = rgb.shape
+                qimage = QImage(rgb.data, w, h, 3 * w,
+                                QImage.Format_RGB888)
+                return QPixmap.fromImage(qimage)
+            except Exception:
+                return None
+
+        if hasattr(self._timeline, "set_thumbnail_provider"):
+            self._timeline.set_thumbnail_provider(provider)
 
     def _on_rewind(self):
         if self._playback:
@@ -1557,6 +1596,7 @@ class MainWindow(QMainWindow):
                 comp.load_manual_zoom_clips(track.clips)
 
         if comp._frames:
+            self._bind_thumbnail_provider()
             self._create_playback_controller()
             self._playback.seek(0)
             self._connect_timeline_signals()
