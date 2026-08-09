@@ -613,7 +613,12 @@ class ExportWorker(QObject):
             if video_clips:
                 for clip_no, clip in enumerate(video_clips):
                     label = f'[v{clip_no}]'
-                    source_end = clip.source_end if clip.source_end is not None else clip.source_start + (clip.end - clip.start)
+                    source_end = (
+                        clip.source_end
+                        if clip.source_end is not None
+                        else clip.source_start
+                        + (clip.end - clip.start) * max(clip.speed, 0.0001)
+                    )
                     chain = (
                         f'[0:a]atrim=start={clip.source_start}:end={source_end},'
                         'asetpts=PTS-STARTPTS'
@@ -705,10 +710,12 @@ class ExportWorker(QObject):
 
     @staticmethod
     def _save_temp_wav(audio: np.ndarray, samplerate: int) -> str:
+        """保存临时 WAV。声道数按数组形状推断：2D (N,C) → C 声道，1D → 单声道。"""
+        channels = audio.shape[1] if audio.ndim == 2 else 1
         fd, path = tempfile.mkstemp(suffix=".wav")
         os.close(fd)
         with wave.open(path, "wb") as wf:
-            wf.setnchannels(2)
+            wf.setnchannels(channels)
             wf.setsampwidth(2)
             wf.setframerate(samplerate)
             int16 = (audio * 32767).clip(-32768, 32767).astype(np.int16)

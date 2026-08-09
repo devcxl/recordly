@@ -134,6 +134,61 @@ class TestExportWorker:
         assert "amix=inputs=2:duration=longest" in filtergraph
         assert "atrim=duration=8.0" in filtergraph
 
+    def test_audio_mix_open_ended_speed_clip_scales_source_end(self, monkeypatch):
+        """source_end 为 None 的变速 clip，源结束时间必须乘速度系数
+        （与 project.sync_audio_regions_from_clips 语义一致）。"""
+        from types import SimpleNamespace
+        import tempfile
+        import os
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+        from core.project import Clip
+
+        compositor = Compositor(320, 240, 30)
+        compositor.load_clips([Clip(
+            type="video", start=0.0, end=4.0,
+            source_start=0.0, source_end=None, speed=2.0,
+        )])
+        worker = ExportWorker(
+            compositor, None, ExportSettings(output_path="out.mp4"))
+        captured = {}
+        mixed_path = None
+
+        def fake_run(cmd, **_kwargs):
+            captured["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stderr=b"")
+
+        monkeypatch.setattr("core.exporter.subprocess.run", fake_run)
+
+        try:
+            result = worker._build_audio_filtergraph(
+                [], "/tmp/original.wav", 44100, video_duration=8.0)
+            filtergraph = captured["cmd"][
+                captured["cmd"].index("-filter_complex") + 1]
+            assert result is not None
+            # 2.0x 速度：4s 时间线内容对应 8s 源素材（源结束时间必须乘速度）
+            assert "atrim=start=0.0:end=8.0" in filtergraph
+            mixed_path = result
+        finally:
+            if mixed_path is not None and os.path.exists(mixed_path):
+                os.remove(mixed_path)
+
+    def test_save_temp_wav_infers_channels_from_array_shape(self):
+        import wave
+        import numpy as np
+        from core.exporter import ExportWorker
+
+        mono = np.zeros((100,), dtype=np.float32)
+        stereo = np.zeros((100, 2), dtype=np.float32)
+        quad = np.zeros((100, 4), dtype=np.float32)
+
+        for data, expected in ((mono, 1), (stereo, 2), (quad, 4)):
+            path = ExportWorker._save_temp_wav(data, 44100)
+            with wave.open(path, "r") as wf:
+                assert wf.getnchannels() == expected
+            import os
+            os.remove(path)
+
     def test_gif_graph_uses_target_fps_without_downsampling_filter(self):
         import ffmpeg
         from core.compositor import Compositor
