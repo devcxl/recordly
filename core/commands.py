@@ -201,6 +201,27 @@ class ChangeSpeedCommand(UndoCommand):
 
 
 @dataclass
+class ChangeVolumeCommand(UndoCommand):
+    track_index: int
+    clip_index: int
+    old_volume: float
+    new_volume: float
+
+    def description(self) -> str:
+        if self.new_volume <= 0:
+            return "静音片段"
+        return "变更音量"
+
+    def execute(self, timeline):
+        clip = timeline._tracks[self.track_index].clips[self.clip_index]
+        clip.volume = self.new_volume
+
+    def undo(self, timeline):
+        clip = timeline._tracks[self.track_index].clips[self.clip_index]
+        clip.volume = self.old_volume
+
+
+@dataclass
 class CompositeCommand(UndoCommand):
     """将多个子命令组合为单个可撤销/重做单元。
     execute: 顺序执行子命令
