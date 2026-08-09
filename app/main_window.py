@@ -846,6 +846,10 @@ class MainWindow(QMainWindow):
         """重复录制时保持时间线信号单次连接。"""
         pairs = (
             (self._timeline.playhead_changed, self._on_timeline_seek),
+            (self._timeline.playhead_drag_started,
+             self._on_playhead_drag_started),
+            (self._timeline.playhead_drag_finished,
+             self._on_playhead_drag_finished),
             (self._timeline.zoom_double_clicked, self._on_zoom_double_clicked),
             (self._timeline.zoom_add_requested, self._on_zoom_double_clicked),
             (self._timeline.zoom_clip_selected, self._on_zoom_clip_selected),
@@ -1078,6 +1082,21 @@ class MainWindow(QMainWindow):
         return f"{minutes:02d}:{whole_seconds:02d}.{milliseconds:03d}"
 
     def _on_timeline_seek(self, sec: float):
+        if not self._playback:
+            return
+        if self._timeline._drag_state == "playhead":
+            # 拖拽中仅更新计数器，避免逐像素全帧合成；release 时统一定位
+            self._update_frame_counter(int(sec * self._compositor.fps))
+            return
+        idx = int(sec * self._compositor.fps)
+        self._playback.seek(idx)
+        self._update_frame_counter(idx)
+
+    def _on_playhead_drag_started(self):
+        if self._playback:
+            self._playback.pause()
+
+    def _on_playhead_drag_finished(self, sec: float):
         if not self._playback:
             return
         idx = int(sec * self._compositor.fps)

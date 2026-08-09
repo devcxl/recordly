@@ -563,3 +563,81 @@ class TestCursorEffectThreadSafety:
         assert abs(serial_mean - parallel_mean) < 5.0, (
             f"并行 cursor 渲染偏差: serial={serial_mean:.1f} parallel={parallel_mean:.1f}"
         )
+
+
+class TestPreviewCache:
+    """T4: 预览帧 LRU 缓存"""
+
+    def test_compose_index_caches_repeated_seek(self):
+        from core.screen_capture import CapturedFrame
+
+        c = Compositor(2, 2, 30)
+        c.load_frames([
+            CapturedFrame(data=np.full((2, 2, 3), 10, dtype=np.uint8),
+                          timestamp=i / 30, index=i)
+            for i in range(10)
+        ])
+        c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
+
+        original_compose = c.compose
+
+        def counting_compose(frame, *args, **kwargs):
+            counting_compose.calls += 1
+            return original_compose(frame, *args, **kwargs)
+        counting_compose.calls = 0
+        c.compose = counting_compose
+
+        frame1 = c.compose_index(5)
+        frame2 = c.compose_index(5)
+        c.compose_index(6)
+        c.compose_index(5)
+
+        assert frame1 is frame2  # 命中缓存返回同一对象
+        assert counting_compose.calls == 2  # 5,6 各合成一次，第三次命中缓存
+
+    def test_cache_lru_evicts_oldest(self):
+        from core.screen_capture import CapturedFrame
+
+        c = Compositor(2, 2, 30)
+        c.load_frames([
+            CapturedFrame(data=np.full((2, 2, 3), 10, dtype=np.uint8),
+                          timestamp=i / 30, index=i)
+            for i in range(10)
+        ])
+        c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
+        c._preview_cache_limit = 2
+
+        for idx in range(4):
+            c.compose_index(idx)
+
+        assert list(c._preview_cache.keys()) == [2, 3]
+
+    def test_clear_preview_cache_invalidates(self):
+        from core.screen_capture import CapturedFrame
+
+        c = Compositor(2, 2, 30)
+        c.load_frames([
+            CapturedFrame(data=np.full((2, 2, 3), 10, dtype=np.uint8),
+                          timestamp=i / 30, index=i)
+            for i in range(10)
+        ])
+        c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
+
+        c.compose_index(3)
+        assert len(c._preview_cache) == 1
+        c.clear_preview_cache()
+        assert len(c._preview_cache) == 0
+
+    def test_load_clips_invalidates_cache(self):
+        from core.screen_capture import CapturedFrame
+
+        c = Compositor(2, 2, 30)
+        c.load_frames([
+            CapturedFrame(data=np.full((2, 2, 3), 10, dtype=np.uint8),
+                          timestamp=i / 30, index=i)
+            for i in range(10)
+        ])
+        c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
+        c.compose_index(3)
+        c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
+        assert len(c._preview_cache) == 0
