@@ -60,6 +60,7 @@ class MoveClipCommand(UndoCommand):
     new_source_start: float = 0.0
     old_source_end: float | None = None
     new_source_end: float | None = None
+    new_clip_index: int | None = None
 
     def description(self) -> str:
         return "移动片段"
@@ -67,6 +68,7 @@ class MoveClipCommand(UndoCommand):
     def execute(self, timeline):
         if self.new_track >= 0 and self.new_track != self.old_track:
             clip = timeline._tracks[self.old_track].clips.pop(self.clip_index)
+            self.new_clip_index = len(timeline._tracks[self.new_track].clips)
             timeline._tracks[self.new_track].clips.append(clip)
             clip.start = self.new_start
             clip.end = self.new_end
@@ -80,7 +82,8 @@ class MoveClipCommand(UndoCommand):
 
     def undo(self, timeline):
         if self.new_track >= 0 and self.new_track != self.old_track:
-            clip = timeline._tracks[self.new_track].clips.pop()
+            index = self.new_clip_index if self.new_clip_index is not None else -1
+            clip = timeline._tracks[self.new_track].clips.pop(index)
             timeline._tracks[self.old_track].clips.insert(self.clip_index, clip)
             clip.start = self.old_start
             clip.end = self.old_end
