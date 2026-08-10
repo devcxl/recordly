@@ -81,6 +81,27 @@ def _resolve_media_path(project_dir: str, rel_path: str) -> str:
     return resolved
 
 
+def ensure_builtin_audio_tracks(project, project_dir: str) -> None:
+    """幂等补齐旧项目的内置音频轨（纯数据操作，供加载路径调用）。
+
+    1) audio 轨 clip 无 source_path → 回退 _resolve_media_path(project_dir, source.audio_mic)
+    2) source.audio_system 存在且无 audio_system 轨 → 追加全时长 clip
+    已补齐项目再调用无变化。
+    """
+    for track in project.timeline:
+        if track.type == "audio" and track.clips and not track.clips[0].source_path:
+            if project.source and project.source.audio_mic:
+                track.clips[0].source_path = _resolve_media_path(
+                    project_dir, project.source.audio_mic)
+    if project.source and project.source.audio_system:
+        if not any(t.type == "audio_system" for t in project.timeline):
+            sys_path = _resolve_media_path(project_dir, project.source.audio_system)
+            project.timeline.append(Track(type="audio_system", name="系统音频", clips=[
+                Clip(type="audio_system", start=0.0, end=project.duration,
+                     source_start=0.0, source_path=sys_path, content="系统音频"),
+            ]))
+
+
 def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
     """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
     from core.audio_capture import mix_audio_results
@@ -114,6 +135,7 @@ class MainWindow(QMainWindow):
         self._compositor = Compositor(1920, 1080, config.default_fps)
         self._recorded_data = None
         self._audio_regions = []
+        self._track_audio_cache = {}
         self._export_controller = ExportController(self)
         self._progress = None
         self._playback = None
@@ -854,6 +876,7 @@ class MainWindow(QMainWindow):
 
     def _populate_timeline(self):
         """录制结束后在时间线中创建视频、音频、缩放轨道"""
+        self._track_audio_cache = {}
         frames = self._compositor.frames
         if not frames:
             return
@@ -864,8 +887,19 @@ class MainWindow(QMainWindow):
                  content=f"屏幕录制 {self._compositor.width}x{self._compositor.height}"),
         ]))
 
-        tracks.append(Track(type="audio", name="音频", clips=[
-            Clip(type="audio", start=0, end=duration, content="麦克风"),
+        project_dir = self._project_dir or ""
+        mic_wav = os.path.join(project_dir, "audio_mic.wav") if project_dir else ""
+        sys_wav = os.path.join(project_dir, "audio_system.wav") if project_dir else ""
+
+        tracks.append(Track(type="audio", name="麦克风", clips=[
+            Clip(type="audio", start=0, end=duration,
+                 source_path=mic_wav if os.path.exists(mic_wav) else "",
+                 content="麦克风"),
+        ]))
+        tracks.append(Track(type="audio_system", name="系统音频", clips=[
+            Clip(type="audio_system", start=0, end=duration,
+                 source_path=sys_wav if os.path.exists(sys_wav) else "",
+                 content="系统音频"),
         ]))
 
         clicks = self._recorded_data.get("clicks", [])
@@ -1006,18 +1040,35 @@ class MainWindow(QMainWindow):
         self._btn_play.setText("⏸")
         self._btn_play.setToolTip("暂停")
 
+    def _track_audio_provider(self, track_type: str):
+        """按轨提供波形数据：取该轨首个 clip 的 source_path 读 wav（结果缓存）。
+
+        仅 audio/audio_system 内置轨提供波形；audio_extra 轨返回 None（不绘制）。
+        """
+        if track_type not in ("audio", "audio_system"):
+            return None
+        for track in self._timeline.tracks:
+            if track.type != track_type:
+                continue
+            if not track.clips or not track.clips[0].source_path:
+                continue
+            source_path = track.clips[0].source_path
+            if source_path not in self._track_audio_cache:
+                self._track_audio_cache[source_path] = _read_wav(source_path)
+            result = self._track_audio_cache[source_path]
+            if result is None:
+                return None
+            return result.data, result.samplerate
+        return None
+
     def _create_playback_controller(self):
         from ui.preview_widget import AudioPreviewPlayer, PlaybackController
 
         audio_result = (
             self._recorded_data.get("audio") if self._recorded_data else None
         )
-        audio_data = getattr(audio_result, "data", None)
-        if audio_data is not None and len(audio_data) > 0:
-            if hasattr(self._timeline, "set_waveform_provider"):
-                self._timeline.set_waveform_provider(
-                    lambda: (audio_data, getattr(audio_result, "samplerate",
-                                                 44100)))
+        if hasattr(self._timeline, "set_waveform_provider"):
+            self._timeline.set_waveform_provider(self._track_audio_provider)
         samplerate = int(getattr(
             audio_result, "samplerate", DEFAULT_SAMPLE_RATE))
         self._playback = PlaybackController(
@@ -1502,6 +1553,7 @@ class MainWindow(QMainWindow):
         self._compositor.crop_region = None
         self._crop_active = False
         self._audio_regions = []
+        self._track_audio_cache = {}
 
     def _restore_cursor_events(self, comp, project):
         EventData = type("EventData", (), {})
@@ -1573,6 +1625,7 @@ class MainWindow(QMainWindow):
             }
 
     def _restore_timeline_and_playback(self, comp, project):
+        ensure_builtin_audio_tracks(project, self._project_dir)
         self._timeline.set_tracks(project.timeline)
         self._timeline.duration = project.duration
         self._timeline.source_duration = getattr(

@@ -17,6 +17,7 @@ from core.speed import plan_clip_speed_change, format_speed_label
 TRACK_COLORS = {
     "video": QColor("#4A90D9"),
     "audio": QColor("#50C878"),
+    "audio_system": QColor("#2FA38C"),
     "audio_extra": QColor("#2E8B57"),
     "cursor": QColor("#E8A838"),
     "text": QColor("#A855F7"),
@@ -113,7 +114,7 @@ class TimelineWidget(QWidget):
         self._source_duration = value
 
     def set_waveform_provider(self, provider):
-        """注册音频波形提供者：callable() -> (np.ndarray, samplerate) | None"""
+        """注册音频波形提供者：callable(track_type) -> (np.ndarray, samplerate) | None"""
         self._waveform_provider = provider
         self.update()
 
@@ -235,11 +236,15 @@ class TimelineWidget(QWidget):
         return -1
 
     def _can_drop_to_track(self, track_type: str, clip_type: str) -> bool:
-        """判断 clip 是否允许拖到目标轨道（类型兼容）。"""
+        """判断 clip 是否允许拖到目标轨道（类型兼容）。
+
+        audio ↔ audio_extra 互通；audio_system ↔ audio_extra 互通；
+        audio ↔ audio_system 互斥（同类型轨除外）。
+        """
         if track_type == clip_type:
             return True
-        return (track_type == "audio_extra" and clip_type == "audio") or (
-            track_type == "audio" and clip_type == "audio_extra")
+        return (track_type == "audio_extra" and clip_type in ("audio", "audio_system")) or (
+            track_type in ("audio", "audio_system") and clip_type == "audio_extra")
 
     def _constrain_no_overlap(self, track, clip_index: int,
                               start: float, end: float) -> tuple[float, float]:
@@ -1036,7 +1041,7 @@ class TimelineWidget(QWidget):
 
         p.drawRoundedRect(rect, 3, 3)
 
-        self._draw_clip_content(p, rect, clip)
+        self._draw_clip_content(p, rect, clip, track.type)
 
         if rect.width() > 40:
             p.setPen(QColor("white"))
@@ -1058,8 +1063,8 @@ class TimelineWidget(QWidget):
             p.fillRect(QRectF(rect.x() - 2, rect.y(), 4, rect.height()), QColor("white"))
             p.fillRect(QRectF(rect.right() - 2, rect.y(), 4, rect.height()), QColor("white"))
 
-    def _draw_clip_content(self, p: QPainter, rect: QRectF, clip):
-        """clip 内绘制内容：video 缩略图 / audio 波形。"""
+    def _draw_clip_content(self, p: QPainter, rect: QRectF, clip, track_type: str):
+        """clip 内绘制内容：video 缩略图 / audio 波形（波形按所在轨 type 调 provider）。"""
         if rect.width() < 4:
             return
         try:
@@ -1073,16 +1078,16 @@ class TimelineWidget(QWidget):
                     p.drawPixmap(rect.toRect(), pixmap)
                     p.restore()
                     return
-            if clip.type in ("audio", "audio_extra") and rect.width() > 8:
-                self._draw_audio_waveform(p, rect, clip)
+            if clip.type in ("audio", "audio_system") and rect.width() > 8:
+                self._draw_audio_waveform(p, rect, clip, track_type)
         except Exception:
             # 波形/缩略图绘制失败不影响时间线交互
             pass
 
-    def _draw_audio_waveform(self, p: QPainter, rect: QRectF, clip):
+    def _draw_audio_waveform(self, p: QPainter, rect: QRectF, clip, track_type: str):
         if self._waveform_provider is None:
             return
-        result = self._waveform_provider()
+        result = self._waveform_provider(track_type)
         if not result:
             return
         data, samplerate = result

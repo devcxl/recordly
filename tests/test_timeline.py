@@ -2127,8 +2127,11 @@ class TestTimelineVisualProviders:
         ])])
         calls = []
 
-        w.set_waveform_provider(
-            lambda: (np.zeros(44100 * 5, dtype=np.float32), 44100))
+        def provider(track_type):
+            calls.append(track_type)
+            return (np.zeros(44100 * 5, dtype=np.float32), 44100)
+
+        w.set_waveform_provider(provider)
         w.resize(600, 100)
         image = QImage(600, 100, QImage.Format_ARGB32)
         image.fill(Qt.transparent)
@@ -2137,6 +2140,90 @@ class TestTimelineVisualProviders:
         painter.end()
 
         assert w._waveform_provider is not None
+        assert calls == ["audio"], "audio 轨渲染应收到 'audio' track type"
+
+    def test_waveform_provider_receives_track_type_per_audio_track(self, qapp):
+        """audio 轨收到 'audio'、audio_system 轨收到 'audio_system'"""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+        import numpy as np
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([
+            Track(type="audio", clips=[
+                Clip(type="audio", start=0.0, end=5.0,
+                     source_start=0.0, source_end=5.0),
+            ]),
+            Track(type="audio_system", clips=[
+                Clip(type="audio_system", start=0.0, end=5.0,
+                     source_start=0.0, source_end=5.0),
+            ]),
+        ])
+        calls = []
+
+        def provider(track_type):
+            calls.append(track_type)
+            return (np.zeros(44100 * 5, dtype=np.float32), 44100)
+
+        w.set_waveform_provider(provider)
+        w.resize(600, 200)
+        image = QImage(600, 200, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        w.render(painter)
+        painter.end()
+
+        assert set(calls) == {"audio", "audio_system"}, \
+            "audio/audio_system 轨渲染应分别收到对应 track type"
+
+    def test_audio_extra_track_does_not_query_waveform(self, qapp):
+        """audio_extra 轨不绘制波形（provider 不被调用）"""
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPainter
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="audio_extra", clips=[
+            Clip(type="audio_extra", start=0.0, end=5.0,
+                 source_start=0.0, source_end=5.0),
+        ])])
+        calls = []
+        w.set_waveform_provider(lambda track_type: calls.append(track_type))
+        w.resize(600, 100)
+        image = QImage(600, 100, QImage.Format_ARGB32)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        w.render(painter)
+        painter.end()
+
+        assert calls == [], "audio_extra 轨渲染不应请求波形"
+
+    def test_track_colors_include_audio_system(self):
+        """TRACK_COLORS 含 audio_system 且与 mic 轨颜色不同"""
+        from PyQt5.QtGui import QColor
+        from ui.timeline import TRACK_COLORS
+
+        assert "audio_system" in TRACK_COLORS
+        assert TRACK_COLORS["audio_system"] != QColor("#50C878")
+        assert TRACK_COLORS["audio_system"] != TRACK_COLORS["audio"]
+
+    def test_can_drop_to_track_audio_system_rules(self, qapp):
+        """audio_system ↔ audio_extra 互通；audio ↔ audio_system 禁止"""
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        assert w._can_drop_to_track("audio_system", "audio_extra") is True
+        assert w._can_drop_to_track("audio_extra", "audio_system") is True
+        assert w._can_drop_to_track("audio", "audio_system") is False
+        assert w._can_drop_to_track("audio_system", "audio") is False
+        # 既有互通保留
+        assert w._can_drop_to_track("audio", "audio_extra") is True
+        assert w._can_drop_to_track("audio_extra", "audio") is True
 
     def test_thumbnail_provider_queried_for_video_clip(self, qapp):
         from PyQt5.QtCore import Qt
