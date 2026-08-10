@@ -1550,6 +1550,7 @@ def _fake_populate_window(project_dir, wav_names=("audio_mic.wav",
         _project_dir=project_dir,
         _timeline=FakeTimeline(),
         _audio_regions=[],
+        _get_recording_duration=lambda: 10.0,
     )
 
 
