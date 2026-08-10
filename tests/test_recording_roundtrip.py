@@ -106,7 +106,7 @@ class TestGifFps:
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
 
-        worker = ExportWorker(Compositor(320, 240, 30), None,
+        worker = ExportWorker(Compositor(320, 240, 30),
                               ExportSettings(output_path="out.gif", format="gif", fps=15))
         command = " ".join(ffmpeg.compile(worker._build_gif_output(320, 240)))
         assert "-pix_fmt rgb24" in command
@@ -141,7 +141,7 @@ class TestGifFps:
 
         compositor.prepare_frame = tracked_prepare
 
-        worker = ExportWorker(compositor, None,
+        worker = ExportWorker(compositor,
                               ExportSettings(output_path=str(tmp_path / "test.gif"),
                                              format="gif", fps=10))
         worker._export_gif()
@@ -555,9 +555,9 @@ class TestMp4AudioTrack:
         import subprocess
         from core.compositor import Compositor
         from core.exporter import ExportWorker, ExportSettings
-        from core.audio_capture import AudioResult
+        from core.project import AudioRegion
 
-        # 1 秒视频 + 音频
+        # 1 秒视频 + 音频（音频经 audio_regions → compose_audio 合成后接入导出）
         compositor = Compositor(32, 32, 30)
         compositor._frames = [type("F", (), {
             "data": np.ones((32, 32, 3), dtype=np.uint8) * 128,
@@ -566,13 +566,24 @@ class TestMp4AudioTrack:
 
         samplerate = 22050
         audio_data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
-        audio_result = AudioResult(audio_data, samplerate, 1)
-
-        output_path = str(tmp_path / "test.mp4")
-        worker = ExportWorker(compositor, audio_result.data,
-                              ExportSettings(output_path=output_path, fps=30, format="mp4",
-                                             samplerate=samplerate))
-        worker._export_mp4()
+        wav_path = ExportWorker._save_temp_wav(audio_data, samplerate)
+        try:
+            region = AudioRegion(
+                id="mic", start_ms=0, end_ms=1000,
+                source_start_ms=0, source_end_ms=1000,
+                audio_path=wav_path, volume=1.0,
+            )
+            output_path = str(tmp_path / "test.mp4")
+            worker = ExportWorker(
+                compositor,
+                ExportSettings(
+                    output_path=output_path, fps=30, format="mp4",
+                    samplerate=samplerate, audio_regions=[region]),
+            )
+            worker._export_mp4()
+        finally:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
 
         assert os.path.getsize(output_path) > 500
 
@@ -616,7 +627,7 @@ class TestMp4RenderFps:
 
         output_path = str(tmp_path / f"fps-{render_fps}.mp4")
         worker = ExportWorker(
-            compositor, None,
+            compositor,
             ExportSettings(
                 output_path=output_path, fps=render_fps, bitrate="2M"),
         )

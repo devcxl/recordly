@@ -1294,11 +1294,10 @@ class MainWindow(QMainWindow):
 
         recorded = self._recorded_data or {}
         audio = recorded.get("audio")
-        audio_data = audio.data if audio else None
         if audio:
             settings.samplerate = audio.samplerate
 
-        self._start_export_progress(audio_data, settings)
+        self._start_export_progress(settings)
 
     def _build_export_settings(self, dialog) -> ExportSettings:
         is_gif = dialog.export_format == "gif"
@@ -1324,13 +1323,13 @@ class MainWindow(QMainWindow):
             width=export_width,
             height=export_height,
             max_height=export_max_height,
-            extra_audio=self._audio_regions if self._audio_regions else None,
+            audio_regions=self._audio_regions if self._audio_regions else None,
             crop_region=crop_region,
             fill_crop_ratio=dialog.fill_crop_ratio,
             use_gpu=dialog.use_gpu,
         )
 
-    def _start_export_progress(self, audio_data, settings: ExportSettings):
+    def _start_export_progress(self, settings: ExportSettings):
         self._progress = QProgressDialog("正在导出视频...", "取消", 0, 100, self)
         self._progress.setWindowTitle("导出")
         self._progress.setWindowModality(Qt.WindowModal)
@@ -1340,7 +1339,7 @@ class MainWindow(QMainWindow):
 
         try:
             self._export_controller.start_export(
-                self._compositor, audio_data, settings)
+                self._compositor, settings)
         except Exception as exc:
             self._progress.close()
             self._progress.deleteLater()

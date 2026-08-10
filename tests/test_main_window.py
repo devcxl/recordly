@@ -823,8 +823,8 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
     export_controller = SimpleNamespace(
         is_exporting=False,
         export_progress=FakeSignal(),
-        start_export=lambda compositor, audio, settings: captured.update(
-            compositor=compositor, audio=audio, settings=settings),
+        start_export=lambda compositor, settings: captured.update(
+            compositor=compositor, settings=settings),
     )
     compositor = SimpleNamespace(
         frames=[object()], fps=60, crop_region=None, width=1920, height=1080)
@@ -834,7 +834,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
         _recorded_data=None,
         _compositor=compositor,
         _crop_active=False,
-        _audio_regions=[],
+        _audio_regions=["region-a"],
         _btn_export=SimpleNamespace(setEnabled=lambda _value: None),
         _menu_export=SimpleNamespace(setEnabled=lambda _value: None),
         _export_controller=export_controller,
@@ -854,6 +854,8 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
     assert captured["settings"].fps == 24
     assert captured["settings"].bitrate == "8M"
+    # 导出链联动：extra_audio → audio_regions，传 self._audio_regions
+    assert captured["settings"].audio_regions == ["region-a"]
 
 
 def test_export_entry_is_not_reentrant(monkeypatch):

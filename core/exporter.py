@@ -3,7 +3,6 @@
 import logging
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import wave
@@ -16,6 +15,7 @@ from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 from core.compositor import Compositor
 from core.aspect_ratio import calculate_export_dimensions, calculate_fill_crop_region
+from core.audio_mix import compose_audio
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ class ExportSettings:
     loop: bool = True              # GIF 是否循环
     preset: str = "veryfast"       # x264 preset: ultrafast/superfast/veryfast/faster/fast/medium/slow/slower/veryslow
     use_gpu: bool = False          # 使用 GPU (NVENC CUDA) 硬件编码
-    extra_audio: list | None = None  # list[AudioRegion]
+    audio_regions: list | None = None  # list[AudioRegion]，全部音频区域（含内置轨）
     crop_region: 'CropRegion | None' = None
     fill_crop_ratio: str | None = None  # crop-to-fill 目标比例（如 "16:9"），与 crop_region 互斥，物化时优先
 
@@ -95,11 +95,9 @@ class ExportWorker(QObject):
     finished = pyqtSignal(ExportResult)
 
     def __init__(self, compositor: Compositor,
-                 audio_data: np.ndarray | None,
                  settings: ExportSettings):
         super().__init__()
         self._compositor = compositor
-        self._audio_data = audio_data
         self._settings = settings
         self._cancelled = False
         self._process = None
@@ -305,36 +303,21 @@ class ExportWorker(QObject):
         # ── 音频处理 ────────────────────────────────────────
         _temp_paths = []
 
-        # 1) 保存原始录音到临时 WAV
-        orig_wav = None
-        if self._audio_data is not None and len(self._audio_data) > 0:
-            orig_wav = self._save_temp_wav(self._audio_data, s.samplerate)
-            _temp_paths.append(orig_wav)
+        # 1) 按音频区域列表内存合成时间轴音频（替代旧 orig_wav + amix 链路）
+        video_duration = total / s.fps
+        regions = [r for r in (s.audio_regions or [])
+                   if os.path.exists(r.audio_path)]
+        mixed = compose_audio(regions, s.samplerate, video_duration)
 
-        # 2) 混合额外音频轨道
-        mixed_wav = None
-        extra = s.extra_audio or []
-        if extra:
-            mixed_wav = self._build_audio_filtergraph(
-                extra, orig_wav, s.samplerate,
-                video_duration=total / s.fps,
-            )
-            if mixed_wav:
-                _temp_paths.append(mixed_wav)
-        elif orig_wav and c._clips:
-            mixed_wav = self._build_audio_filtergraph(
-                [], orig_wav, s.samplerate,
-                video_duration=total / s.fps,
-            )
-            if mixed_wav:
-                _temp_paths.append(mixed_wav)
-
-        # 3) 确定最终音频输入并构建 output
-        final_wav = mixed_wav or orig_wav
+        # 2) 确定最终音频输入并构建 output
+        final_wav = None
+        if mixed is not None:
+            final_wav = self._save_temp_wav(mixed, s.samplerate)
+            _temp_paths.append(final_wav)
         if final_wav:
             audio_input = ffmpeg.input(final_wav)
 
-            # 速度变化时同步调整音频
+            # 音频已由 compose_audio 按 region 定位/变速语义合成，独立于视频轨
             output = ffmpeg.output(
                 video, audio_input, s.output_path,
                 vcodec="libx264", pix_fmt="yuv420p",
@@ -420,31 +403,17 @@ class ExportWorker(QObject):
                                             error="没有帧可以导出"))
             return
 
-        # 音频处理（与 CPU 路径共用临时 WAV 逻辑）
+        # 音频处理（与 CPU 路径共用 compose_audio 合成语义）
         _temp_paths = []
-        orig_wav = None
-        if self._audio_data is not None and len(self._audio_data) > 0:
-            orig_wav = self._save_temp_wav(self._audio_data, s.samplerate)
-            _temp_paths.append(orig_wav)
+        video_duration = total / s.fps
+        regions = [r for r in (s.audio_regions or [])
+                   if os.path.exists(r.audio_path)]
+        mixed = compose_audio(regions, s.samplerate, video_duration)
 
-        mixed_wav = None
-        extra = s.extra_audio or []
-        if extra:
-            mixed_wav = self._build_audio_filtergraph(
-                extra, orig_wav, s.samplerate,
-                video_duration=total / s.fps,
-            )
-            if mixed_wav:
-                _temp_paths.append(mixed_wav)
-        elif orig_wav and c._clips:
-            mixed_wav = self._build_audio_filtergraph(
-                [], orig_wav, s.samplerate,
-                video_duration=total / s.fps,
-            )
-            if mixed_wav:
-                _temp_paths.append(mixed_wav)
-
-        final_wav = mixed_wav or orig_wav
+        final_wav = None
+        if mixed is not None:
+            final_wav = self._save_temp_wav(mixed, s.samplerate)
+            _temp_paths.append(final_wav)
 
         # RGB 管道避免合成后再做整帧 RGBA 转换。
         video = ffmpeg.input("pipe:", format="rawvideo",
@@ -594,119 +563,6 @@ class ExportWorker(QObject):
                     os.remove(s.output_path)
                 except OSError:
                     pass
-
-    # ── 多音频混合 ─────────────────────────────────────────
-
-    def _build_audio_filtergraph(self, audio_regions: list,
-                                 orig_wav: str | None,
-                                 samplerate: int,
-                                 video_duration: float) -> str | None:
-        """为每个额外音频区域构建 FFmpeg 滤镜链混合，返回临时混合 WAV 路径"""
-        regions = [r for r in audio_regions if os.path.exists(r.audio_path)]
-        if not regions and not orig_wav:
-            return None
-        regions.sort(key=lambda r: r.start_ms)
-
-        cmd = ['ffmpeg', '-y']
-        input_idx = 0
-
-        if orig_wav:
-            cmd.extend(['-i', orig_wav])
-            input_idx += 1
-
-        region_inputs = []
-        for r in regions:
-            cmd.extend(['-i', r.audio_path])
-            region_inputs.append((input_idx, r))
-            input_idx += 1
-
-        parts = []
-        mix_labels = []
-
-        if orig_wav:
-            video_clips = self._compositor._clips
-            if video_clips:
-                for clip_no, clip in enumerate(video_clips):
-                    label = f'[v{clip_no}]'
-                    source_end = (
-                        clip.source_end
-                        if clip.source_end is not None
-                        else clip.source_start
-                        + (clip.end - clip.start) * max(clip.speed, 0.0001)
-                    )
-                    chain = (
-                        f'[0:a]atrim=start={clip.source_start}:end={source_end},'
-                        'asetpts=PTS-STARTPTS'
-                    )
-                    if abs(clip.speed - 1.0) > 0.0001:
-                        chain += f',{self._atempo_filter_text(clip.speed)}'
-                    volume = getattr(clip, "volume", 1.0)
-                    if volume <= 0:
-                        chain += ',volume=0'
-                    elif abs(volume - 1.0) > 0.0001:
-                        chain += f',volume={volume:g}'
-                    delay = round(clip.start * 1000)
-                    chain += f',adelay={delay}|{delay}{label}'
-                    parts.append(chain)
-                    mix_labels.append(label)
-            else:
-                parts.append(
-                    f'[0:a]atrim=duration={video_duration},'
-                    'asetpts=PTS-STARTPTS[original]')
-                mix_labels.append('[original]')
-
-        for idx, r in region_inputs:
-            delay = int(r.start_ms)
-            label = f'[m{idx}]'
-            source_start = r.source_start_ms / 1000.0
-            source_end = (r.source_end_ms / 1000.0) if r.source_end_ms is not None else (r.end_ms / 1000.0)
-            vol = f',volume={r.volume}' if r.volume != 1.0 else ''
-            parts.append(
-                f'[{idx}:a]atrim=start={source_start}:end={source_end},'
-                f'asetpts=PTS-STARTPTS{vol},adelay={delay}|{delay}{label}')
-            mix_labels.append(label)
-
-        num_mix = len(mix_labels)
-        mix_in = ''.join(mix_labels)
-        parts.append(
-            f'{mix_in}amix=inputs={num_mix}:duration=longest[mixed]')
-        parts.append(
-            f'[mixed]atrim=duration={video_duration},'
-            'asetpts=PTS-STARTPTS[aout]')
-
-        cmd.extend(['-filter_complex', ';'.join(parts)])
-        cmd.extend(['-map', '[aout]'])
-        cmd.extend(['-ac', '2', '-ar', str(samplerate),
-                     '-acodec', 'pcm_s16le'])
-
-        fd, out_path = tempfile.mkstemp(suffix='_mixed.wav')
-        os.close(fd)
-        cmd.append(out_path)
-
-        result = subprocess.run(cmd, capture_output=True, timeout=300)
-        if result.returncode != 0:
-            stderr = result.stderr.decode('utf-8', errors='replace')
-            logger.debug("音频混合失败: {stderr.strip()}")
-            try:
-                os.remove(out_path)
-            except OSError:
-                pass
-            return None
-
-        return out_path
-
-    @staticmethod
-    def _atempo_filter_text(speed: float) -> str:
-        factors = []
-        remaining = speed
-        while remaining > 2.0:
-            factors.append(2.0)
-            remaining /= 2.0
-        while remaining < 0.5:
-            factors.append(0.5)
-            remaining /= 0.5
-        factors.append(remaining)
-        return ','.join(f'atempo={factor:g}' for factor in factors)
 
     # ── 工具 ────────────────────────────────────────────
 
