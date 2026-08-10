@@ -164,9 +164,11 @@ class TestResampling:
 
         assert out is not None
         assert out.shape[0] == round(1.0 * target_sr)  # 1000 帧
-        peak = int(np.argmax(out[:, 0]))
-        assert abs(peak - 250) <= 3  # 2Hz 正弦峰值位于 0.25s → 帧 250
-        assert out.max() > 0.9
+        # 2Hz 正弦在目标采样率的形状保留：峰值位于 0.125s/0.625s
+        # （帧 125/625），过零位于 0.25s（帧 250）
+        assert out[125, 0] > 0.99
+        assert out[625, 0] > 0.99
+        assert abs(out[250, 0]) < 0.05
 
 
 class TestMissingFiles:
