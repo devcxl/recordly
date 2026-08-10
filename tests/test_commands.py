@@ -159,3 +159,79 @@ class TestDescriptionBackwardCompat:
             desc = cmd.description()
             assert isinstance(desc, str), f"{cmd.__class__.__name__}.description() 应返回 str"
             assert len(desc) > 0, f"{cmd.__class__.__name__}.description() 不应为空"
+
+
+class TestReRecordCompositeCommand:
+    """T6: 补录命令组合 — 原 clip 静音 + 插入新 clip，单步撤销/重做"""
+
+    @pytest.fixture
+    def audio_timeline(self):
+        """带单个 audio clip 的 mock timeline（真实 Track/Clip 数据层）"""
+        from unittest.mock import MagicMock
+        from core.project import Track, Clip
+        tl = MagicMock()
+        tl._tracks = [
+            Track(type="audio", clips=[
+                Clip(type="audio", content="原麦克风", start=2.0, end=7.0,
+                     volume=1.0, source_path="/proj/audio_mic.wav"),
+            ]),
+        ]
+        return tl
+
+    def _build_cmd(self):
+        from core.commands import (
+            AddClipCommand, ChangeVolumeCommand, CompositeCommand,
+        )
+        return CompositeCommand([
+            ChangeVolumeCommand(track_index=0, clip_index=0,
+                                old_volume=1.0, new_volume=0.0),
+            AddClipCommand(track_index=0, clip_index=1, clip_data={
+                "type": "audio",
+                "start": 2.0,
+                "end": 4.0,
+                "source_start": 0.0,
+                "source_end": 2.0,
+                "source_path": "/proj/re_record_20260810_120000.wav",
+                "volume": 1.0,
+                "content": "补录音频",
+            }),
+        ])
+
+    def test_execute_mutes_original_and_inserts_new_clip(self, audio_timeline):
+        cmd = self._build_cmd()
+
+        cmd.execute(audio_timeline)
+
+        clips = audio_timeline._tracks[0].clips
+        assert clips[0].volume == 0.0
+        new_clip = clips[1]
+        assert new_clip.type == "audio"
+        assert new_clip.start == 2.0
+        assert new_clip.end == 4.0
+        assert new_clip.source_start == 0.0
+        assert new_clip.source_end == 2.0
+        assert new_clip.source_path == "/proj/re_record_20260810_120000.wav"
+        assert new_clip.volume == 1.0
+        assert new_clip.content == "补录音频"
+
+    def test_undo_once_restores_volume_and_removes_new_clip(self, audio_timeline):
+        cmd = self._build_cmd()
+        cmd.execute(audio_timeline)
+
+        cmd.undo(audio_timeline)
+
+        clips = audio_timeline._tracks[0].clips
+        assert len(clips) == 1
+        assert clips[0].volume == 1.0
+        assert clips[0].content == "原麦克风"
+
+    def test_redo_restores_state(self, audio_timeline):
+        cmd = self._build_cmd()
+        cmd.execute(audio_timeline)
+        cmd.undo(audio_timeline)
+
+        cmd.execute(audio_timeline)
+
+        clips = audio_timeline._tracks[0].clips
+        assert clips[0].volume == 0.0
+        assert clips[1].content == "补录音频"

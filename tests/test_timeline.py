@@ -2338,3 +2338,122 @@ class TestTimelineVolume:
 
         w._change_volume(0, 0, 1.0)
         assert len(w._undo_stack) == 0
+
+
+class TestReRecordContextMenu:
+    """T6: 补录音频右键入口"""
+
+    def _open_menu(self, qapp, track_type, clip_type):
+        from PyQt5.QtCore import QPoint
+        from core.project import Clip, Track
+        from ui.timeline import (
+            RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget,
+        )
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type=track_type, clips=[
+            Clip(type=clip_type, start=0.0, end=5.0),
+        ])])
+        pos = QPoint(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
+        return w, w._build_context_menu(pos)
+
+    def test_audio_context_menu_contains_re_record_action(self, qapp):
+        _, menu = self._open_menu(qapp, "audio", "audio")
+        assert "补录音频" in [action.text() for action in menu.actions()]
+
+    @pytest.mark.parametrize("track_type", ["audio_system", "audio_extra", "video"])
+    def test_re_record_action_absent_for_other_track_types(self, qapp, track_type):
+        _, menu = self._open_menu(qapp, track_type, track_type)
+        assert "补录音频" not in [action.text() for action in menu.actions()]
+
+    def test_re_record_action_emits_signal(self, qapp):
+        from PyQt5.QtCore import QPoint
+        from core.project import Clip, Track
+        from ui.timeline import (
+            RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget,
+        )
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0),
+        ])])
+        emitted = []
+        w.re_record_requested.connect(
+            lambda ti, ci: emitted.append((ti, ci)))
+        pos = QPoint(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
+        menu = w._build_context_menu(pos)
+
+        re_record_action = next(
+            action for action in menu.actions() if action.text() == "补录音频"
+        )
+        re_record_action.trigger()
+
+        assert emitted == [(0, 0)]
+
+
+class TestReRecordCommand:
+    """T6: 补录命令经 timeline 压栈 → 撤销/重做完整还原（AC-1）"""
+
+    @pytest.fixture
+    def window(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", content="原麦克风", start=2.0, end=7.0,
+                 volume=1.0, source_path="/proj/audio_mic.wav"),
+        ])])
+        return w
+
+    def _re_record_cmd(self, rec_start=2.0, rec_end=4.0, wav_path="/proj/rr.wav"):
+        from core.commands import (
+            AddClipCommand, ChangeVolumeCommand, CompositeCommand,
+        )
+        return CompositeCommand([
+            ChangeVolumeCommand(track_index=0, clip_index=0,
+                                old_volume=1.0, new_volume=0.0),
+            AddClipCommand(track_index=0, clip_index=1, clip_data={
+                "type": "audio",
+                "start": rec_start,
+                "end": rec_end,
+                "source_start": 0.0,
+                "source_end": rec_end - rec_start,
+                "source_path": wav_path,
+                "volume": 1.0,
+                "content": "补录音频",
+            }),
+        ])
+
+    def test_push_command_executes_mute_and_insert(self, window):
+        window.push_command(self._re_record_cmd())
+
+        clips = window.tracks[0].clips
+        assert clips[0].volume == 0.0
+        assert len(clips) == 2
+        new_clip = clips[1]
+        assert new_clip.start == 2.0
+        assert new_clip.source_path == "/proj/rr.wav"
+        assert new_clip.volume == 1.0
+        assert new_clip.source_start == 0.0
+        assert window.can_undo is True
+
+    def test_undo_once_restores_original_and_removes_new_clip(self, window):
+        window.push_command(self._re_record_cmd())
+
+        window.undo()
+
+        clips = window.tracks[0].clips
+        assert len(clips) == 1
+        assert clips[0].volume == 1.0
+        assert clips[0].content == "原麦克风"
+
+    def test_redo_restores_state(self, window):
+        window.push_command(self._re_record_cmd())
+        window.undo()
+
+        window.redo()
+
+        clips = window.tracks[0].clips
+        assert clips[0].volume == 0.0
+        assert clips[1].content == "补录音频"

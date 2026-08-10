@@ -4,6 +4,8 @@ import os
 import shutil
 import subprocess
 import wave
+from bisect import bisect_left
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +16,7 @@ from PyQt5.QtWidgets import (
     QStackedWidget, QStatusBar, QPushButton, QToolButton,
     QLabel, QProgressDialog, QScrollArea, QShortcut, QLineEdit,
     QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
+    QDialog,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
@@ -25,6 +28,9 @@ from app.constants import DEFAULT_SAMPLE_RATE
 from core.compositor import Compositor
 from core.exporter import ExportSettings
 from core.shortcuts import ShortcutRegistry
+from core.commands import (
+    AddClipCommand, ChangeVolumeCommand, CompositeCommand,
+)
 from core.project import (
     Clip, Track, AudioRegion, CropRegion, Project, SourceInfo,
     sync_audio_regions_from_clips,
@@ -35,6 +41,7 @@ from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
 from ui.home_page import HomePage
+from ui.record_audio_dialog import RecordAudioDialog
 from app.project_session import ProjectSession
 from app.recording_controller import RecordingController, RecordingState
 from app.export_controller import ExportController
@@ -866,6 +873,7 @@ class MainWindow(QMainWindow):
             (self._timeline.clips_changed, self._refresh_undo_redo_state),
             (self._timeline.status_message, self.update_status),
             (self._timeline.playhead_seek_play, self._on_playhead_seek_play),
+            (self._timeline.re_record_requested, self._on_re_record_requested),
         )
         for signal, slot in pairs:
             try:
@@ -1284,6 +1292,57 @@ class MainWindow(QMainWindow):
         if self._editing_zoom_clip not in zoom_clips:
             self._editing_zoom_clip = None
             self._preview.hide_zoom_rect()
+
+    def _on_re_record_requested(self, track_index: int, clip_index: int):
+        """麦克风补录：录音窗口 → 写 wav → 原 clip 静音 + 插入新 clip（单步撤销）。
+
+        失败/取消零残留：对话框取消不写文件；写盘失败删除已写文件。
+        """
+        if not self._project_dir:
+            self._show_notification("补录音频", "请先打开项目再补录音频", "warning")
+            return
+
+        dialog = RecordAudioDialog(self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        result = dialog.audio_result
+        if result is None:
+            return
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        wav_path = os.path.join(self._project_dir, f"re_record_{timestamp}.wav")
+        try:
+            _write_wav(wav_path, result.data, result.samplerate)
+        except Exception as exc:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
+            self._show_notification("补录音频失败", str(exc), "error")
+            return
+
+        target = self._timeline.tracks[track_index].clips[clip_index]
+        duration = len(result.data) / result.samplerate
+        clip_end = min(target.end, target.start + duration)
+        new_clip = Clip(
+            type="audio",
+            start=target.start,
+            end=clip_end,
+            source_start=0.0,
+            source_end=clip_end - target.start,
+            source_path=wav_path,
+            volume=1.0,
+            content="补录音频",
+        )
+        clips = self._timeline.tracks[track_index].clips
+        insert_at = bisect_left([c.start for c in clips], new_clip.start)
+        cmd = CompositeCommand([
+            ChangeVolumeCommand(track_index, clip_index,
+                                target.volume, 0.0),
+            AddClipCommand(track_index, asdict(new_clip),
+                           clip_index=insert_at),
+        ])
+        self._timeline.push_command(cmd)
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)

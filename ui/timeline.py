@@ -46,6 +46,7 @@ class TimelineWidget(QWidget):
     clips_changed = pyqtSignal()
     playhead_seek_play = pyqtSignal(float)
     status_message = pyqtSignal(str)
+    re_record_requested = pyqtSignal(int, int)
 
     SnapDistance = 5
 
@@ -282,6 +283,10 @@ class TimelineWidget(QWidget):
         return None
 
     # ── 撤销/重做 ─────────────────────────────────────────
+
+    def push_command(self, cmd: UndoCommand):
+        """压入并执行一条撤销命令（外部模块（如补录）使用，语义同 _push_undo）。"""
+        self._push_undo(cmd)
 
     def _push_undo(self, cmd: UndoCommand):
         self._undo_stack.append(cmd)
@@ -688,6 +693,11 @@ class TimelineWidget(QWidget):
                     act.triggered.connect(
                         lambda checked, ti=ti, ci=ci,
                         vol=vol: self._change_volume(ti, ci, vol))
+            if clip.type == "audio":
+                menu.addAction(
+                    "补录音频",
+                    lambda ti=ti, ci=ci: self.re_record_requested.emit(ti, ci),
+                )
             menu.addSeparator()
             menu.addAction("选中", lambda ti=ti, ci=ci: self._select_clip(ti, ci))
         menu.addAction("全选", self._select_all)

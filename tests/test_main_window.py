@@ -441,6 +441,7 @@ def test_timeline_signal_connection_is_idempotent():
         clips_changed = _FakeSignal()
         status_message = _FakeSignal()
         playhead_seek_play = _FakeSignal()
+        re_record_requested = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -470,6 +471,9 @@ def test_timeline_signal_connection_is_idempotent():
             pass
 
         def update_status(self, _message):
+            pass
+
+        def _on_re_record_requested(self, track_index, clip_index):
             pass
 
     window = FakeWindow()
@@ -1820,3 +1824,264 @@ def test_track_audio_provider_cache_invalidates_on_clear_editor_state(
     MainWindow._clear_editor_state(window)
 
     assert window._track_audio_cache == {}
+
+
+# ── T6: 麦克风补录端到端 ────────────────────────────────
+
+
+class _FakeReRecordDialog:
+    """伪造补录对话框：控制 exec_ 返回值与 audio_result"""
+
+    def __init__(self, accepted=True, result=None):
+        self.accepted = accepted
+        self.result = result
+        self.exec_calls = 0
+
+    def exec_(self):
+        self.exec_calls += 1
+        from PyQt5.QtWidgets import QDialog
+        return QDialog.Accepted if self.accepted else QDialog.Rejected
+
+    @property
+    def audio_result(self):
+        return self.result
+
+
+def _re_record_audio_result():
+    import numpy as np
+    from core.audio_capture import AudioResult
+    # 1 秒 48000Hz 单声道
+    return AudioResult(np.ones(48000, dtype=np.float32) * 0.1,
+                       samplerate=48000, channels=1)
+
+
+def _re_record_window(project_dir):
+    """构造 _on_re_record_requested 测试用的 fake window"""
+    from types import SimpleNamespace
+
+    from core.project import Clip, Track
+
+    class FakeTimeline:
+        def __init__(self):
+            self._tracks = [Track(type="audio", clips=[
+                Clip(type="audio", content="原麦克风", start=2.0, end=7.0,
+                     volume=1.0, source_path="/proj/audio_mic.wav"),
+            ])]
+            self.pushed = []
+            self.clips_changed = _FakeSignal()
+            self._selected_track = -1
+            self._selected_clip = -1
+
+        @property
+        def tracks(self):
+            return self._tracks
+
+        def update(self):
+            pass
+
+        def push_command(self, cmd):
+            self.pushed.append(cmd)
+            cmd.execute(self)
+
+    notifications = []
+
+    def notify(title, content, level="info"):
+        notifications.append((title, content, level))
+
+    return SimpleNamespace(
+        _project_dir=project_dir,
+        _timeline=FakeTimeline(),
+        notifications=notifications,
+        _show_notification=notify,
+    )
+
+
+def test_re_record_accepted_inserts_clip_and_writes_wav(tmp_path, monkeypatch):
+    """Accepted → timeline 出现新 clip（原 clip 静音）、项目目录出现 re_record_*.wav"""
+    import app.main_window as main_window_module
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _re_record_window(project_dir)
+    dialog = _FakeReRecordDialog(accepted=True,
+                                 result=_re_record_audio_result())
+    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+                        lambda parent: dialog)
+
+    main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
+
+    clips = window._timeline.tracks[0].clips
+    assert len(clips) == 2
+    by_content = {clip.content: clip for clip in clips}
+    assert by_content["原麦克风"].volume == 0.0, "原 clip 应被静音"
+    new_clip = by_content["补录音频"]
+    assert new_clip.type == "audio"
+    assert new_clip.start == 2.0
+    assert new_clip.end == 3.0, "end = min(目标 end, start + 1s 录音)"
+    assert new_clip.source_start == 0.0
+    assert new_clip.source_end == 1.0
+    assert new_clip.volume == 1.0
+    assert new_clip.source_path.startswith(project_dir)
+    assert os.path.basename(new_clip.source_path).startswith("re_record_")
+    assert os.path.basename(new_clip.source_path).endswith(".wav")
+    assert os.path.exists(new_clip.source_path), "wav 已写盘"
+    assert len(window._timeline.pushed) == 1
+    assert dialog.exec_calls == 1
+
+
+def test_re_record_rejected_leaves_timeline_and_no_file(tmp_path, monkeypatch):
+    """Rejected → timeline 不变、项目目录无 re_record 文件"""
+    import app.main_window as main_window_module
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _re_record_window(project_dir)
+    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+                        lambda parent: _FakeReRecordDialog(accepted=False))
+
+    main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
+
+    clips = window._timeline.tracks[0].clips
+    assert len(clips) == 1
+    assert clips[0].volume == 1.0
+    assert window._timeline.pushed == []
+    assert [f for f in os.listdir(project_dir)
+            if f.startswith("re_record_")] == []
+
+
+def test_re_record_write_failure_cleans_up_file(tmp_path, monkeypatch):
+    """_write_wav 抛 IO 错误 → 无新 clip、残留文件被清理（os.remove 被调用）"""
+    import app.main_window as main_window_module
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _re_record_window(project_dir)
+    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+                        lambda parent: _FakeReRecordDialog(
+                            accepted=True, result=_re_record_audio_result()))
+
+    removed = []
+    monkeypatch.setattr(main_window_module, "_write_wav",
+                        lambda *a, **k: (_ for _ in ()).throw(IOError("disk full")))
+    monkeypatch.setattr(main_window_module.os, "remove",
+                        lambda p: removed.append(p))
+
+    main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
+
+    clips = window._timeline.tracks[0].clips
+    assert len(clips) == 1, "写盘失败不插入新 clip"
+    assert clips[0].volume == 1.0
+    assert window._timeline.pushed == []
+    assert len(removed) == 1, "残留文件被清理"
+    assert os.path.basename(removed[0]).startswith("re_record_")
+    assert any(n[0] == "补录音频失败" for n in window.notifications)
+
+
+def test_re_record_without_project_rejects(tmp_path, monkeypatch):
+    """无项目目录 → 提示拒绝，不打开对话框、不产生文件"""
+    import app.main_window as main_window_module
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _re_record_window(project_dir)
+    window._project_dir = None
+    dialog = _FakeReRecordDialog(accepted=True,
+                                 result=_re_record_audio_result())
+    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+                        lambda parent: dialog)
+
+    main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
+
+    assert dialog.exec_calls == 0
+    assert window._timeline.pushed == []
+    assert any(n[0] == "补录音频" for n in window.notifications)
+
+
+def test_re_record_clip_roundtrips_through_save_and_load(tmp_path):
+    """补录后保存/加载：_collect_project_state → save → load → _restore 完整恢复"""
+    from types import SimpleNamespace
+
+    from app.main_window import MainWindow
+    from core.project import Clip, Project, Track
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    re_wav = os.path.join(project_dir, "re_record_20260810_120000.wav")
+    with open(re_wav, "w"):
+        pass
+
+    # 补录完成后的 timeline：原 clip 静音 + 新补录 clip
+    timeline = SimpleNamespace(tracks=[
+        Track(type="audio", clips=[
+            Clip(type="audio", content="原麦克风", start=2.0, end=7.0,
+                 volume=0.0, source_path="/proj/audio_mic.wav"),
+            Clip(type="audio", content="补录音频", start=2.0, end=3.0,
+                 source_start=0.0, source_end=1.0,
+                 source_path=re_wav, volume=1.0),
+        ]),
+        Track(type="video", clips=[
+            Clip(type="video", content="屏幕录制", start=0.0, end=7.0),
+        ]),
+    ])
+
+    class FakeCompositor:
+        _frames = []
+        _cursor_events = []
+        _click_events = []
+        _base_time = 0.0
+        _monitor_left = 0
+        _monitor_top = 0
+        _crop_region = None
+        source_duration = 7.0
+
+        def load_clips(self, clips, timeline_duration=None):
+            self.video_clips = clips
+
+        def load_manual_zoom_clips(self, clips):
+            self.zoom_clips = clips
+
+    window = SimpleNamespace(
+        _timeline=timeline,
+        _compositor=FakeCompositor(),
+        _audio_regions=[],
+        _project_dir=project_dir,
+    )
+    state = Project()
+    MainWindow._collect_project_state(window, state)
+    json_path = os.path.join(project_dir, "project.json")
+    state.save(json_path)
+    loaded = Project.load(json_path)
+
+    # 恢复路径
+    class FakeTimeline:
+        def __init__(self):
+            self.tracks = []
+            self.duration = None
+            self.source_duration = None
+
+        def set_tracks(self, tracks):
+            self.tracks = tracks
+
+    restore_timeline = FakeTimeline()
+    restore_window = SimpleNamespace(
+        _timeline=restore_timeline,
+        _project_dir=project_dir,
+        _compositor=FakeCompositor(),
+        _audio_regions=[],
+        _update_audio_timeline=lambda: None,
+        _playback=None,
+    )
+    MainWindow._restore_timeline_and_playback(
+        restore_window, restore_window._compositor, loaded)
+
+    audio_track = restore_timeline.tracks[0]
+    assert audio_track.type == "audio"
+    assert [c.content for c in audio_track.clips] == ["原麦克风", "补录音频"]
+    assert audio_track.clips[0].volume == 0.0, "静音状态恢复"
+    re_clip = audio_track.clips[1]
+    assert re_clip.start == 2.0
+    assert re_clip.end == 3.0
+    assert re_clip.source_start == 0.0
+    assert re_clip.source_end == 1.0
+    assert re_clip.source_path == re_wav
+    assert re_clip.volume == 1.0
