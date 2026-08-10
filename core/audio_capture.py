@@ -6,7 +6,6 @@ import sys
 import time
 import subprocess
 import wave
-import wave
 
 logger = logging.getLogger(__name__)
 import threading

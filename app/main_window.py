@@ -82,7 +82,7 @@ def _resolve_media_path(project_dir: str, rel_path: str) -> str:
 
 def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
     """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
-    from core.audio_capture import AudioResult, mix_audio_results
+    from core.audio_capture import mix_audio_results
 
     mic_audio = None
     sys_audio = None
