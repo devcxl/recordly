@@ -681,7 +681,7 @@ class TimelineWidget(QWidget):
                     act.setChecked(abs(clip.speed - spd) < 0.001)
                     act.triggered.connect(
                         lambda checked, ti=ti, ci=ci, spd=spd: self._change_speed(ti, ci, spd))
-            if clip.type in ("audio", "audio_extra"):
+            if clip.type in ("audio", "audio_system", "audio_extra"):
                 volume_menu = menu.addMenu("音量")
                 for vol, label in ((0.0, "静音"), (0.5, "50%"),
                                    (1.0, "100%"), (1.5, "150%")):
