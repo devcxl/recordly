@@ -2275,6 +2275,21 @@ class TestTimelineVisualProviders:
 class TestTimelineVolume:
     """T6: 音量控制"""
 
+    def test_volume_menu_includes_audio_system_track(self, qapp):
+        """audio_system 轨 clip 右键菜单同样提供音量子菜单（PRD AC-2：双轨同编辑能力）"""
+        from PyQt5.QtCore import QPoint
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio_system", clips=[
+            Clip(type="audio_system", start=0.0, end=5.0, volume=1.0),
+        ])])
+        pos = QPoint(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
+        menu = w._build_context_menu(pos)
+        menu_texts = [a.text() for a in menu.actions()]
+        assert "音量" in menu_texts
+
     def test_change_volume_creates_command_and_undo(self, qapp):
         from core.commands import ChangeVolumeCommand
         from core.project import Clip, Track
