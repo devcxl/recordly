@@ -213,6 +213,70 @@ class TestAudioRegionSync:
         after_delete = sync_audio_regions_from_clips([split], synced)
         assert [region.id for region in after_delete] == ["audio-2"]
 
+    def test_three_track_mix_fields_correct(self):
+        """audio + audio_system + audio_extra 三轨混合 clip → regions 各字段正确"""
+        from core.project import (
+            Clip, sync_audio_regions_from_clips,
+        )
+
+        mic = Clip(
+            type="audio", start=0.0, end=10.0,
+            source_start=0.0, source_end=10.0,
+            source_path="/proj/audio_mic.wav", volume=1.0,
+            content="麦克风",
+        )
+        system = Clip(
+            type="audio_system", start=0.0, end=10.0,
+            source_start=0.0, source_end=10.0,
+            source_path="/proj/audio_system.wav", volume=0.7,
+            content="系统音频",
+        )
+        extra = Clip(
+            type="audio_extra", start=2.0, end=4.0,
+            source_start=1.0, source_end=None, speed=2.0,
+            source_path="/tmp/bgm.wav", volume=0.5,
+            content="bgm.wav",
+        )
+
+        synced = sync_audio_regions_from_clips([mic, system, extra], [])
+
+        assert [r.audio_path for r in synced] == [
+            "/proj/audio_mic.wav", "/proj/audio_system.wav", "/tmp/bgm.wav"]
+        assert [r.volume for r in synced] == [1.0, 0.7, 0.5]
+        assert synced[0].start_ms == 0 and synced[0].end_ms == 10000
+        assert synced[1].start_ms == 0 and synced[1].end_ms == 10000
+        # extra: source_end=None 时按 (end-start)*speed 计算 → (4-2)*2=4 秒
+        assert synced[2].source_start_ms == 1000
+        assert synced[2].source_end_ms == 5000
+        # 无 id clip 自动补 uuid（三轨均无 id）
+        assert all(region.id for region in synced)
+
+    def test_idempotent_ids_stable_with_field_updates(self):
+        """重复调用 region id 稳定，volume / source_path 变更反映到 region"""
+        from core.project import (
+            Clip, sync_audio_regions_from_clips,
+        )
+
+        extra = Clip(
+            type="audio_extra", start=2.0, end=4.0,
+            source_start=1.0, source_end=3.0,
+            source_path="/tmp/bgm.wav", volume=0.5,
+            content="bgm.wav",
+        )
+        synced = sync_audio_regions_from_clips([extra], [])
+        ids = [region.id for region in synced]
+        assert all(ids)
+
+        extra.volume = 0.8
+        extra.source_path = "/tmp/bgm2.wav"
+        extra.content = "bgm2.wav"
+        synced_again = sync_audio_regions_from_clips([extra], synced)
+
+        assert [region.id for region in synced_again] == ids
+        assert synced_again[0].volume == 0.8
+        assert synced_again[0].audio_path == "/tmp/bgm2.wav"
+        assert synced_again[0].name == "bgm2.wav"
+
 
 class TestAtomicSave:
     def test_atomic_save_preserves_original_on_failure(self, monkeypatch):

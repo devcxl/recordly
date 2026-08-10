@@ -622,6 +622,61 @@ def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
     assert window._compositor.zoom_clips == [restored]
 
 
+def test_on_clips_changed_syncs_three_audio_tracks():
+    """_on_clips_changed 把 audio / audio_system / audio_extra 三轨 clip 一并 sync 进 _audio_regions"""
+    from types import SimpleNamespace
+
+    from app.main_window import MainWindow
+    from core.project import Clip, Track
+
+    class FakeCompositor:
+        def load_manual_zoom_clips(self, clips):
+            self.zoom_clips = clips
+
+        def load_clips(self, clips, timeline_duration=None):
+            self.video_clips = clips
+
+    class FakePreview:
+        def __init__(self):
+            self.hidden = 0
+
+        def hide_zoom_rect(self):
+            self.hidden += 1
+
+    timeline = SimpleNamespace(
+        tracks=[
+            Track(type="audio", clips=[Clip(
+                type="audio", start=0, end=10,
+                source_path="/proj/audio_mic.wav", volume=1.0)]),
+            Track(type="audio_system", clips=[Clip(
+                type="audio_system", start=0, end=10,
+                source_path="/proj/audio_system.wav", volume=0.7)]),
+            Track(type="audio_extra", clips=[Clip(
+                type="audio_extra", start=2, end=4,
+                source_path="/tmp/bgm.wav", volume=0.5)]),
+        ],
+        duration=0.1,
+    )
+    window = SimpleNamespace(
+        _timeline=timeline,
+        _compositor=FakeCompositor(),
+        _playback=None,
+        _preview=FakePreview(),
+        _editing_zoom_clip=None,
+        _audio_regions=[],
+    )
+
+    MainWindow._on_clips_changed(window)
+
+    regions = window._audio_regions
+    assert [r.audio_path for r in regions] == [
+        "/proj/audio_mic.wav",
+        "/proj/audio_system.wav",
+        "/tmp/bgm.wav",
+    ]
+    assert [r.volume for r in regions] == [1.0, 0.7, 0.5]
+
+
 def test_zoom_clip_selection_opens_that_clip_for_editing():
     from app.main_window import MainWindow
     from core.project import Clip
