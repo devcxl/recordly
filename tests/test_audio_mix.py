@@ -118,15 +118,16 @@ class TestEditSemantics:
         path = str(tmp_path / "a.wav")
         _write_wav(path, data, samplerate)
 
-        # 只取源 1ms-3ms 窗口 → 前 1 帧与后 2 帧静音
+        # 只取源 1ms-3ms 窗口 → 窗口内容从时间轴 0 连续播放
+        # （剪辑语义，与 audio_extra filtergraph atrim→asetpts→adelay 一致）；
+        # 总时长仍按 end_ms=5，窗口外为静音
         out = compose_audio(
             [_region(path, source_start_ms=1.0, source_end_ms=3.0)],
             samplerate)
 
         assert out is not None
-        np.testing.assert_allclose(out[:1], 0.0, atol=1e-7)
-        np.testing.assert_allclose(out[1:3], data[1:3], rtol=1e-3, atol=1e-3)
-        np.testing.assert_allclose(out[3:], 0.0, atol=1e-7)
+        np.testing.assert_allclose(out[:2], data[1:3], rtol=1e-3, atol=1e-3)
+        np.testing.assert_allclose(out[2:], 0.0, atol=1e-7)
 
     def test_start_offset_shifts_samples(self, tmp_path):
         from core.audio_mix import compose_audio
