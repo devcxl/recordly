@@ -15,7 +15,7 @@ import ffmpeg
 from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 from core.compositor import Compositor
-from core.aspect_ratio import calculate_export_dimensions
+from core.aspect_ratio import calculate_export_dimensions, calculate_fill_crop_region
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ class ExportSettings:
     use_gpu: bool = False          # 使用 GPU (NVENC CUDA) 硬件编码
     extra_audio: list | None = None  # list[AudioRegion]
     crop_region: 'CropRegion | None' = None
+    fill_crop_ratio: str | None = None  # crop-to-fill 目标比例（如 "16:9"），与 crop_region 互斥，物化时优先
 
 
 @dataclass
@@ -112,14 +113,30 @@ class ExportWorker(QObject):
                 pass
 
     def run(self):
+        # fill_crop_ratio → 物化为 crop_region（复用现有裁剪渲染与尺寸计算路径），
+        # 导出结束后恢复 compositor 原状态（settings 用完即弃无需恢复）
+        fill_region = None
+        restored_crop = None
+        s = self._settings
+        if s.fill_crop_ratio:
+            fill_region = calculate_fill_crop_region(
+                self._compositor.width, self._compositor.height,
+                s.fill_crop_ratio)
+            if fill_region is not None:
+                restored_crop = self._compositor.crop_region
+                s.crop_region = fill_region
+                self._compositor.set_crop(fill_region)
         try:
-            if self._settings.format == "gif":
+            if s.format == "gif":
                 self._export_gif()
             else:
                 self._export_mp4()
         except Exception as exc:
-            self.finished.emit(ExportResult(False, self._settings.output_path,
+            self.finished.emit(ExportResult(False, s.output_path,
                                             error=f"导出异常: {exc}"))
+        finally:
+            if restored_crop is not None:
+                self._compositor.set_crop(restored_crop)
 
     @staticmethod
     def _compose_and_encode(compositor, raw_frame, index, ts,

@@ -75,6 +75,119 @@ class TestExportSettings:
         assert s.quality == 0.75
         assert s.loop is False
 
+    def test_fill_crop_ratio_default_none(self):
+        from core.exporter import ExportSettings
+        s = ExportSettings(output_path="out.mp4")
+        assert s.fill_crop_ratio is None
+
+
+class TestFillCropMaterialization:
+    """fill_crop_ratio → crop_region 物化（复用现有裁剪渲染/尺寸路径）"""
+
+    def _compositor(self):
+        from core.compositor import Compositor
+        c = Compositor(320, 240, 30)
+        return c
+
+    def test_materializes_fill_region_on_run(self, monkeypatch):
+        """320×240 源 + 1:1：crop_region 物化为中心裁剪并写入 compositor"""
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = self._compositor()
+        settings = ExportSettings(
+            output_path="out.mp4", fill_crop_ratio="1:1")
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_mp4", lambda: None)
+
+        worker.run()
+
+        # 320×240 (4:3) → 1:1：裁左右，宽 240 → 归一化 0.75，居中
+        assert settings.crop_region is not None
+        assert settings.crop_region.width == 0.75
+        assert settings.crop_region.x == 0.125
+        assert settings.crop_region.height == 1.0
+        assert settings.crop_region.y == 0.0
+        assert compositor.crop_region is settings.crop_region
+
+    def test_restores_compositor_crop_after_run(self, monkeypatch):
+        """导出结束后 compositor 恢复导出前的裁剪状态"""
+        from core.project import CropRegion
+        from core.exporter import ExportWorker, ExportSettings
+
+        original = CropRegion(x=0.1, y=0.2, width=0.5, height=0.6)
+        compositor = self._compositor()
+        compositor.set_crop(original)
+        settings = ExportSettings(
+            output_path="out.mp4", fill_crop_ratio="1:1")
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_mp4", lambda: None)
+
+        worker.run()
+
+        assert compositor.crop_region is original
+
+    def test_exact_ratio_skips_materialization(self, monkeypatch):
+        """源比例与目标比例相同 → 无需裁剪，crop_region 保持 None"""
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = self._compositor()  # 320×240 = 4:3
+        settings = ExportSettings(
+            output_path="out.mp4", fill_crop_ratio="4:3")
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_mp4", lambda: None)
+
+        worker.run()
+
+        assert settings.crop_region is None
+        assert compositor.crop_region is None
+
+    def test_invalid_ratio_skips_materialization(self, monkeypatch):
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = self._compositor()
+        settings = ExportSettings(
+            output_path="out.mp4", fill_crop_ratio="invalid")
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_mp4", lambda: None)
+
+        worker.run()
+
+        assert settings.crop_region is None
+
+    def test_fill_precedes_free_crop(self, monkeypatch):
+        """fill 优先于自由裁剪（对话框层互斥的兜底）"""
+        from core.project import CropRegion
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = self._compositor()
+        settings = ExportSettings(
+            output_path="out.mp4", fill_crop_ratio="1:1",
+            crop_region=CropRegion(x=0.0, y=0.0, width=0.5, height=0.5))
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_mp4", lambda: None)
+
+        worker.run()
+
+        assert settings.crop_region.width == 0.75
+        assert settings.crop_region.x == 0.125
+
+    def test_gif_export_uses_fill_region(self, monkeypatch):
+        """GIF 导出同样走物化路径"""
+        from core.exporter import ExportWorker, ExportSettings
+
+        compositor = self._compositor()
+        settings = ExportSettings(
+            output_path="out.gif", format="gif", fps=15,
+            fill_crop_ratio="1:1")
+        worker = ExportWorker(compositor, None, settings)
+        monkeypatch.setattr(worker, "_export_gif", lambda: None)
+
+        worker.run()
+
+        assert settings.crop_region is not None
+        assert settings.crop_region.width == 0.75
+
 
 class TestExportWorker:
     def test_importable(self):

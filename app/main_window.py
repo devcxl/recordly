@@ -470,7 +470,7 @@ class MainWindow(QMainWindow):
         self._btn_play.setText("▶")
         self._btn_play.setToolTip("播放")
         self._btn_step_fwd = QToolButton()
-        self._btn_step_fwd.setText("⏭")
+        self._btn_step_fwd.setText("▶")
         self._btn_step_fwd.setToolTip("下一帧")
         self._btn_ff = QToolButton()
         self._btn_ff.setText("⏩")
@@ -1291,6 +1291,9 @@ class MainWindow(QMainWindow):
             self, self.config.recordings_dir,
             self._compositor.fps, self.config.default_bitrate,
         )
+        dialog.set_source_size(self._compositor.width, self._compositor.height)
+        dialog.set_free_crop(
+            self._compositor.crop_region if self._crop_active else None)
         if dialog.exec_() != ExportDialog.Accepted:
             return
         if not dialog.output_path:
@@ -1313,7 +1316,7 @@ class MainWindow(QMainWindow):
 
     def _build_export_settings(self, dialog) -> ExportSettings:
         is_gif = dialog.export_format == "gif"
-        crop_region = self._compositor.crop_region if self._crop_active else None
+        crop_region = dialog.crop_region  # 裁剪决策由导出对话框接管（含 ✂ 自由裁剪）
 
         if dialog.is_custom_resolution:
             export_width = dialog.custom_width
@@ -1337,6 +1340,7 @@ class MainWindow(QMainWindow):
             max_height=export_max_height,
             extra_audio=self._audio_regions if self._audio_regions else None,
             crop_region=crop_region,
+            fill_crop_ratio=dialog.fill_crop_ratio,
             use_gpu=dialog.use_gpu,
         )
 

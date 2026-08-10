@@ -726,6 +726,8 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
         bitrate_value = "8M"
         gif_loop_value = True
         use_gpu = False
+        crop_region = None
+        fill_crop_ratio = None
 
         def __init__(self, _parent, _directory, default_fps,
                      default_bitrate):
@@ -734,6 +736,12 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
         def exec_(self):
             return self.Accepted
+
+        def set_source_size(self, _w, _h):
+            pass
+
+        def set_free_crop(self, _region):
+            pass
 
     class FakeProgress:
         canceled = FakeSignal()
@@ -764,7 +772,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
             compositor=compositor, audio=audio, settings=settings),
     )
     compositor = SimpleNamespace(
-        frames=[object()], fps=60, crop_region=None)
+        frames=[object()], fps=60, crop_region=None, width=1920, height=1080)
     from functools import partial
 
     window = SimpleNamespace(
@@ -819,12 +827,20 @@ def test_export_entry_is_not_reentrant(monkeypatch):
         bitrate_value = "8M"
         gif_loop_value = True
         use_gpu = False
+        crop_region = None
+        fill_crop_ratio = None
 
         def __init__(self, *_args):
             pass
 
         def exec_(self):
             return self.Accepted
+
+        def set_source_size(self, _w, _h):
+            pass
+
+        def set_free_crop(self, _region):
+            pass
 
     class FakeProgress:
         def __init__(self, *_args):
@@ -859,7 +875,8 @@ def test_export_entry_is_not_reentrant(monkeypatch):
     window = SimpleNamespace(
         _recorded_data=None,
         _compositor=SimpleNamespace(
-            frames=[object()], fps=30, crop_region=None),
+            frames=[object()], fps=30, crop_region=None,
+            width=1920, height=1080),
         _crop_active=False,
         _audio_regions=[],
         _btn_export=SimpleNamespace(
@@ -1359,3 +1376,35 @@ def test_undo_redo_toolbar_buttons_exist_and_positioned_before_playback():
     assert len(actions) == 3  # undo button, redo button, separator
     # 分隔线在最后
     assert actions[-1].isSeparator() is True
+
+
+def test_playback_toolbar_step_buttons_symmetric():
+    """上一帧/下一帧图标必须对称（◀ ▶），且与跳转按钮 ⏪⏩ 区分"""
+    from types import MethodType, SimpleNamespace
+    from app.main_window import MainWindow
+    from PyQt5.QtWidgets import QToolBar, QWidget, QToolButton
+
+    toolbar = QToolBar()
+    parent = QWidget()
+
+    class FakeWindow:
+        pass
+
+    window = FakeWindow()
+    window._toolbar = toolbar
+    window._on_rewind = lambda: None
+    window._on_step_back = lambda: None
+    window._on_play_toggle = lambda: None
+    window._on_step_fwd = lambda: None
+    window._on_fast_forward = lambda: None
+
+    MainWindow._add_playback_toolbar_buttons(window)
+
+    assert isinstance(window._btn_step_back, QToolButton)
+    assert isinstance(window._btn_step_fwd, QToolButton)
+    # 单步按钮应为对称的单三角
+    assert window._btn_step_back.text() == "◀"
+    assert window._btn_step_fwd.text() == "▶"
+    # 跳转按钮保持双三角带竖线
+    assert window._btn_rewind.text() == "⏪"
+    assert window._btn_ff.text() == "⏩"

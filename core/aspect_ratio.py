@@ -93,3 +93,30 @@ def calculate_export_dimensions(
     w = normalize_even(int(w * quality))
     h = normalize_even(int(h * quality))
     return ExportDimensions(width=max(2, w), height=max(2, h))
+
+
+def calculate_fill_crop_region(
+    source_width: int, source_height: int, ratio_str: AspectRatio,
+):
+    """计算 crop-to-fill 的归一化裁剪区域（中心对称、不拉伸不变形）。
+
+    - 源比例与目标比例相同 → 返回 None（无需裁剪）
+    - 源更宽 → 左右对称裁掉多余宽度
+    - 源更高 → 上下对称裁掉多余高度
+    - 无效比例或非正尺寸 → 返回 None
+    """
+    ratio = parse_aspect_ratio(ratio_str)
+    if ratio is None or source_width <= 0 or source_height <= 0:
+        return None
+    src_ratio = source_width / source_height
+    if abs(src_ratio - ratio) < 1e-9:
+        return None
+
+    from core.project import CropRegion
+    if src_ratio > ratio:
+        # 更宽 → 裁左右：目标宽 = 高 × 目标比例
+        crop_w = ratio / src_ratio
+        return CropRegion(x=(1 - crop_w) / 2, y=0.0, width=crop_w, height=1.0)
+    # 更高 → 裁上下：目标高 = 宽 / 目标比例
+    crop_h = src_ratio / ratio
+    return CropRegion(x=0.0, y=(1 - crop_h) / 2, width=1.0, height=crop_h)
