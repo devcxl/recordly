@@ -80,7 +80,8 @@ def compose_audio(regions: list[AudioRegion], samplerate: int,
             continue
         if data.shape[1] == 1 and target_channels > 1:
             data = np.repeat(data, target_channels, axis=1)
-        mixed[pos_frame:end_pos, :] += data[:end_pos - pos_frame, :]
+        mixed[pos_frame:end_pos, :data.shape[1]] += \
+            data[:end_pos - pos_frame, :data.shape[1]]
 
     np.clip(mixed, -1.0, 1.0, out=mixed)
     return mixed
