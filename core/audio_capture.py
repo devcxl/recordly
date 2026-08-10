@@ -1,9 +1,11 @@
 """音频录制引擎 — 麦克风 (sounddevice) + 系统音频 (FFmpeg)"""
 
 import logging
+import os
 import sys
 import time
 import subprocess
+import wave
 
 logger = logging.getLogger(__name__)
 import threading
@@ -18,6 +20,23 @@ class AudioResult:
     data: np.ndarray
     samplerate: int
     channels: int
+
+
+def read_wav(path: str) -> AudioResult | None:
+    """从 WAV 文件读取音频（16-bit PCM → float32）；文件不存在返回 None。
+
+    由 app/main_window._read_wav 提升而来，返回类型改为 AudioResult。
+    """
+    if not os.path.exists(path):
+        return None
+    with wave.open(path, "r") as wf:
+        samplerate = wf.getframerate()
+        channels = wf.getnchannels()
+        frames = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if channels > 1:
+            samples = samples.reshape(-1, channels)
+        return AudioResult(data=samples, samplerate=samplerate, channels=channels)
 
 
 def mix_audio_results(*results: AudioResult | None) -> AudioResult | None:

@@ -1,5 +1,7 @@
 """Tests for core/audio_capture.py — 匹配实际 API"""
 
+import wave
+
 import pytest
 
 
@@ -159,3 +161,31 @@ class TestMixAudioResults:
         sac = SystemAudioCapture()
         sac.start()
         sac.stop()  # should not raise
+
+
+class TestReadWav:
+    """read_wav（由 main_window._read_wav 提升）— 返回 AudioResult | None"""
+
+    def test_reads_wav_file(self, tmp_path):
+        import numpy as np
+        from core.audio_capture import AudioResult, read_wav
+        samplerate = 8000
+        data = np.full((400, 1), 0.5, dtype=np.float32)
+        with wave.open(str(tmp_path / "a.wav"), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(samplerate)
+            wf.writeframes((data[:, 0] * 32767).astype(np.int16).tobytes())
+
+        result = read_wav(str(tmp_path / "a.wav"))
+
+        assert isinstance(result, AudioResult)
+        assert result.samplerate == samplerate
+        assert result.channels == 1
+        assert result.data.shape == (400,)
+        # 0.5 * 32767 截断为 16383，读回为 16383 / 32768
+        assert float(result.data[0]) == pytest.approx(16383 / 32768)
+
+    def test_missing_file_returns_none(self, tmp_path):
+        from core.audio_capture import read_wav
+        assert read_wav(str(tmp_path / "missing.wav")) is None

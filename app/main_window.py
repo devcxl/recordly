@@ -58,18 +58,9 @@ def _write_wav(path: str, data, samplerate: int):
 
 
 def _read_wav(path: str):
-    """从 WAV 文件读取为 (numpy float32 数组, samplerate, channels)"""
-    import numpy as np
-    if not os.path.exists(path):
-        return None
-    with wave.open(path, "r") as wf:
-        samplerate = wf.getframerate()
-        channels = wf.getnchannels()
-        frames = wf.readframes(wf.getnframes())
-        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
-        if channels > 1:
-            samples = samples.reshape(-1, channels)
-        return samples, samplerate, channels
+    """从 WAV 文件读取音频（委托 core.audio_capture.read_wav，返回 AudioResult | None）"""
+    from core.audio_capture import read_wav
+    return read_wav(path)
 
 
 def _resolve_media_path(project_dir: str, rel_path: str) -> str:
@@ -91,22 +82,16 @@ def _resolve_media_path(project_dir: str, rel_path: str) -> str:
 
 def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
     """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
-    from core.audio_capture import AudioResult, mix_audio_results
+    from core.audio_capture import mix_audio_results
 
     mic_audio = None
     sys_audio = None
     if source and source.audio_mic:
         mic_path = _resolve_media_path(project_dir, source.audio_mic)
-        result = _read_wav(mic_path)
-        if result is not None:
-            data, sr, ch = result
-            mic_audio = AudioResult(data, sr, ch)
+        mic_audio = _read_wav(mic_path)
     if source and source.audio_system:
         sys_path = _resolve_media_path(project_dir, source.audio_system)
-        result = _read_wav(sys_path)
-        if result is not None:
-            data, sr, ch = result
-            sys_audio = AudioResult(data, sr, ch)
+        sys_audio = _read_wav(sys_path)
 
     if mic_audio is None and sys_audio is None:
         return None
