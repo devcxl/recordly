@@ -1044,21 +1044,31 @@ class MainWindow(QMainWindow):
         """按轨提供波形数据：取该轨首个 clip 的 source_path 读 wav（结果缓存）。
 
         仅 audio/audio_system 内置轨提供波形；audio_extra 轨返回 None（不绘制）。
+        录制后文件尚未写入时（_populate_timeline 先于 _finalize_project），
+        回退到内存中的 mic/system 录音数据，保证录制后立即播放即有波形。
         """
         if track_type not in ("audio", "audio_system"):
             return None
         for track in self._timeline.tracks:
             if track.type != track_type:
                 continue
-            if not track.clips or not track.clips[0].source_path:
+            if not track.clips:
                 continue
-            source_path = track.clips[0].source_path
-            if source_path not in self._track_audio_cache:
-                self._track_audio_cache[source_path] = _read_wav(source_path)
-            result = self._track_audio_cache[source_path]
-            if result is None:
-                return None
-            return result.data, result.samplerate
+            if track.clips[0].source_path:
+                source_path = track.clips[0].source_path
+                if source_path not in self._track_audio_cache:
+                    self._track_audio_cache[source_path] = _read_wav(source_path)
+                result = self._track_audio_cache[source_path]
+                if result is None:
+                    return None
+                return result.data, result.samplerate
+            # 回退：录制刚结束、wav 尚未写盘 → 用内存录音数据
+            if self._recorded_data:
+                key = "mic_audio" if track_type == "audio" else "system_audio"
+                audio = self._recorded_data.get(key)
+                if audio is not None and len(audio.data) > 0:
+                    return audio.data, audio.samplerate
+        return None
         return None
 
     def _create_playback_controller(self):

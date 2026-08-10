@@ -1053,7 +1053,7 @@ class TimelineWidget(QWidget):
                 speed_label = format_speed_label(getattr(clip, 'speed', 1.0))
                 label = f"{base} {speed_label}".strip() if speed_label else base
             volume = getattr(clip, "volume", 1.0)
-            if clip.type in ("audio", "audio_extra") and volume != 1.0:
+            if clip.type in ("audio", "audio_system", "audio_extra") and volume != 1.0:
                 volume_label = "静音" if volume <= 0 else f"{int(round(volume * 100))}%"
                 label = f"{label} [{volume_label}]".strip()
             p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
