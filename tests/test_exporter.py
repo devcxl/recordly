@@ -286,6 +286,8 @@ class TestExportWorker:
         monkeypatch.setattr(
             "core.exporter.os.path.exists",
             lambda path: path in ("/tmp/mic.wav", "out.mp4"))
+        monkeypatch.setattr(
+            "core.exporter.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 
@@ -349,6 +351,8 @@ class TestExportWorker:
             worker, "_stream_frames_parallel", lambda *a, **_k: True)
         monkeypatch.setattr(
             "core.exporter.os.path.exists", lambda path: path == "out.mp4")
+        monkeypatch.setattr(
+            "core.exporter.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 
@@ -408,6 +412,8 @@ class TestExportWorker:
         monkeypatch.setattr(
             "core.exporter.os.path.exists",
             lambda path: path in ("/tmp/mic.wav", "out.mp4"))
+        monkeypatch.setattr(
+            "core.exporter.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_nvenc()
 
@@ -477,6 +483,8 @@ class TestExportWorker:
         monkeypatch.setattr(
             "core.exporter.os.path.exists",
             lambda path: path in ("/tmp/music.wav", "out.mp4"))
+        monkeypatch.setattr(
+            "core.exporter.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 
