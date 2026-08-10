@@ -1,5 +1,7 @@
 """Tests for core/aspect_ratio.py"""
 
+import pytest
+
 from core.aspect_ratio import (
     parse_aspect_ratio,
     normalize_even,
@@ -127,3 +129,62 @@ class TestCalculateExportDimensions:
         d1 = calculate_export_dimensions(1920, 1080, "native", max_height=None)
         d2 = calculate_export_dimensions(1920, 1080, "native")
         assert d1 == d2
+
+
+class TestCalculateFillCropRegion:
+    """crop-to-fill：按目标比例中心裁剪（不拉伸不变形）"""
+
+    def test_exact_ratio_returns_none(self):
+        from core.aspect_ratio import calculate_fill_crop_region
+        assert calculate_fill_crop_region(1920, 1080, "16:9") is None
+        assert calculate_fill_crop_region(1080, 1920, "9:16") is None
+        assert calculate_fill_crop_region(4000, 3000, "4:3") is None
+
+    def test_landscape_to_square_crops_sides(self):
+        """1920×1080 → 1:1：左右对称裁掉多余宽度，高度不变"""
+        from core.aspect_ratio import calculate_fill_crop_region
+        r = calculate_fill_crop_region(1920, 1080, "1:1")
+        assert r is not None
+        assert r.y == 0.0 and r.height == 1.0
+        # 宽度 = 高 = 1080 → 归一化宽 1080/1920 = 0.5625，居中
+        assert r.width == pytest.approx(0.5625, abs=1e-6)
+        assert r.x == pytest.approx((1 - 0.5625) / 2, abs=1e-6)
+
+    def test_portrait_to_landscape_crops_top_bottom(self):
+        """1080×1920 → 16:9：上下对称裁掉多余高度，宽度不变"""
+        from core.aspect_ratio import calculate_fill_crop_region
+        r = calculate_fill_crop_region(1080, 1920, "16:9")
+        assert r is not None
+        assert r.x == 0.0 and r.width == 1.0
+        # 目标 16:9 → 高 = 1080/16*9 = 607.5 → 归一化 607.5/1920 ≈ 0.31641，居中
+        assert r.height == pytest.approx((1080 / 1920) / (16 / 9), abs=1e-6)
+        assert r.y == pytest.approx((1 - r.height) / 2, abs=1e-6)
+
+    def test_cropped_region_matches_target_ratio(self):
+        """裁剪区域实际宽高比应等于目标比例"""
+        from core.aspect_ratio import calculate_fill_crop_region
+        for src_w, src_h, ratio in [
+            (1920, 1080, "1:1"),
+            (1920, 1080, "4:5"),
+            (1080, 1920, "16:9"),
+            (2560, 1440, "9:16"),
+            (1280, 720, "4:3"),
+        ]:
+            r = calculate_fill_crop_region(src_w, src_h, ratio)
+            if r is None:
+                continue
+            crop_w = src_w * r.width
+            crop_h = src_h * r.height
+            assert crop_w / crop_h == pytest.approx(
+                int(ratio.split(":")[0]) / int(ratio.split(":")[1]), abs=1e-6)
+
+    def test_invalid_ratio_returns_none(self):
+        from core.aspect_ratio import calculate_fill_crop_region
+        assert calculate_fill_crop_region(1920, 1080, "native") is None
+        assert calculate_fill_crop_region(1920, 1080, "invalid") is None
+        assert calculate_fill_crop_region(1920, 1080, "1:0") is None
+
+    def test_zero_source_returns_none(self):
+        from core.aspect_ratio import calculate_fill_crop_region
+        assert calculate_fill_crop_region(0, 1080, "1:1") is None
+        assert calculate_fill_crop_region(1920, 0, "1:1") is None

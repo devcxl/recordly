@@ -8,7 +8,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from core.aspect_ratio import ASPECT_RATIO_PRESETS, RESOLUTION_PRESETS
+from core.aspect_ratio import (
+    ASPECT_RATIO_PRESETS, RESOLUTION_PRESETS,
+    calculate_export_dimensions, calculate_fill_crop_region,
+)
 
 
 _CUSTOM_RESOLUTION = "自定义..."
@@ -70,6 +73,26 @@ class ExportDialog(QDialog):
         self.ratio_combo.setCurrentText("native")
         layout.addWidget(self.ratio_combo)
 
+        # 画面裁剪（crop-to-fill / 自由裁剪）
+        layout.addWidget(QLabel("画面裁剪:"))
+        self.crop_combo = QComboBox()
+        self.crop_combo.addItems(
+            ["不裁剪", "自由裁剪 (✂)"]
+            + [r for r in ASPECT_RATIO_PRESETS if r != "native"])
+        self.crop_combo.setToolTip(
+            "按比例中心裁剪画面（不拉伸变形）；"
+            "自由裁剪需先在编辑区用 ✂ 模式拖拽裁剪框")
+        layout.addWidget(self.crop_combo)
+        self._free_crop_region = None
+        self._src_w = 0
+        self._src_h = 0
+        self.crop_combo.model().item(1).setEnabled(False)
+
+        # 输出尺寸预览
+        self.size_preview = QLabel("输出尺寸: -")
+        self.size_preview.setStyleSheet("color: #6b7280;")
+        layout.addWidget(self.size_preview)
+
         # 质量 (MP4)
         layout.addWidget(QLabel("质量:"))
         self.quality_combo = QComboBox()
@@ -126,6 +149,13 @@ class ExportDialog(QDialog):
         self.export_btn = QPushButton("导出")
         self.export_btn.clicked.connect(self.accept)
         self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.setStyleSheet(
+            "QPushButton {"
+            " background-color: #d1d5db; color: #4b5563;"
+            " border: none; border-radius: 4px; padding: 6px 14px;"
+            "}"
+            "QPushButton:hover { background-color: #9ca3af; }"
+            "QPushButton:pressed { background-color: #6b7280; }")
         self.cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(self.browse_btn)
         btn_layout.addStretch()
@@ -136,7 +166,13 @@ class ExportDialog(QDialog):
         # 信号连接
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
         self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
+        self.crop_combo.currentTextChanged.connect(self._update_size_preview)
+        self.ratio_combo.currentTextChanged.connect(self._update_size_preview)
+        self.quality_combo.currentTextChanged.connect(self._update_size_preview)
+        self._custom_width.valueChanged.connect(self._update_size_preview)
+        self._custom_height.valueChanged.connect(self._update_size_preview)
         self._on_format_changed("MP4")
+        self._update_size_preview()
 
     def _on_format_changed(self, fmt: str):
         is_gif = fmt == "GIF"
@@ -152,6 +188,7 @@ class ExportDialog(QDialog):
 
     def _on_resolution_changed(self, text: str):
         self._custom_widget.setVisible(text == _CUSTOM_RESOLUTION)
+        self._update_size_preview()
 
     def _browse(self):
         fmt = self.format_combo.currentText()
@@ -228,3 +265,66 @@ class ExportDialog(QDialog):
     @property
     def use_gpu(self) -> bool:
         return self.gpu_check.isEnabled() and self.gpu_check.isChecked()
+
+    # ── 画面裁剪 ───────────────────────────────────────────
+
+    def set_source_size(self, width: int, height: int):
+        """设置源画面尺寸（用于输出尺寸预览）"""
+        self._src_w = width
+        self._src_h = height
+        self._update_size_preview()
+
+    def set_free_crop(self, region):
+        """传入 ✂ 模式的自由裁剪区域；非 None 时启用并选中"自由裁剪"项"""
+        self._free_crop_region = region
+        self.crop_combo.model().item(1).setEnabled(region is not None)
+        if region is not None:
+            self.crop_combo.setCurrentText("自由裁剪 (✂)")
+
+    @property
+    def crop_region(self):
+        """当前选择的自由裁剪区域（仅选中"自由裁剪 (✂)"时生效）"""
+        if self.crop_combo.currentText() == "自由裁剪 (✂)":
+            return self._free_crop_region
+        return None
+
+    @property
+    def fill_crop_ratio(self) -> str | None:
+        """当前选择的 crop-to-fill 目标比例（选中比例项时生效）"""
+        text = self.crop_combo.currentText()
+        if text not in ("不裁剪", "自由裁剪 (✂)"):
+            return text
+        return None
+
+    def _update_size_preview(self):
+        dims = self._preview_dimensions()
+        if dims is None:
+            self.size_preview.setText("输出尺寸: -")
+            return
+        w, h = dims
+        self.size_preview.setText(f"输出尺寸: {w} × {h}")
+
+    def _preview_dimensions(self) -> tuple[int, int] | None:
+        """模拟导出尺寸计算（与 exporter 物化语义一致），无源尺寸时返回 None"""
+        if self._src_w <= 0 or self._src_h <= 0:
+            return None
+        if self.is_custom_resolution:
+            # 与 exporter 一致：自定义分辨率 clamp 到源尺寸（不放大）
+            w = min(self.custom_width, self._src_w) if self._src_w > 0 else self.custom_width
+            h = min(self.custom_height, self._src_h) if self._src_h > 0 else self.custom_height
+        else:
+            dims = calculate_export_dimensions(
+                self._src_w, self._src_h, self.aspect_ratio,
+                quality=self.quality, max_height=self.resolution_max_height)
+            w, h = dims.width, dims.height
+        region = self.crop_region
+        if region is None:
+            ratio = self.fill_crop_ratio
+            if ratio:
+                region = calculate_fill_crop_region(
+                    self._src_w, self._src_h, ratio)
+        if region is not None and (
+                region.width < 1.0 or region.height < 1.0):
+            w = int(w * region.width)
+            h = int(h * region.height)
+        return w, h
