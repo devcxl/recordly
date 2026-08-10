@@ -1226,7 +1226,8 @@ class MainWindow(QMainWindow):
             self._create_playback_controller()
             self._playback.seek(current_frame)
         audio_clips = [
-            c for t in self._timeline.tracks if t.type == "audio_extra"
+            c for t in self._timeline.tracks
+            if t.type in ("audio", "audio_system", "audio_extra")
             for c in t.clips
         ]
         self._audio_regions = sync_audio_regions_from_clips(
