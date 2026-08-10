@@ -1668,3 +1668,120 @@ class TestTimelineGui:
 
         assert w.playhead == pytest.approx(click_time)  # playhead 移动
         assert w._drag_state == "playhead"
+
+
+class TestTimelineZoomAndLimits:
+    """T3a: 时间线缩放、撤销栈上限、源素材边界 clamp"""
+
+    def test_set_pixels_per_sec_clamps_range(self, qapp):
+        from ui.timeline import (
+            TimelineWidget, MIN_PIXELS_PER_SEC, MAX_PIXELS_PER_SEC,
+        )
+
+        w = TimelineWidget()
+        w.set_pixels_per_sec(9999.0)
+        assert w._pixels_per_sec == MAX_PIXELS_PER_SEC
+        w.set_pixels_per_sec(0.001)
+        assert w._pixels_per_sec == MIN_PIXELS_PER_SEC
+
+    def test_zoom_in_out_scales_density(self, qapp):
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        original = w._pixels_per_sec
+        w.zoom_in()
+        assert w._pixels_per_sec > original
+        w.zoom_out()
+        w.zoom_out()
+        assert w._pixels_per_sec < original
+
+    def test_zoom_keeps_anchor_time_visible(self, qapp):
+        """缩放后锚点时间仍在可视区域内。"""
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 1000.0
+        anchor_s = 500.0
+        w.zoom_in(anchor_s)
+        assert w._pixels_per_sec > 30.0
+
+    def test_undo_stack_capped_at_limit(self, qapp):
+        from ui.timeline import TimelineWidget, UNDO_STACK_LIMIT
+        from core.commands import MoveClipCommand
+        from core.project import Clip, Track
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=100.0),
+        ])])
+        w._undo_stack = [
+            MoveClipCommand(0, 0, i, i + 1, i + 1, i + 2)
+            for i in range(UNDO_STACK_LIMIT + 50)
+        ]
+        assert len(w._undo_stack) == UNDO_STACK_LIMIT + 50
+
+        w._push_undo(MoveClipCommand(0, 0, 0, 1, 1, 2))
+        assert len(w._undo_stack) == UNDO_STACK_LIMIT
+        assert len(w._redo_stack) == 0
+
+    def test_resize_left_clamps_source_start_to_source_duration(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 30.0
+        w.source_duration = 10.0  # 源素材只有 10s
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=4.0, end=8.0,
+                 source_start=4.0, source_end=8.0),
+        ])])
+        clip = w.tracks[0].clips[0]
+
+        # 向左拉伸，让 source_start 超出源素材起点
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        left = QPointF(w._time_to_x(clip.start), y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, left,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        assert w._drag_state == "resize_left"
+
+        # 拖到 -2.0s：timeline 侧被 clamp 到 0，source 侧到 0
+        far_left = QPointF(w._time_to_x(-2.0), y)
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, far_left,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        assert clip.source_start >= 0.0
+
+    def test_resize_right_clamps_source_end_to_source_duration(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 30.0
+        w.source_duration = 10.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=4.0, end=8.0,
+                 source_start=4.0, source_end=8.0),
+        ])])
+        clip = w.tracks[0].clips[0]
+
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        right = QPointF(w._time_to_x(clip.end), y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, right,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        assert w._drag_state == "resize_right"
+
+        far_right = QPointF(w._time_to_x(20.0), y)
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, far_right,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        assert clip.source_end <= w.source_duration

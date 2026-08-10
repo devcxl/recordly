@@ -28,6 +28,10 @@ TRACK_HEIGHT = 48
 RULER_HEIGHT = 20
 PADDING = 4
 CLIP_SNAP_DISTANCE_PX = 8.0
+UNDO_STACK_LIMIT = 100
+MIN_PIXELS_PER_SEC = 5.0
+MAX_PIXELS_PER_SEC = 300.0
+ZOOM_STEP_FACTOR = 1.25
 
 
 class TimelineWidget(QWidget):
@@ -48,6 +52,7 @@ class TimelineWidget(QWidget):
         self._playhead_s = 0.0
         self._duration = 60.0
         self._pixels_per_sec = 30.0
+        self._source_duration: float | None = None
         self._selected_track = -1
         self._selected_clip = -1
         self._drag_track = -1
@@ -91,6 +96,15 @@ class TimelineWidget(QWidget):
     @property
     def tracks(self) -> list:
         return self._tracks
+
+    @property
+    def source_duration(self) -> float | None:
+        """源素材时长（秒）。为 None 表示未知，不执行源边界 clamp。"""
+        return self._source_duration
+
+    @source_duration.setter
+    def source_duration(self, value: float | None):
+        self._source_duration = value
 
     def set_tracks(self, tracks: list, clear_history: bool = True):
         """替换轨道列表。clear_history=True 时清空撤销/重做栈（项目切换语义）；
@@ -146,6 +160,38 @@ class TimelineWidget(QWidget):
     def _x_to_time(self, x: int) -> float:
         return max(0.0, (x - TRACK_HEADER_WIDTH) / self._pixels_per_sec)
 
+    def _clamp_source_time(self, t: float) -> float:
+        """将源时间 clamp 到 [0, source_duration]。未知源时长时原样返回。"""
+        if self._source_duration is None:
+            return t
+        return max(0.0, min(t, self._source_duration))
+
+    def set_pixels_per_sec(self, value: float, anchor_s: float | None = None):
+        """缩放时间线密度（像素/秒），可选以某时间点为中心保持其水平位置。"""
+        self._pixels_per_sec = max(
+            MIN_PIXELS_PER_SEC, min(value, MAX_PIXELS_PER_SEC))
+        self._update_width()
+        if anchor_s is not None:
+            self.ensure_visible(anchor_s)
+        self.update()
+
+    def zoom_in(self, anchor_s: float | None = None):
+        self.set_pixels_per_sec(self._pixels_per_sec * ZOOM_STEP_FACTOR, anchor_s)
+
+    def zoom_out(self, anchor_s: float | None = None):
+        self.set_pixels_per_sec(self._pixels_per_sec / ZOOM_STEP_FACTOR, anchor_s)
+
+    def ensure_visible(self, time_s: float):
+        """确保某时间点可见（供缩放时保持锚点位置）。"""
+        scroll = self.parentWidget()
+        if scroll is None or not hasattr(scroll, "horizontalScrollBar"):
+            return
+        bar = scroll.horizontalScrollBar()
+        target = self._time_to_x(time_s) - bar.value()
+        viewport_w = max(scroll.viewport().width(), 1)
+        center = bar.value() + target - viewport_w // 2
+        bar.setValue(max(0, min(center, bar.maximum())))
+
     def _clip_rect(self, track_idx: int, clip_idx: int) -> QRectF:
         track = self._tracks[track_idx]
         clip = track.clips[clip_idx]
@@ -178,6 +224,8 @@ class TimelineWidget(QWidget):
     def _push_undo(self, cmd: UndoCommand):
         self._undo_stack.append(cmd)
         self._redo_stack.clear()
+        while len(self._undo_stack) > UNDO_STACK_LIMIT:
+            self._undo_stack.pop(0)
         cmd.execute(self)
         self._validate_selection()
         self.clips_changed.emit()
@@ -302,6 +350,7 @@ class TimelineWidget(QWidget):
                 d_start = new_start - self._drag_orig_start
                 clip.start = new_start
                 clip.source_start = self._drag_orig_source_start + d_start * clip.speed
+                clip.source_start = self._clamp_source_time(clip.source_start)
             elif self._drag_state == "resize_right":
                 new_end = min(
                     self._duration,
@@ -311,6 +360,7 @@ class TimelineWidget(QWidget):
                 clip.end = new_end
                 if clip.source_end is not None:
                     clip.source_end = self._drag_orig_source_end + d_end * clip.speed
+                    clip.source_end = self._clamp_source_time(clip.source_end)
 
             self.update()
             return
@@ -587,6 +637,26 @@ class TimelineWidget(QWidget):
         self._push_undo(CompositeCommand([split_cmd, delete_cmd]))
 
     # ── 键盘事件 ──────────────────────────────────────────
+
+    def wheelEvent(self, event):
+        """Ctrl+滚轮 缩放时间线密度；普通滚轮横向滚动。"""
+        if event.modifiers() & Qt.ControlModifier:
+            anchor_s = self._x_to_time(int(event.position().x()))
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.zoom_in(anchor_s)
+            elif delta < 0:
+                self.zoom_out(anchor_s)
+            event.accept()
+            return
+        scroll = self.parentWidget()
+        if scroll is not None and hasattr(scroll, "horizontalScrollBar"):
+            delta = event.angleDelta().y() or event.angleDelta().x()
+            bar = scroll.horizontalScrollBar()
+            bar.setValue(bar.value() - delta)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def keyPressEvent(self, event):
         portable_text = QKeySequence(
