@@ -7,7 +7,7 @@ mic_factory 构造参数为测试注入点（FakeCapture）。
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QMessageBox,
 )
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import Qt, QTimer
 
 from core.audio_capture import MicrophoneCapture, AudioResult
 
@@ -31,7 +31,7 @@ class RecordAudioDialog(QDialog):
         self._timer.timeout.connect(self._on_tick)
 
         self._time_label = QLabel("00:00")
-        self._time_label.setAlignment(self._time_label.AlignCenter)
+        self._time_label.setAlignment(Qt.AlignCenter)
 
         self._btn_start = QPushButton("开始录音")
         self._btn_start.clicked.connect(self._on_start)
