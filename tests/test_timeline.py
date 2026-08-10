@@ -2183,3 +2183,71 @@ class TestTimelineVisualProviders:
         painter = QPainter(image)
         w.render(painter)
         painter.end()
+
+
+class TestTimelineVolume:
+    """T6: 音量控制"""
+
+    def test_change_volume_creates_command_and_undo(self, qapp):
+        from core.commands import ChangeVolumeCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0, volume=1.0),
+        ])])
+
+        w._change_volume(0, 0, 0.5)
+
+        assert w.tracks[0].clips[0].volume == 0.5
+        assert len(w._undo_stack) == 1
+        assert isinstance(w._undo_stack[-1], ChangeVolumeCommand)
+
+        w.undo()
+        assert w.tracks[0].clips[0].volume == 1.0
+
+        w.redo()
+        assert w.tracks[0].clips[0].volume == 0.5
+
+    def test_mute_sets_volume_zero(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio_extra", clips=[
+            Clip(type="audio_extra", start=0.0, end=5.0, volume=1.0),
+        ])])
+
+        w._change_volume(0, 0, 0.0)
+        assert w.tracks[0].clips[0].volume == 0.0
+
+        w._change_volume(0, 0, 1.0)
+        assert w.tracks[0].clips[0].volume == 1.0
+
+    def test_change_volume_clamps_range(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0, volume=1.0),
+        ])])
+
+        w._change_volume(0, 0, 9.0)
+        assert w.tracks[0].clips[0].volume == 2.0
+
+        w._change_volume(0, 0, -1.0)
+        assert w.tracks[0].clips[0].volume == 0.0
+
+    def test_volume_change_same_value_no_command(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0, volume=1.0),
+        ])])
+
+        w._change_volume(0, 0, 1.0)
+        assert len(w._undo_stack) == 0

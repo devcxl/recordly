@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QWidget, QMenu
 from PyQt5.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QBrush, QKeySequence
 
-from core.commands import AddClipCommand, UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, CompositeCommand
+from core.commands import AddClipCommand, UndoCommand, MoveClipCommand, DeleteClipCommand, SplitClipCommand, ChangeSpeedCommand, ChangeVolumeCommand, CompositeCommand
 from core.project import Clip, SPEED_OPTIONS
 from core.shortcuts import ShortcutRegistry
 from core.speed import plan_clip_speed_change, format_speed_label
@@ -671,6 +671,18 @@ class TimelineWidget(QWidget):
                     act.setChecked(abs(clip.speed - spd) < 0.001)
                     act.triggered.connect(
                         lambda checked, ti=ti, ci=ci, spd=spd: self._change_speed(ti, ci, spd))
+            if clip.type in ("audio", "audio_extra"):
+                volume_menu = menu.addMenu("音量")
+                for vol, label in ((0.0, "静音"), (0.5, "50%"),
+                                   (1.0, "100%"), (1.5, "150%")):
+                    act = volume_menu.addAction(label)
+                    act.setCheckable(True)
+                    act.setChecked(
+                        vol == 0.0 and clip.volume <= 0.0
+                        or vol > 0 and abs(clip.volume - vol) < 0.001)
+                    act.triggered.connect(
+                        lambda checked, ti=ti, ci=ci,
+                        vol=vol: self._change_volume(ti, ci, vol))
             menu.addSeparator()
             menu.addAction("选中", lambda ti=ti, ci=ci: self._select_clip(ti, ci))
         menu.addAction("全选", self._select_all)
@@ -696,6 +708,16 @@ class TimelineWidget(QWidget):
                                 f"变更速度会与下一个 clip 重叠，请先拆分或移动 clip")
             return
         cmd = ChangeSpeedCommand(track_index, clip_index, old_speed, new_speed, clip.end)
+        self._push_undo(cmd)
+
+    def _change_volume(self, track_index: int, clip_index: int, new_volume: float):
+        clip = self._tracks[track_index].clips[clip_index]
+        old_volume = getattr(clip, "volume", 1.0)
+        new_volume = max(0.0, min(new_volume, 2.0))
+        if abs(old_volume - new_volume) < 0.001:
+            return
+        cmd = ChangeVolumeCommand(track_index, clip_index,
+                                  old_volume, new_volume)
         self._push_undo(cmd)
 
     def delete_clip(self, track_index: int, clip_index: int):
@@ -1025,6 +1047,10 @@ class TimelineWidget(QWidget):
                 base = f"{clip.type}: {clip.content[:20]}" if clip.content else clip.type
                 speed_label = format_speed_label(getattr(clip, 'speed', 1.0))
                 label = f"{base} {speed_label}".strip() if speed_label else base
+            volume = getattr(clip, "volume", 1.0)
+            if clip.type in ("audio", "audio_extra") and volume != 1.0:
+                volume_label = "静音" if volume <= 0 else f"{int(round(volume * 100))}%"
+                label = f"{label} [{volume_label}]".strip()
             p.drawText(QRectF(rect.x() + 4, rect.y() + 2, rect.width() - 8, rect.height()),
                        Qt.AlignLeft | Qt.AlignVCenter, label)
 

@@ -624,6 +624,11 @@ class ExportWorker(QObject):
                     )
                     if abs(clip.speed - 1.0) > 0.0001:
                         chain += f',{self._atempo_filter_text(clip.speed)}'
+                    volume = getattr(clip, "volume", 1.0)
+                    if volume <= 0:
+                        chain += ',volume=0'
+                    elif abs(volume - 1.0) > 0.0001:
+                        chain += f',volume={volume:g}'
                     delay = round(clip.start * 1000)
                     chain += f',adelay={delay}|{delay}{label}'
                     parts.append(chain)

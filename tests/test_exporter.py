@@ -454,3 +454,71 @@ class TestExportWorker:
         thread.join(timeout=2)
         assert not thread.is_alive()
         assert result == [True]
+
+    def test_audio_mix_applies_clip_volume_filter(self, monkeypatch):
+        from types import SimpleNamespace
+        import tempfile
+        import os
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+        from core.project import Clip
+
+        compositor = Compositor(320, 240, 30)
+        compositor.load_clips([Clip(
+            type="video", start=0.0, end=4.0,
+            source_start=0.0, source_end=4.0, speed=1.0, volume=0.5,
+        )])
+        worker = ExportWorker(
+            compositor, None, ExportSettings(output_path="out.mp4"))
+        captured = {}
+        mixed_path = None
+
+        monkeypatch.setattr("core.exporter.subprocess.run",
+                            lambda cmd, **_kwargs: (
+                                captured.__setitem__("cmd", cmd)
+                                or SimpleNamespace(returncode=0, stderr=b"")))
+
+        try:
+            result = worker._build_audio_filtergraph(
+                [], "/tmp/original.wav", 44100, video_duration=4.0)
+            filtergraph = captured["cmd"][
+                captured["cmd"].index("-filter_complex") + 1]
+            assert "volume=0.5" in filtergraph
+            mixed_path = result
+        finally:
+            if mixed_path is not None and os.path.exists(mixed_path):
+                os.remove(mixed_path)
+
+    def test_audio_mix_muted_clip_volume_zero(self, monkeypatch):
+        from types import SimpleNamespace
+        import tempfile
+        import os
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+        from core.project import Clip
+
+        compositor = Compositor(320, 240, 30)
+        compositor.load_clips([Clip(
+            type="video", start=0.0, end=4.0,
+            source_start=0.0, source_end=4.0, speed=1.0, volume=0.0,
+        )])
+        worker = ExportWorker(
+            compositor, None, ExportSettings(output_path="out.mp4"))
+        captured = {}
+        mixed_path = None
+
+        monkeypatch.setattr("core.exporter.subprocess.run",
+                            lambda cmd, **_kwargs: (
+                                captured.__setitem__("cmd", cmd)
+                                or SimpleNamespace(returncode=0, stderr=b"")))
+
+        try:
+            result = worker._build_audio_filtergraph(
+                [], "/tmp/original.wav", 44100, video_duration=4.0)
+            filtergraph = captured["cmd"][
+                captured["cmd"].index("-filter_complex") + 1]
+            assert "volume=0" in filtergraph
+            mixed_path = result
+        finally:
+            if mixed_path is not None and os.path.exists(mixed_path):
+                os.remove(mixed_path)
