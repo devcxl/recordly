@@ -304,7 +304,7 @@ class TestMediaPathResolution:
         for name in ('_clear_editor_state', '_restore_cursor_events',
                      '_restore_video_frames', '_restore_project_audio',
                      '_build_recorded_data_from_project', '_restore_timeline_and_playback',
-                     '_restore_editor_ui', '_register_cursor_effect'):
+                     '_restore_editor_ui', '_register_cursor_effect', '_bind_thumbnail_provider'):
             setattr(w, name, partial(getattr(MainWindow, name), w))
         w._project_dir = project_dir
         MainWindow._on_open_project(w, project_dir)
@@ -388,7 +388,7 @@ class TestAudioHelper:
         for name in ('_clear_editor_state', '_restore_cursor_events',
                      '_restore_video_frames', '_restore_project_audio',
                      '_build_recorded_data_from_project', '_restore_timeline_and_playback',
-                     '_restore_editor_ui', '_register_cursor_effect'):
+                     '_restore_editor_ui', '_register_cursor_effect', '_bind_thumbnail_provider'):
             setattr(w, name, partial(getattr(MainWindow, name), w))
         w._project_dir = project_dir
         MainWindow._on_open_project(w, project_dir)
@@ -514,6 +514,7 @@ class TestFullRoundtrip:
                      '_restore_video_frames', '_restore_project_audio',
                      '_build_recorded_data_from_project', '_restore_timeline_and_playback',
                      '_restore_editor_ui', '_register_cursor_effect',
+                     '_bind_thumbnail_provider',
                      '_create_playback_controller'):
             setattr(reopen_window, name, partial(getattr(MainWindow, name), reopen_window))
 

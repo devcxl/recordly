@@ -71,6 +71,8 @@ class TimelineWidget(QWidget):
         self._undo_stack = []
         self._redo_stack = []
         self._shortcut_registry = ShortcutRegistry()
+        self._waveform_provider = None
+        self._thumbnail_provider = None
 
         self.setMinimumHeight(RULER_HEIGHT + TRACK_HEIGHT + 10)
         self._update_width()
@@ -109,6 +111,17 @@ class TimelineWidget(QWidget):
     @source_duration.setter
     def source_duration(self, value: float | None):
         self._source_duration = value
+
+    def set_waveform_provider(self, provider):
+        """注册音频波形提供者：callable() -> (np.ndarray, samplerate) | None"""
+        self._waveform_provider = provider
+        self.update()
+
+    def set_thumbnail_provider(self, provider):
+        """注册视频缩略图提供者：
+        callable(source_time_s) -> QPixmap | None"""
+        self._thumbnail_provider = provider
+        self.update()
 
     def set_tracks(self, tracks: list, clear_history: bool = True):
         """替换轨道列表。clear_history=True 时清空撤销/重做栈（项目切换语义）；
@@ -1001,6 +1014,8 @@ class TimelineWidget(QWidget):
 
         p.drawRoundedRect(rect, 3, 3)
 
+        self._draw_clip_content(p, rect, clip)
+
         if rect.width() > 40:
             p.setPen(QColor("white"))
             p.setFont(QFont("sans-serif", 8))
@@ -1016,6 +1031,59 @@ class TimelineWidget(QWidget):
         if selected:
             p.fillRect(QRectF(rect.x() - 2, rect.y(), 4, rect.height()), QColor("white"))
             p.fillRect(QRectF(rect.right() - 2, rect.y(), 4, rect.height()), QColor("white"))
+
+    def _draw_clip_content(self, p: QPainter, rect: QRectF, clip):
+        """clip 内绘制内容：video 缩略图 / audio 波形。"""
+        if rect.width() < 4:
+            return
+        try:
+            if clip.type == "video" and self._thumbnail_provider is not None:
+                source_time = clip.source_start + (
+                    (clip.end - clip.start) * clip.speed) / 2
+                pixmap = self._thumbnail_provider(source_time)
+                if pixmap is not None and not pixmap.isNull():
+                    p.save()
+                    p.setClipRect(rect.toRect())
+                    p.drawPixmap(rect.toRect(), pixmap)
+                    p.restore()
+                    return
+            if clip.type in ("audio", "audio_extra") and rect.width() > 8:
+                self._draw_audio_waveform(p, rect, clip)
+        except Exception:
+            # 波形/缩略图绘制失败不影响时间线交互
+            pass
+
+    def _draw_audio_waveform(self, p: QPainter, rect: QRectF, clip):
+        if self._waveform_provider is None:
+            return
+        result = self._waveform_provider()
+        if not result:
+            return
+        data, samplerate = result
+        from core.waveform import compute_waveform_peaks
+
+        bucket_count = max(2, int(rect.width()))
+        source_start = max(0.0, clip.source_start)
+        source_end = (
+            clip.source_end
+            if clip.source_end is not None
+            else source_start + (clip.end - clip.start) * max(clip.speed, 0.0001)
+        )
+        peaks = compute_waveform_peaks(
+            data, samplerate, source_start, source_end,
+            clip.speed, bucket_count)
+
+        mid_y = rect.center().y()
+        half_h = max(1.0, (rect.height() - 10) / 2)
+        p.save()
+        p.setPen(QPen(QColor(255, 255, 255, 120), 1))
+        step = rect.width() / bucket_count
+        for i, peak in enumerate(peaks):
+            x = rect.x() + i * step
+            height = max(1.0, peak * half_h)
+            p.drawLine(int(x), int(mid_y - height),
+                       int(x), int(mid_y + height))
+        p.restore()
 
     def _draw_playhead(self, p: QPainter):
         x = self._time_to_x(self._playhead_s)
