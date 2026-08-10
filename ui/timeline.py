@@ -92,13 +92,16 @@ class TimelineWidget(QWidget):
     def tracks(self) -> list:
         return self._tracks
 
-    def set_tracks(self, tracks: list):
+    def set_tracks(self, tracks: list, clear_history: bool = True):
+        """替换轨道列表。clear_history=True 时清空撤销/重做栈（项目切换语义）；
+        内部刷新（如额外音频轨道重建）应传 False 保留历史。"""
         self._tracks = tracks
         self._selected_track = -1
         self._selected_clip = -1
         self._snap_alignment_time = None
-        self._undo_stack.clear()
-        self._redo_stack.clear()
+        if clear_history:
+            self._undo_stack.clear()
+            self._redo_stack.clear()
         self._update_height()
         self.update()
 

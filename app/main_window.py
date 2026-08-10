@@ -894,7 +894,7 @@ class MainWindow(QMainWindow):
 
         self._timeline.set_tracks(tracks)
         self._timeline.duration = duration
-        self._compositor.load_clips(tracks[0].clips)
+        self._compositor.load_clips(tracks[0].clips, duration)
         self._compositor.load_manual_zoom_clips(zoom_clips)
         if self._audio_regions:
             self._update_audio_timeline()
@@ -1154,9 +1154,13 @@ class MainWindow(QMainWindow):
              for c in t.clips if c.rect])
         video_clips = [c for t in self._timeline.tracks if t.type == "video"
                        for c in t.clips]
-        self._timeline.duration = max(
-            (clip.end for clip in video_clips), default=0.1)
-        self._compositor.load_clips(video_clips)
+        all_clip_ends = [
+            clip.end
+            for track in self._timeline.tracks
+            for clip in track.clips
+        ]
+        self._timeline.duration = max(all_clip_ends, default=0.1)
+        self._compositor.load_clips(video_clips, self._timeline.duration)
         if self._playback:
             current_frame = self._playback.current_frame
             self._playback.stop()
@@ -1388,7 +1392,7 @@ class MainWindow(QMainWindow):
     def _update_audio_timeline(self):
         self._timeline.set_tracks([
             t for t in self._timeline.tracks if t.type != "audio_extra"
-        ])
+        ], clear_history=False)
 
         if self._audio_regions:
             clips = []
@@ -1526,7 +1530,7 @@ class MainWindow(QMainWindow):
         self._timeline.duration = project.duration
         for track in project.timeline:
             if track.type == "video":
-                comp.load_clips(track.clips)
+                comp.load_clips(track.clips, project.duration)
             elif track.type == "zoom":
                 comp.load_manual_zoom_clips(track.clips)
 

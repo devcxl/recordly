@@ -74,7 +74,6 @@ class ExportSettings:
     loop: bool = True              # GIF 是否循环
     preset: str = "veryfast"       # x264 preset: ultrafast/superfast/veryfast/faster/fast/medium/slow/slower/veryslow
     use_gpu: bool = False          # 使用 GPU (NVENC CUDA) 硬件编码
-    clip_speeds: list[tuple[float, float, float]] | None = None  # (start_ms, end_ms, speed)
     extra_audio: list | None = None  # list[AudioRegion]
     crop_region: 'CropRegion | None' = None
 

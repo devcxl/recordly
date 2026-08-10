@@ -560,7 +560,7 @@ def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
         def load_manual_zoom_clips(self, clips):
             self.zoom_clips = clips
 
-        def load_clips(self, clips):
+        def load_clips(self, clips, timeline_duration=None):
             self.video_clips = clips
 
     class FakePreview:
