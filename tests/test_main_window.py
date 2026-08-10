@@ -1498,3 +1498,325 @@ def test_playback_toolbar_step_buttons_symmetric():
     # 跳转按钮保持双三角带竖线
     assert window._btn_rewind.text() == "⏪"
     assert window._btn_ff.text() == "⏩"
+
+
+# ── T5: 双音频轨展示（audio 麦克风 + audio_system 系统音频） ──
+
+
+def _fake_populate_window(project_dir, wav_names=("audio_mic.wav",
+                                                  "audio_system.wav")):
+    """构造 _populate_timeline 测试用的 fake window"""
+    from types import SimpleNamespace
+
+    class FakeFrame:
+        timestamp = 0.0
+
+    class FakeCompositor:
+        frames = [FakeFrame(), FakeFrame(), FakeFrame()]
+        fps = 30
+        width = 1280
+        height = 720
+        source_duration = 10.0
+        monitor_left = 0
+        monitor_top = 0
+
+        def load_camera(self, camera):
+            self.camera = camera
+
+        def load_clips(self, clips, timeline_duration=None):
+            self.video_clips = clips
+
+        def load_manual_zoom_clips(self, clips):
+            self.zoom_clips = clips
+
+    class FakeTimeline:
+        def __init__(self):
+            self.tracks = []
+            self.source_duration = None
+            self.duration = None
+
+        def set_tracks(self, tracks):
+            self.tracks = tracks
+
+    for name in wav_names:
+        path = os.path.join(project_dir, name)
+        if not os.path.exists(path):
+            with open(path, "w"):
+                pass
+
+    return SimpleNamespace(
+        _compositor=FakeCompositor(),
+        _recorded_data={"clicks": [], "cursor_events": []},
+        _project_dir=project_dir,
+        _timeline=FakeTimeline(),
+        _audio_regions=[],
+        _get_recording_duration=lambda: 10.0,
+    )
+
+
+def test_populate_timeline_creates_dual_audio_tracks(tmp_path):
+    """_populate_timeline 建立 audio（mic）+ audio_system 双轨，clip 带绝对 source_path"""
+    from app.main_window import MainWindow
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _fake_populate_window(project_dir)
+
+    MainWindow._populate_timeline(window)
+
+    tracks = {t.type: t for t in window._timeline.tracks}
+    assert "audio" in tracks and "audio_system" in tracks
+    mic_clip = tracks["audio"].clips[0]
+    sys_clip = tracks["audio_system"].clips[0]
+    assert mic_clip.source_path == os.path.join(project_dir, "audio_mic.wav")
+    assert sys_clip.source_path == os.path.join(project_dir, "audio_system.wav")
+    assert sys_clip.start == 0.0
+    assert sys_clip.end == 10.0
+
+
+def test_populate_timeline_keeps_audio_tracks_without_wav(tmp_path):
+    """无对应 wav 时 audio/audio_system 轨仍存在，source_path 为空串"""
+    from app.main_window import MainWindow
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window = _fake_populate_window(project_dir, wav_names=())
+
+    MainWindow._populate_timeline(window)
+
+    tracks = {t.type: t for t in window._timeline.tracks}
+    assert "audio" in tracks and "audio_system" in tracks
+    assert tracks["audio"].clips[0].source_path == ""
+    assert tracks["audio_system"].clips[0].source_path == ""
+
+
+def _make_legacy_project(project_dir, audio_mic="audio_mic.wav",
+                         audio_system="audio_system.wav"):
+    """旧项目：audio 轨 clip 无 source_path、无 audio_system 轨"""
+    from core.project import Clip, Project, SourceInfo, Track
+
+    project = Project()
+    project.duration = 5.0
+    project.source = SourceInfo(audio_mic=audio_mic, audio_system=audio_system)
+    project.timeline = [Track(type="audio", name="音频", clips=[
+        Clip(type="audio", start=0, end=5.0, content="麦克风"),
+    ])]
+    return project
+
+
+def test_ensure_builtin_audio_tracks_backfills_mic_and_system(tmp_path):
+    """audio clip 无 source_path → 回退 source.audio_mic；无 system 轨 → 补全时长 clip"""
+    from app.main_window import ensure_builtin_audio_tracks
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    project = _make_legacy_project(project_dir)
+
+    ensure_builtin_audio_tracks(project, project_dir)
+
+    audio_track = project.timeline[0]
+    assert audio_track.type == "audio"
+    assert audio_track.clips[0].source_path == os.path.join(
+        project_dir, "audio_mic.wav")
+    system_tracks = [t for t in project.timeline if t.type == "audio_system"]
+    assert len(system_tracks) == 1
+    sys_clip = system_tracks[0].clips[0]
+    assert sys_clip.start == 0.0
+    assert sys_clip.end == project.duration
+    assert sys_clip.source_path == os.path.join(project_dir, "audio_system.wav")
+
+
+def test_ensure_builtin_audio_tracks_idempotent(tmp_path):
+    """已补齐项目再调用无变化（不重复补轨、不覆盖已有 source_path）"""
+    from dataclasses import asdict
+
+    from app.main_window import ensure_builtin_audio_tracks
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    project = _make_legacy_project(project_dir)
+    ensure_builtin_audio_tracks(project, project_dir)
+    expected = [asdict(t) for t in project.timeline]
+
+    ensure_builtin_audio_tracks(project, project_dir)
+
+    assert [asdict(t) for t in project.timeline] == expected
+    assert len([t for t in project.timeline if t.type == "audio_system"]) == 1
+
+
+def test_ensure_builtin_audio_tracks_skips_empty_system(tmp_path):
+    """source.audio_system 为空 → 不补 system 轨"""
+    from app.main_window import ensure_builtin_audio_tracks
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    project = _make_legacy_project(project_dir, audio_system="")
+
+    ensure_builtin_audio_tracks(project, project_dir)
+
+    assert all(t.type != "audio_system" for t in project.timeline)
+    assert project.timeline[0].clips[0].source_path == os.path.join(
+        project_dir, "audio_mic.wav")
+
+
+def test_restore_timeline_and_playback_backfills_then_roundtrips(tmp_path):
+    """加载路径调用补齐；补齐结果随 _collect_project_state 保存回 project.json"""
+    from types import SimpleNamespace
+
+    from app.main_window import MainWindow
+    from core.project import Project
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    for name in ("audio_mic.wav", "audio_system.wav"):
+        with open(os.path.join(project_dir, name), "w"):
+            pass
+
+    project = _make_legacy_project(project_dir)
+
+    class FakeTimeline:
+        def __init__(self):
+            self.tracks = []
+            self.duration = None
+            self.source_duration = None
+
+        def set_tracks(self, tracks):
+            self.tracks = tracks
+
+    timeline = FakeTimeline()
+    window = SimpleNamespace(
+        _timeline=timeline,
+        _project_dir=project_dir,
+        _compositor=SimpleNamespace(
+            _frames=[], _cursor_events=[], _click_events=[],
+            _base_time=0.0, _monitor_left=0, _monitor_top=0,
+            _crop_region=None, source_duration=5.0,
+            fps=30, width=1280, height=720,
+            load_clips=lambda *a: None, load_manual_zoom_clips=lambda *a: None),
+        _audio_regions=[],
+        _playback=None,
+        _update_audio_timeline=lambda: None,
+    )
+
+    MainWindow._restore_timeline_and_playback(window, window._compositor, project)
+
+    # 补齐已生效到 timeline
+    track_types = [t.type for t in timeline.tracks]
+    assert track_types == ["audio", "audio_system"]
+    assert timeline.tracks[0].clips[0].source_path == os.path.join(
+        project_dir, "audio_mic.wav")
+
+    # roundtrip：保存 → 重开 → 轨道与 source_path 完整保留
+    state = Project()
+    MainWindow._collect_project_state(window, state)
+    json_path = os.path.join(project_dir, "project.json")
+    state.save(json_path)
+    loaded = Project.load(json_path)
+    loaded_types = [t.type for t in loaded.timeline]
+    assert loaded_types == ["audio", "audio_system"]
+    sys_clip = next(
+        t for t in loaded.timeline if t.type == "audio_system").clips[0]
+    assert sys_clip.source_path == os.path.join(project_dir, "audio_system.wav")
+    assert loaded.timeline[0].clips[0].source_path == os.path.join(
+        project_dir, "audio_mic.wav")
+
+
+def _make_track_audio_window(project_dir):
+    """带双音频轨 + wav 文件的 fake window（用于 _track_audio_provider 测试）"""
+    from types import SimpleNamespace
+
+    from core.project import Clip, Track
+
+    mic_wav = os.path.join(project_dir, "audio_mic.wav")
+    sys_wav = os.path.join(project_dir, "audio_system.wav")
+    timeline = SimpleNamespace(tracks=[
+        Track(type="audio", clips=[Clip(
+            type="audio", start=0, end=5.0, source_path=mic_wav)]),
+        Track(type="audio_system", clips=[Clip(
+            type="audio_system", start=0, end=5.0, source_path=sys_wav)]),
+        Track(type="audio_extra", clips=[Clip(
+            type="audio_extra", start=0, end=5.0,
+            source_path=os.path.join(project_dir, "bgm.wav"))]),
+    ])
+    return SimpleNamespace(_timeline=timeline, _track_audio_cache={}), \
+        mic_wav, sys_wav
+
+
+def _write_test_wav(path):
+    import numpy as np
+    from app.main_window import _write_wav
+    sr = 8000
+    _write_wav(path, np.ones((sr, 1), dtype=np.float32) * 0.25, sr)
+
+
+def test_track_audio_provider_reads_per_track_wav(tmp_path, monkeypatch):
+    """provider 按轨读 source_path 的 wav；audio_extra 轨无内置音频 → None"""
+    import numpy as np
+    from app.main_window import MainWindow
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window, mic_wav, sys_wav = _make_track_audio_window(project_dir)
+    _write_test_wav(mic_wav)
+    _write_test_wav(sys_wav)
+
+    mic = MainWindow._track_audio_provider(window, "audio")
+    system = MainWindow._track_audio_provider(window, "audio_system")
+    extra = MainWindow._track_audio_provider(window, "audio_extra")
+
+    assert mic is not None
+    assert mic[1] == 8000
+    assert np.max(mic[0]) > 0.0
+    assert system is not None
+    assert system[1] == 8000
+    assert extra is None, "audio_extra 轨不提供波形数据"
+
+
+def test_track_audio_provider_caches_by_source_path(tmp_path, monkeypatch):
+    """同 source_path 只读一次 wav（dict 缓存）"""
+    from app.main_window import MainWindow
+
+    project_dir = str(tmp_path / "proj")
+    os.makedirs(project_dir)
+    window, mic_wav, sys_wav = _make_track_audio_window(project_dir)
+    _write_test_wav(mic_wav)
+    _write_test_wav(sys_wav)
+
+    reads = []
+    import app.main_window as main_window_module
+
+    def fake_read_wav(path):
+        reads.append(path)
+        from core.audio_capture import read_wav
+        return read_wav(path)
+
+    monkeypatch.setattr(main_window_module, "_read_wav", fake_read_wav)
+
+    MainWindow._track_audio_provider(window, "audio")
+    MainWindow._track_audio_provider(window, "audio")
+    MainWindow._track_audio_provider(window, "audio_system")
+
+    assert reads == [mic_wav, sys_wav], "重复调用同轨应命中缓存"
+
+
+def test_track_audio_provider_cache_invalidates_on_clear_editor_state(
+        tmp_path):
+    """_clear_editor_state 清空 _track_audio_cache"""
+    from types import SimpleNamespace
+
+    from app.main_window import MainWindow
+
+    window = SimpleNamespace(
+        _track_audio_cache={"a.wav": (None, 8000)},
+        _recorded_data=None,
+        _playback=None,
+        _compositor=SimpleNamespace(
+            frames=[], frame_times=[], cursor_events=[], click_events=[],
+            crop_region=None),
+        _crop_active=False,
+        _audio_regions=[],
+    )
+
+    MainWindow._clear_editor_state(window)
+
+    assert window._track_audio_cache == {}
