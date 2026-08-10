@@ -21,6 +21,7 @@ from PyQt5.QtCore import QUrl
 from PyQt5.QtGui import QDesktopServices
 
 from app.config import AppConfig
+from app.constants import DEFAULT_SAMPLE_RATE
 from core.compositor import Compositor
 from core.exporter import ExportSettings
 from core.shortcuts import ShortcutRegistry
@@ -1006,12 +1007,8 @@ class MainWindow(QMainWindow):
         self._btn_play.setToolTip("暂停")
 
     def _create_playback_controller(self):
-        from ui.preview_widget import PlaybackController
+        from ui.preview_widget import AudioPreviewPlayer, PlaybackController
 
-        video_clips = [
-            clip for track in self._timeline.tracks if track.type == "video"
-            for clip in track.clips
-        ]
         audio_result = (
             self._recorded_data.get("audio") if self._recorded_data else None
         )
@@ -1021,11 +1018,12 @@ class MainWindow(QMainWindow):
                 self._timeline.set_waveform_provider(
                     lambda: (audio_data, getattr(audio_result, "samplerate",
                                                  44100)))
+        samplerate = int(getattr(
+            audio_result, "samplerate", DEFAULT_SAMPLE_RATE))
         self._playback = PlaybackController(
             self._preview,
             self._compositor,
-            audio_result=audio_result,
-            video_clips=video_clips,
+            audio_player=AudioPreviewPlayer(self._audio_regions, samplerate),
         )
         self._preview.set_fps(int(self._compositor.fps))
         self._playback.set_on_frame_changed(self._update_frame_counter)
