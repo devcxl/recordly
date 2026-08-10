@@ -441,6 +441,7 @@ def test_timeline_signal_connection_is_idempotent():
         clips_changed = _FakeSignal()
         status_message = _FakeSignal()
         playhead_seek_play = _FakeSignal()
+        re_record_requested = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -470,6 +471,9 @@ def test_timeline_signal_connection_is_idempotent():
             pass
 
         def update_status(self, _message):
+            pass
+
+        def _on_re_record_requested(self, track_index, clip_index):
             pass
 
     window = FakeWindow()
