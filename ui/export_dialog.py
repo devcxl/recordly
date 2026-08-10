@@ -309,7 +309,9 @@ class ExportDialog(QDialog):
         if self._src_w <= 0 or self._src_h <= 0:
             return None
         if self.is_custom_resolution:
-            w, h = self.custom_width, self.custom_height
+            # 与 exporter 一致：自定义分辨率 clamp 到源尺寸（不放大）
+            w = min(self.custom_width, self._src_w) if self._src_w > 0 else self.custom_width
+            h = min(self.custom_height, self._src_h) if self._src_h > 0 else self.custom_height
         else:
             dims = calculate_export_dimensions(
                 self._src_w, self._src_h, self.aspect_ratio,

@@ -115,17 +115,16 @@ class ExportWorker(QObject):
     def run(self):
         # fill_crop_ratio → 物化为 crop_region（复用现有裁剪渲染与尺寸计算路径），
         # 导出结束后恢复 compositor 原状态（settings 用完即弃无需恢复）
-        fill_region = None
         restored_crop = None
         s = self._settings
         if s.fill_crop_ratio:
-            fill_region = calculate_fill_crop_region(
+            region = calculate_fill_crop_region(
                 self._compositor.width, self._compositor.height,
                 s.fill_crop_ratio)
-            if fill_region is not None:
+            if region is not None:
                 restored_crop = self._compositor.crop_region
-                s.crop_region = fill_region
-                self._compositor.set_crop(fill_region)
+                s.crop_region = region
+                self._compositor.set_crop(region)
         try:
             if s.format == "gif":
                 self._export_gif()

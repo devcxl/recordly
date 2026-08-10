@@ -91,6 +91,26 @@ class TestSizePreview:
         dialog._custom_height.setValue(480)
         assert dialog.size_preview.text() == "输出尺寸: 640 × 480"
 
+    def test_preview_clamps_custom_resolution_to_source(self, qapp):
+        """自定义分辨率超出源尺寸时 clamp（与 exporter 一致，不放大）"""
+        dialog = _make_dialog(qapp)
+        dialog.set_source_size(640, 480)
+        dialog.resolution_combo.setCurrentText("自定义...")
+        dialog._custom_width.setValue(1920)
+        dialog._custom_height.setValue(1080)
+        assert dialog.size_preview.text() == "输出尺寸: 640 × 480"
+
+    def test_preview_custom_resolution_with_fill_ratio(self, qapp):
+        """自定义分辨率 + fill 裁剪组合：clamp 后按比例裁剪"""
+        dialog = _make_dialog(qapp)
+        dialog.set_source_size(1920, 1080)
+        dialog.resolution_combo.setCurrentText("自定义...")
+        dialog._custom_width.setValue(800)
+        dialog._custom_height.setValue(600)
+        dialog.crop_combo.setCurrentText("1:1")
+        # fill 区域基于源 1920×1080 → 宽比例 0.5625 → 800×0.5625=450
+        assert dialog.size_preview.text() == "输出尺寸: 450 × 600"
+
 
 def test_cancel_button_is_visually_deemphasized(qapp):
     """取消按钮使用灰色弱化样式，避免视觉引导误触"""
