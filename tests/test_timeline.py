@@ -1958,3 +1958,152 @@ class TestTimelineCrossTrackAndOverlap:
         clip = w.tracks[0].clips[0]
         assert clip.start == pytest.approx(5.0)
         assert w._snap_alignment_time == pytest.approx(5.0)
+
+
+class TestTimelineMultiSelect:
+    """T3c: 多选、批量删除、批量移动"""
+
+    @staticmethod
+    def _press_clip(w, track_index, clip_index, modifiers=None):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT
+
+        if modifiers is None:
+            modifiers = Qt.KeyboardModifier(Qt.NoModifier)
+        clip = w.tracks[track_index].clips[clip_index]
+        pos = QPointF(
+            w._time_to_x((clip.start + clip.end) / 2),
+            RULER_HEIGHT + track_index * TRACK_HEIGHT + TRACK_HEIGHT / 2,
+        )
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, pos,
+            Qt.LeftButton, Qt.LeftButton, modifiers,
+        ))
+
+    def test_ctrl_click_adds_to_multi_selection(self, qapp):
+        from PyQt5.QtCore import Qt
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        self._press_clip(w, 0, 0)
+        self._press_clip(w, 0, 1, Qt.ControlModifier)
+
+        assert w._multi_selected == {(0, 0), (0, 1)}
+
+    def test_ctrl_click_again_deselects(self, qapp):
+        from PyQt5.QtCore import Qt
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        self._press_clip(w, 0, 0)
+        self._press_clip(w, 0, 1, Qt.ControlModifier)
+        self._press_clip(w, 0, 1, Qt.ControlModifier)
+
+        assert w._multi_selected == {(0, 0)}
+
+    def test_plain_click_resets_multi_selection(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+        ])])
+
+        self._press_clip(w, 0, 0)
+        self._press_clip(w, 0, 1)
+        assert w._multi_selected == {(0, 1)}
+
+    def test_delete_selected_deletes_all_multi_selected(self, qapp):
+        from PyQt5.QtCore import Qt
+        from core.commands import CompositeCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+            Clip(type="video", start=10.0, end=12.0),
+        ])])
+
+        self._press_clip(w, 0, 0)
+        self._press_clip(w, 0, 2, Qt.ControlModifier)
+
+        w.delete_selected()
+
+        assert len(w.tracks[0].clips) == 1
+        assert w.tracks[0].clips[0].start == 6.0
+        assert len(w._undo_stack) == 1
+        assert isinstance(w._undo_stack[-1], CompositeCommand)
+
+        w.undo()
+        assert len(w.tracks[0].clips) == 3
+        w.redo()
+        assert len(w.tracks[0].clips) == 1
+
+    def test_drag_moves_all_multi_selected_clips(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.commands import CompositeCommand
+        from core.project import Clip, Track
+        from ui.timeline import RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget
+
+        w = TimelineWidget()
+        w.duration = 20.0
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=1.0, end=3.0),
+            Clip(type="video", start=6.0, end=8.0),
+            Clip(type="video", start=10.0, end=12.0),
+        ])])
+
+        self._press_clip(w, 0, 1)
+        self._press_clip(w, 0, 2, Qt.ControlModifier)
+
+        # 拖动 clip2 向右 2s（0, 1 是主选中）
+        clip = w.tracks[0].clips[1]
+        y = RULER_HEIGHT + TRACK_HEIGHT / 2
+        press = QPointF(w._time_to_x(7.0), y)
+        move = QPointF(w._time_to_x(9.0), y)
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, move,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier,
+        ))
+        w.mouseReleaseEvent(QMouseEvent(
+            QEvent.MouseButtonRelease, move,
+            Qt.LeftButton, Qt.NoButton, Qt.NoModifier,
+        ))
+
+        assert (w.tracks[0].clips[1].start, w.tracks[0].clips[1].end) == (
+            8.0, 10.0)
+        # clip3 跟随移动 2s
+        assert (w.tracks[0].clips[2].start, w.tracks[0].clips[2].end) == (
+            12.0, 14.0)
+        assert len(w._undo_stack) == 1
+        assert isinstance(w._undo_stack[-1], CompositeCommand)
+
+        w.undo()
+        assert (w.tracks[0].clips[2].start, w.tracks[0].clips[2].end) == (
+            10.0, 12.0)
