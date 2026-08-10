@@ -2378,7 +2378,8 @@ class TestReRecordContextMenu:
             Clip(type="audio", start=0.0, end=5.0),
         ])])
         emitted = []
-        w.re_record_requested.connect(emitted.append)
+        w.re_record_requested.connect(
+            lambda ti, ci: emitted.append((ti, ci)))
         pos = QPoint(w._time_to_x(2.0), RULER_HEIGHT + TRACK_HEIGHT // 2)
         menu = w._build_context_menu(pos)
 
