@@ -303,9 +303,8 @@ def test_frame_update_shows_time_and_follows_playhead():
     assert window._timeline_scroll.args[0] == 375
 
 
-def test_playback_receives_recorded_audio_and_video_edit_map(monkeypatch):
+def test_playback_receives_regions_based_audio_player(monkeypatch):
     from types import SimpleNamespace
-    from core.project import Clip, Track
     from app.main_window import MainWindow
     import ui.preview_widget as preview_module
 
@@ -319,20 +318,54 @@ def test_playback_receives_recorded_audio_and_video_edit_map(monkeypatch):
             captured["callback"] = callback
 
     monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
-    audio = object()
-    video_clip = Clip(type="video", start=0, end=2)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
-            _compositor=SimpleNamespace(fps=30),
-        _recorded_data={"audio": audio},
-        _timeline=SimpleNamespace(tracks=[Track(type="video", clips=[video_clip])]),
+        _compositor=SimpleNamespace(fps=30),
+        _recorded_data={"audio": SimpleNamespace(samplerate=48000)},
+        _audio_regions=[],
+        _timeline=SimpleNamespace(tracks=[]),
         _update_frame_counter=lambda _idx: None,
     )
 
     MainWindow._create_playback_controller(window)
 
-    assert captured["audio_result"] is audio
-    assert captured["video_clips"] == [video_clip]
+    player = captured["audio_player"]
+    assert isinstance(player, preview_module.AudioPreviewPlayer)
+    assert player.samplerate == 48000
+    assert "audio_result" not in captured
+    assert "video_clips" not in captured
+
+
+def test_playback_falls_back_to_default_samplerate(monkeypatch):
+    from types import SimpleNamespace
+    from app.constants import DEFAULT_SAMPLE_RATE
+    from app.main_window import MainWindow
+    import ui.preview_widget as preview_module
+
+    captured = {}
+
+    class FakePlayback:
+        def __init__(self, widget, compositor, **kwargs):
+            captured.update(kwargs)
+
+        def set_on_frame_changed(self, callback):
+            captured["callback"] = callback
+
+    monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
+    window = SimpleNamespace(
+        _preview=SimpleNamespace(set_fps=lambda fps: None),
+        _compositor=SimpleNamespace(fps=30),
+        _recorded_data=None,
+        _audio_regions=[],
+        _timeline=SimpleNamespace(tracks=[]),
+        _update_frame_counter=lambda _idx: None,
+    )
+
+    MainWindow._create_playback_controller(window)
+
+    player = captured["audio_player"]
+    assert isinstance(player, preview_module.AudioPreviewPlayer)
+    assert player.samplerate == DEFAULT_SAMPLE_RATE
 
 
 def test_recording_duration_prefers_capture_timestamps_over_frame_count():

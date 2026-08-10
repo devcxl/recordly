@@ -1,7 +1,26 @@
 """Tests for ui/preview_widget.py — 需要 PyQt5 可用环境"""
 
+import wave
+
 import pytest
 import numpy as np
+
+
+def _write_wav(path: str, data, samplerate: int):
+    """写入 16-bit PCM WAV（等价 core 导出逻辑，纯 wave 模块）"""
+    arr = np.asarray(data, dtype=np.float32)
+    arr = np.clip(arr, -1.0, 1.0)
+    if arr.ndim == 1:
+        channels = 1
+        arr = arr.reshape(-1, 1)
+    else:
+        channels = arr.shape[1]
+    samples = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
 
 
 def _has_pyqt5():
@@ -217,59 +236,126 @@ class TestPlaybackController:
 
 
 class TestAudioPreviewPlayer:
-    def test_builds_audio_for_trimmed_and_sped_up_video_clips(self):
-        from core.audio_capture import AudioResult
-        from core.project import Clip
+    def test_timeline_data_matches_compose_audio(self, tmp_path):
+        """相同 regions 下 timeline_data == compose_audio 输出（逐样本）"""
+        from core.audio_mix import compose_audio
+        from core.project import AudioRegion
         from ui.preview_widget import AudioPreviewPlayer
 
-        audio = AudioResult(
-            data=np.arange(20, dtype=np.float32).reshape(-1, 1),
-            samplerate=10,
-            channels=1,
-        )
-        clips = [Clip(
-            type="video", start=0.0, end=0.5,
-            source_start=1.0, source_end=2.0, speed=2.0,
+        samplerate = 1000
+        mic_data = np.array([
+            [0.10, -0.20], [0.30, 0.40], [-0.50, 0.60],
+            [0.70, -0.80], [0.90, 1.00],
+        ], dtype=np.float32)
+        sys_data = np.array([
+            [0.05, 0.15], [-0.25, 0.35], [0.45, -0.55],
+            [0.65, 0.75], [-0.85, 0.95],
+        ], dtype=np.float32)
+        mic_path = str(tmp_path / "mic.wav")
+        sys_path = str(tmp_path / "sys.wav")
+        _write_wav(mic_path, mic_data, samplerate)
+        _write_wav(sys_path, sys_data, samplerate)
+
+        regions = [
+            AudioRegion(start_ms=0.0, end_ms=5.0, source_start_ms=0.0,
+                        source_end_ms=5.0, audio_path=mic_path, volume=1.0),
+            AudioRegion(start_ms=0.0, end_ms=5.0, source_start_ms=0.0,
+                        source_end_ms=5.0, audio_path=sys_path, volume=1.0),
+        ]
+        player = AudioPreviewPlayer(
+            regions, samplerate, stream_factory=lambda **_: None)
+
+        expected = compose_audio(regions, samplerate)
+        assert expected is not None
+        np.testing.assert_array_equal(player.timeline_data, expected)
+
+    def test_output_callback_position_is_the_audio_master_clock(self, tmp_path):
+        from core.project import AudioRegion
+        from ui.preview_widget import AudioPreviewPlayer
+
+        path = str(tmp_path / "audio.wav")
+        _write_wav(path, np.ones((20, 1), dtype=np.float32), 10)
+        regions = [AudioRegion(
+            start_ms=0.0, end_ms=2000.0, source_start_ms=0.0,
+            source_end_ms=2000.0, audio_path=path, volume=1.0,
         )]
-
-        player = AudioPreviewPlayer(audio, clips, stream_factory=lambda **_: None)
-
-        assert player.timeline_data[:, 0].tolist() == [10, 12, 14, 16, 18]
-
-    def test_output_callback_position_is_the_audio_master_clock(self):
-        from core.audio_capture import AudioResult
-        from ui.preview_widget import AudioPreviewPlayer
-
-        audio = AudioResult(
-            data=np.ones((20, 1), dtype=np.float32),
-            samplerate=10,
-            channels=1,
-        )
-        player = AudioPreviewPlayer(audio, [], stream_factory=lambda **_: None)
-        output = np.empty((4, 1), dtype=np.float32)
+        player = AudioPreviewPlayer(
+            regions, 10, stream_factory=lambda **_: None)
+        output = np.empty((4, 2), dtype=np.float32)
 
         player.seek(0.5)
         player._audio_callback(output, 4, None, None)
 
-        assert output.tolist() == [[1.0], [1.0], [1.0], [1.0]]
+        # int16 wav 量化后 ≈1.0（32767/32768），用容差断言
+        assert np.allclose(output, 1.0, atol=1e-3)
         assert player.current_time == pytest.approx(0.9)
 
     def test_empty_audio_falls_back_without_opening_output_device(self):
-        from core.audio_capture import AudioResult
         from ui.preview_widget import AudioPreviewPlayer
 
         opened = []
-        audio = AudioResult(
-            data=np.empty((0, 1), dtype=np.float32),
-            samplerate=10,
-            channels=1,
-        )
         player = AudioPreviewPlayer(
-            audio, [], stream_factory=lambda **kwargs: opened.append(kwargs)
+            [], 10, stream_factory=lambda **kwargs: opened.append(kwargs)
         )
 
         assert player.start() is False
         assert opened == []
+
+    def test_edits_change_timeline_data_like_compose_audio(self, tmp_path):
+        """删除/移动/音量编辑后 timeline_data 与 compose_audio 语义一致变化"""
+        from core.audio_mix import compose_audio
+        from core.project import AudioRegion
+        from ui.preview_widget import AudioPreviewPlayer
+
+        samplerate = 1000
+        data = np.array([
+            [0.10, -0.20], [0.30, 0.40], [-0.50, 0.60],
+            [0.70, -0.80], [0.90, 1.00],
+        ], dtype=np.float32)
+        path = str(tmp_path / "a.wav")
+        _write_wav(path, data, samplerate)
+
+        def player_for(regions):
+            return AudioPreviewPlayer(
+                regions, samplerate, stream_factory=lambda **_: None)
+
+        # 基线：一个 0-5ms 的全量 region
+        base = [AudioRegion(
+            start_ms=0.0, end_ms=5.0, source_start_ms=0.0,
+            source_end_ms=5.0, audio_path=path, volume=1.0,
+        )]
+        base_player = player_for(base)
+        assert base_player.timeline_data is not None
+        np.testing.assert_array_equal(
+            base_player.timeline_data, compose_audio(base, samplerate))
+
+        # 删除（regions 为空）→ timeline_data 变化（静音）
+        deleted_player = player_for([])
+        assert deleted_player.timeline_data.size == 0
+        assert deleted_player.timeline_data.size != base_player.timeline_data.size
+
+        # 移动（start_ms 2.5 → 样本后移，前段静音）
+        moved = [AudioRegion(
+            start_ms=2.5, end_ms=7.5, source_start_ms=0.0,
+            source_end_ms=5.0, audio_path=path, volume=1.0,
+        )]
+        moved_player = player_for(moved)
+        np.testing.assert_array_equal(
+            moved_player.timeline_data, compose_audio(moved, samplerate))
+        assert moved_player.timeline_data.shape[0] == 8
+        assert moved_player.timeline_data[:2].tolist() == [[0.0, 0.0], [0.0, 0.0]]
+
+        # 音量 0.5 → 样本减半
+        quiet = [AudioRegion(
+            start_ms=0.0, end_ms=5.0, source_start_ms=0.0,
+            source_end_ms=5.0, audio_path=path, volume=0.5,
+        )]
+        quiet_player = player_for(quiet)
+        np.testing.assert_array_equal(
+            quiet_player.timeline_data, compose_audio(quiet, samplerate))
+        assert quiet_player.timeline_data.shape == base_player.timeline_data.shape
+        assert not np.array_equal(quiet_player.timeline_data,
+                                  base_player.timeline_data)
 
 
 class TestZoomOverlay:

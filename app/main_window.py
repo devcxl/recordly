@@ -21,6 +21,7 @@ from PyQt5.QtCore import QUrl
 from PyQt5.QtGui import QDesktopServices
 
 from app.config import AppConfig
+from app.constants import DEFAULT_SAMPLE_RATE
 from core.compositor import Compositor
 from core.exporter import ExportSettings
 from core.shortcuts import ShortcutRegistry
@@ -1006,12 +1007,8 @@ class MainWindow(QMainWindow):
         self._btn_play.setToolTip("暂停")
 
     def _create_playback_controller(self):
-        from ui.preview_widget import PlaybackController
+        from ui.preview_widget import AudioPreviewPlayer, PlaybackController
 
-        video_clips = [
-            clip for track in self._timeline.tracks if track.type == "video"
-            for clip in track.clips
-        ]
         audio_result = (
             self._recorded_data.get("audio") if self._recorded_data else None
         )
@@ -1021,11 +1018,12 @@ class MainWindow(QMainWindow):
                 self._timeline.set_waveform_provider(
                     lambda: (audio_data, getattr(audio_result, "samplerate",
                                                  44100)))
+        samplerate = int(getattr(
+            audio_result, "samplerate", DEFAULT_SAMPLE_RATE))
         self._playback = PlaybackController(
             self._preview,
             self._compositor,
-            audio_result=audio_result,
-            video_clips=video_clips,
+            audio_player=AudioPreviewPlayer(self._audio_regions, samplerate),
         )
         self._preview.set_fps(int(self._compositor.fps))
         self._playback.set_on_frame_changed(self._update_frame_counter)
@@ -1205,11 +1203,7 @@ class MainWindow(QMainWindow):
         ]
         self._timeline.duration = max(all_clip_ends, default=0.1)
         self._compositor.load_clips(video_clips, self._timeline.duration)
-        if self._playback:
-            current_frame = self._playback.current_frame
-            self._playback.stop()
-            self._create_playback_controller()
-            self._playback.seek(current_frame)
+        # 先同步 audio_regions，再重建播放器（播放器消费 regions，顺序不能反）
         audio_clips = [
             c for t in self._timeline.tracks
             if t.type in ("audio", "audio_system", "audio_extra")
@@ -1217,6 +1211,11 @@ class MainWindow(QMainWindow):
         ]
         self._audio_regions = sync_audio_regions_from_clips(
             audio_clips, self._audio_regions)
+        if self._playback:
+            current_frame = self._playback.current_frame
+            self._playback.stop()
+            self._create_playback_controller()
+            self._playback.seek(current_frame)
         zoom_clips = [
             c for t in self._timeline.tracks if t.type == "zoom"
             for c in t.clips

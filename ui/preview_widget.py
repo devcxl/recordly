@@ -32,6 +32,7 @@ from PIL import Image
 import numpy as np
 import sounddevice as sd
 from app.constants import DEFAULT_FPS
+from core.audio_mix import compose_audio
 
 
 class ZoomOverlay(QWidget):
@@ -313,12 +314,14 @@ class PreviewWidget(QWidget):
 class AudioPreviewPlayer:
     """将编辑后的时间线音频送入声卡，并暴露已消费样本的时间。"""
 
-    def __init__(self, audio_result, video_clips=None, stream_factory=None):
-        self.samplerate = int(audio_result.samplerate)
-        self.channels = int(audio_result.channels)
+    def __init__(self, audio_regions, samplerate, duration=None,
+                 stream_factory=None):
+        self.samplerate = int(samplerate)
         self._stream_factory = stream_factory or sd.OutputStream
-        self._timeline_data = self._build_timeline_data(
-            audio_result.data, video_clips or []
+        composed = compose_audio(audio_regions, samplerate, duration)
+        self._timeline_data = (
+            composed if composed is not None
+            else np.zeros((0, 1), dtype=np.float32)
         )
         self._cursor = 0
         self._stream = None
@@ -343,43 +346,6 @@ class AudioPreviewPlayer:
     @property
     def finished(self) -> bool:
         return self._cursor >= len(self._timeline_data)
-
-    def _normalise_data(self, data) -> np.ndarray:
-        array = np.asarray(data, dtype=np.float32)
-        if array.ndim == 1:
-            array = array.reshape(-1, self.channels)
-        return array
-
-    def _build_timeline_data(self, data, clips) -> np.ndarray:
-        source = self._normalise_data(data)
-        if not clips:
-            return source.copy()
-
-        clips = sorted(clips, key=lambda clip: clip.start)
-        frame_count = max(0, round(max(clip.end for clip in clips) * self.samplerate))
-        output = np.zeros((frame_count, source.shape[1]), dtype=np.float32)
-        source_axis = np.arange(len(source), dtype=np.float64)
-
-        for clip in clips:
-            out_start = max(0, round(clip.start * self.samplerate))
-            out_end = min(frame_count, round(clip.end * self.samplerate))
-            if out_end <= out_start:
-                continue
-            source_start = max(0.0, clip.source_start * self.samplerate)
-            speed = max(float(clip.speed), 0.01)
-            positions = source_start + np.arange(out_end - out_start) * speed
-            source_limit = len(source)
-            if clip.source_end is not None:
-                source_limit = min(source_limit, clip.source_end * self.samplerate)
-            valid = positions < source_limit
-            if not valid.any() or not len(source):
-                continue
-            for channel in range(source.shape[1]):
-                destination = output[out_start:out_end, channel]
-                destination[valid] = np.interp(
-                    positions[valid], source_axis, source[:, channel]
-                ) * float(clip.volume)
-        return output
 
     def _audio_callback(self, outdata, frames, _time_info, _status):
         end = min(self._cursor + frames, len(self._timeline_data))
@@ -449,7 +415,9 @@ class PlaybackController:
         self._on_frame_changed = None
         self._audio_player = audio_player
         if self._audio_player is None and audio_result is not None:
-            self._audio_player = AudioPreviewPlayer(audio_result, video_clips)
+            # 向后兼容分支：无注入 player 时创建空播放器（新签名 regions 为空），
+            # 避免旧 AudioPreviewPlayer(audio_result, video_clips) 签名调用崩溃
+            self._audio_player = AudioPreviewPlayer([], 44100)
         self._audio_clock = False
 
     def _get_total_frames(self) -> int:
