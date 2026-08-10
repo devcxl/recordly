@@ -36,6 +36,8 @@ ZOOM_STEP_FACTOR = 1.25
 
 class TimelineWidget(QWidget):
     playhead_changed = pyqtSignal(float)
+    playhead_drag_started = pyqtSignal()
+    playhead_drag_finished = pyqtSignal(float)
     zoom_double_clicked = pyqtSignal(float, object)
     zoom_add_requested = pyqtSignal(float)
     zoom_clip_selected = pyqtSignal(object)
@@ -317,6 +319,7 @@ class TimelineWidget(QWidget):
             self._playhead_s = min(
                 self._x_to_time(int(pos.x())), self._duration)
             self._drag_state = "playhead"
+            self.playhead_drag_started.emit()
             self.update()
             self.playhead_changed.emit(self._playhead_s)
             return
@@ -376,6 +379,7 @@ class TimelineWidget(QWidget):
         self._playhead_s = min(
             self._x_to_time(int(pos.x())), self._duration)
         self._drag_state = "playhead"
+        self.playhead_drag_started.emit()
         self.update()
         self.playhead_changed.emit(self._playhead_s)
 
@@ -523,12 +527,15 @@ class TimelineWidget(QWidget):
         self._snap_alignment_time = None
 
         if self._drag_state not in ("move", "resize_left", "resize_right"):
+            was_playhead = self._drag_state == "playhead"
             self._drag_state = None
             self._drag_track = -1
             self._drag_clip = -1
             self._drag_orig_track = -1
             self._drag_orig_clip = -1
             self._batch_drag_orig = {}
+            if was_playhead:
+                self.playhead_drag_finished.emit(self._playhead_s)
             self.update()
             return
 

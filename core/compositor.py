@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 import os
 from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Generator, Callable
 import numpy as np
@@ -62,6 +63,8 @@ class Compositor:
         self._frame_times: list[float] = []
         self._clips: list | None = None
         self._timeline_duration: float | None = None
+        self._preview_cache: OrderedDict[int, Image.Image] = OrderedDict()
+        self._preview_cache_limit = 24
         self._crop_region = None  # CropRegion | None
         self._monitor_left = 0
         self._monitor_top = 0
@@ -104,6 +107,7 @@ class Compositor:
     def load_frames(self, frames: list[CapturedFrame]):
         self._close_frames_data()
         self._frames = list(frames)
+        self.clear_preview_cache()
         if frames:
             self._base_time = frames[0].timestamp
             self._frame_times = [
@@ -278,12 +282,15 @@ class Compositor:
 
     def set_zoom(self, rect: tuple | None):
         self._zoom_rect = rect
+        self.clear_preview_cache()
 
     def load_camera(self, camera):
         self._camera = camera
+        self.clear_preview_cache()
 
     def load_manual_zoom_clips(self, clips: list):
         self._manual_zoom_clips = sorted(clips or [], key=lambda c: c.start)
+        self.clear_preview_cache()
 
     def load_clips(self, clips: list, timeline_duration: float | None = None):
         """加载时间线 video clip 列表（用于速度感知渲染）。
@@ -291,10 +298,12 @@ class Compositor:
         为 None 时退化为按 video clip 末点计算。"""
         self._clips = sorted(clips or [], key=lambda c: c.start)
         self._timeline_duration = timeline_duration
+        self.clear_preview_cache()
 
     def set_crop(self, crop):
         from core.project import CropRegion
         self._crop_region = crop
+        self.clear_preview_cache()
 
     def register_effect(self, name: str, effect: Effect):
         self._effects[name] = effect
@@ -554,6 +563,18 @@ class Compositor:
         return img
 
     def compose_index(self, idx: int) -> Image.Image | None:
+        cached = self._preview_cache.get(idx)
+        if cached is not None:
+            self._preview_cache.move_to_end(idx)
+            return cached
+        frame = self._compose_index_uncached(idx)
+        if frame is not None:
+            self._preview_cache[idx] = frame
+            while len(self._preview_cache) > self._preview_cache_limit:
+                self._preview_cache.popitem(last=False)
+        return frame
+
+    def _compose_index_uncached(self, idx: int) -> Image.Image | None:
         if self._clips is not None:
             if 0 <= idx < self.total_output_frames:
                 source_idx = self._source_index_at(idx / self.fps)
@@ -566,6 +587,10 @@ class Compositor:
         if 0 <= idx < len(self._frames):
             return self.compose(self._frames[idx], idx / self.fps, preview=True)
         return None
+
+    def clear_preview_cache(self):
+        """剪辑/参数变更后使预览缓存失效。"""
+        self._preview_cache.clear()
 
     @property
     def total_output_frames(self) -> int:
@@ -658,6 +683,7 @@ class Compositor:
 
     def set_preview_quality(self, quality: float):
         self._preview_quality = max(0.1, min(1.0, quality))
+        self.clear_preview_cache()
 
     def _resize_filter(self, preview: bool, zoom: bool = False):
         if zoom:

@@ -400,6 +400,8 @@ def test_timeline_signal_connection_is_idempotent():
 
     class FakeTimeline:
         playhead_changed = _FakeSignal()
+        playhead_drag_started = _FakeSignal()
+        playhead_drag_finished = _FakeSignal()
         zoom_double_clicked = _FakeSignal()
         zoom_add_requested = _FakeSignal()
         zoom_clip_selected = _FakeSignal()
@@ -411,6 +413,12 @@ def test_timeline_signal_connection_is_idempotent():
         _timeline = FakeTimeline()
 
         def _on_timeline_seek(self):
+            pass
+
+        def _on_playhead_drag_started(self):
+            pass
+
+        def _on_playhead_drag_finished(self, sec):
             pass
 
         def _on_zoom_double_clicked(self):
