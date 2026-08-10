@@ -415,7 +415,9 @@ class PlaybackController:
         self._on_frame_changed = None
         self._audio_player = audio_player
         if self._audio_player is None and audio_result is not None:
-            self._audio_player = AudioPreviewPlayer(audio_result, video_clips)
+            # 向后兼容分支：无注入 player 时创建空播放器（新签名 regions 为空），
+            # 避免旧 AudioPreviewPlayer(audio_result, video_clips) 签名调用崩溃
+            self._audio_player = AudioPreviewPlayer([], 44100)
         self._audio_clock = False
 
     def _get_total_frames(self) -> int:

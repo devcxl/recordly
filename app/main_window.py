@@ -1203,11 +1203,7 @@ class MainWindow(QMainWindow):
         ]
         self._timeline.duration = max(all_clip_ends, default=0.1)
         self._compositor.load_clips(video_clips, self._timeline.duration)
-        if self._playback:
-            current_frame = self._playback.current_frame
-            self._playback.stop()
-            self._create_playback_controller()
-            self._playback.seek(current_frame)
+        # 先同步 audio_regions，再重建播放器（播放器消费 regions，顺序不能反）
         audio_clips = [
             c for t in self._timeline.tracks
             if t.type in ("audio", "audio_system", "audio_extra")
@@ -1215,6 +1211,11 @@ class MainWindow(QMainWindow):
         ]
         self._audio_regions = sync_audio_regions_from_clips(
             audio_clips, self._audio_regions)
+        if self._playback:
+            current_frame = self._playback.current_frame
+            self._playback.stop()
+            self._create_playback_controller()
+            self._playback.seek(current_frame)
         zoom_clips = [
             c for t in self._timeline.tracks if t.type == "zoom"
             for c in t.clips
