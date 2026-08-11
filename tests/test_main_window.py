@@ -683,6 +683,7 @@ def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
         _preview=preview,
         _editing_zoom_clip=None,
         _audio_regions=[],
+        _sync_audio_regions=lambda: None,
         _on_zoom_rect_changed=lambda *_args: None,
     )
 
@@ -751,6 +752,8 @@ def test_on_clips_changed_syncs_three_audio_tracks():
         _editing_zoom_clip=None,
         _audio_regions=[],
     )
+    window._sync_audio_regions = MethodType(
+        MainWindow._sync_audio_regions, window)
 
     MainWindow._on_clips_changed(window)
 
