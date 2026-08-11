@@ -796,7 +796,11 @@ class MainWindow(QMainWindow):
             self._enable_playback_controls(True)
             total = len(self._compositor.frames)
             self._frame_label.setText(f"1 / {total}")
+            # 先写 wav（populate 时 source_path 可判定）再建轨，随后同步 regions
+            # （保证预览播放器拿到有效音频 → 音频时钟驱动，速度与时长正确）
+            self._persist_audio_wavs()
             self._populate_timeline()
+            self._sync_audio_regions()
             self._bind_thumbnail_provider()
             self._create_playback_controller()
             self._playback.seek(0)
@@ -807,6 +811,26 @@ class MainWindow(QMainWindow):
         self._switch_to_editor()
         self.showNormal()
         self.raise_()
+
+    def _persist_audio_wavs(self) -> tuple[str, str]:
+        """将内存 mic/system 录音写盘，返回 (mic_path, system_path) 相对路径。
+        录制后须在 _populate_timeline 之前调用，保证轨道 source_path 可判定。"""
+        mic_path = ""
+        system_path = ""
+        if not self._recorded_data or not self._project_dir:
+            return mic_path, system_path
+        project_dir = Path(self._project_dir)
+        mic_audio = self._recorded_data.get("mic_audio")
+        if mic_audio is not None and len(mic_audio.data) > 0:
+            mic_path = "audio_mic.wav"
+            _write_wav(str(project_dir / mic_path), mic_audio.data,
+                       mic_audio.samplerate)
+        sys_audio = self._recorded_data.get("system_audio")
+        if sys_audio is not None and len(sys_audio.data) > 0:
+            system_path = "audio_system.wav"
+            _write_wav(str(project_dir / system_path), sys_audio.data,
+                       sys_audio.samplerate)
+        return mic_path, system_path
 
     def _finalize_project(self):
         """录制完成后直接保存 project.json（帧数据已在 frames.data 中）"""
@@ -826,14 +850,7 @@ class MainWindow(QMainWindow):
 
             mic_path = ""
             system_path = ""
-            mic_audio = self._recorded_data.get("mic_audio")
-            if mic_audio is not None and len(mic_audio.data) > 0:
-                mic_path = "audio_mic.wav"
-                _write_wav(str(project_dir / mic_path), mic_audio.data, mic_audio.samplerate)
-            sys_audio = self._recorded_data.get("system_audio")
-            if sys_audio is not None and len(sys_audio.data) > 0:
-                system_path = "audio_system.wav"
-                _write_wav(str(project_dir / system_path), sys_audio.data, sys_audio.samplerate)
+            mic_path, system_path = self._persist_audio_wavs()
 
             project.source = SourceInfo(
                 video="frames.data",
@@ -1079,6 +1096,16 @@ class MainWindow(QMainWindow):
         return None
         return None
 
+    def _sync_audio_regions(self):
+        """把时间线三轨（audio/audio_system/audio_extra）clip 同步进 _audio_regions"""
+        audio_clips = [
+            c for t in self._timeline.tracks
+            if t.type in ("audio", "audio_system", "audio_extra")
+            for c in t.clips
+        ]
+        self._audio_regions = sync_audio_regions_from_clips(
+            audio_clips, self._audio_regions)
+
     def _create_playback_controller(self):
         from ui.preview_widget import AudioPreviewPlayer, PlaybackController
 
@@ -1089,10 +1116,18 @@ class MainWindow(QMainWindow):
             self._timeline.set_waveform_provider(self._track_audio_provider)
         samplerate = int(getattr(
             audio_result, "samplerate", DEFAULT_SAMPLE_RATE))
+        # 预览音频以视频时长为界截断（与导出语义一致）：
+        # 超长 region（如超出视频的 BGM）不驱动慢放，避免音频时钟拖长播放
+        total_frames = getattr(self._compositor, "total_output_frames", 0) or 0
+        video_duration = (
+            total_frames / max(self._compositor.fps, 1)
+            if total_frames else None
+        )
         self._playback = PlaybackController(
             self._preview,
             self._compositor,
-            audio_player=AudioPreviewPlayer(self._audio_regions, samplerate),
+            audio_player=AudioPreviewPlayer(
+                self._audio_regions, samplerate, duration=video_duration),
         )
         self._preview.set_fps(int(self._compositor.fps))
         self._playback.set_on_frame_changed(self._update_frame_counter)
@@ -1705,13 +1740,16 @@ class MainWindow(QMainWindow):
             elif track.type == "zoom":
                 comp.load_manual_zoom_clips(track.clips)
 
+        # regions 恢复 + 三轨 sync 必须先于播放器创建（播放器消费 regions）
+        self._audio_regions = project.audio_regions[:]
+        self._sync_audio_regions()
+
         if comp._frames:
             self._bind_thumbnail_provider()
             self._create_playback_controller()
             self._playback.seek(0)
             self._connect_timeline_signals()
 
-        self._audio_regions = project.audio_regions[:]
         if self._audio_regions:
             self._update_audio_timeline()
 

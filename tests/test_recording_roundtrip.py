@@ -11,7 +11,7 @@ class TestAutosaveCreatesRequiredArtifacts:
     """_finalize_project 生成 frames.idx 和完整 project.json"""
 
     def test_finalize_project_creates_frames_idx_and_project_json(self, tmp_path):
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         from app.main_window import MainWindow
         from core.compositor import Compositor
         from core.project import Project, Track, Clip
@@ -41,6 +41,8 @@ class TestAutosaveCreatesRequiredArtifacts:
             _get_recording_duration=lambda: 1.0,
             _collect_project_state=lambda project: None, _project_name="test_recording",
         )
+        window._persist_audio_wavs = MethodType(
+            MainWindow._persist_audio_wavs, window)
         MainWindow._finalize_project(window)
 
         assert not notifications, f"不应有错误通知: {notifications}"
@@ -56,7 +58,7 @@ class TestCursorTimebase:
     """光标时间基 — 保存时转为相对 compositor base_time 的时间戳"""
 
     def test_cursor_events_have_relative_timestamps_after_save(self, tmp_path):
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         from app.main_window import MainWindow
         from core.compositor import Compositor
         from core.project import Project
@@ -162,7 +164,7 @@ class TestControlState:
     """控件状态 — 无帧项目不启用播放/裁剪/导出"""
 
     def _make_mock_window(self, frames):
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         def btn():
             ns = SimpleNamespace()
             ns.state = None
@@ -259,7 +261,7 @@ class TestMediaPathResolution:
     def test_notifications_on_video_path_violation(self, tmp_path):
         """_on_open_project 在视频路径越界时通知但不崩溃"""
         from functools import partial
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         from app.main_window import MainWindow
         from core.project import Project, SourceInfo
 
@@ -298,6 +300,7 @@ class TestMediaPathResolution:
             _enable_playback_controls=lambda enabled: None,
             _connect_timeline_signals=lambda: None, _switch_to_editor=lambda: None,
             _create_playback_controller=lambda: None,
+            _sync_audio_regions=lambda: None,
             _show_notification=lambda title, msg, level: notified.append(title),
             update_status=lambda text: None,
         )
@@ -316,7 +319,7 @@ class TestAudioHelper:
 
     def test_returns_none_when_no_audio_source(self, tmp_path):
         from app.main_window import _load_project_audio
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         assert _load_project_audio(str(tmp_path), SimpleNamespace(audio_mic="", audio_system="")) is None
 
     def test_returns_none_when_source_is_none(self, tmp_path):
@@ -341,7 +344,7 @@ class TestAudioHelper:
     def test_audio_load_failure_shows_notification(self, tmp_path):
         """_on_open_project 在音频加载失败时通知但继续打开视频"""
         from functools import partial
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         from app.main_window import MainWindow
         from core.project import Project, SourceInfo
 
@@ -382,6 +385,7 @@ class TestAudioHelper:
             _enable_playback_controls=lambda enabled: None,
             _connect_timeline_signals=lambda: None, _switch_to_editor=lambda: None,
             _create_playback_controller=lambda: None,
+            _sync_audio_regions=lambda: None,
             _show_notification=lambda title, msg, level: notified.append(title),
             update_status=lambda text: None,
         )
@@ -401,7 +405,7 @@ class TestFullRoundtrip:
     def test_save_then_reopen_roundtrip(self, tmp_path, monkeypatch):
         import cv2
         from pathlib import Path
-        from types import SimpleNamespace
+        from types import SimpleNamespace, MethodType
         from app.main_window import MainWindow, _write_wav, _load_project_audio
         from core.compositor import Compositor
         from core.project import Project, SourceInfo, Track, Clip
@@ -438,6 +442,8 @@ class TestFullRoundtrip:
             _get_recording_duration=lambda: 10 / 25.0,
             _collect_project_state=lambda project: None, _project_name="roundtrip",
         )
+        window._persist_audio_wavs = MethodType(
+            MainWindow._persist_audio_wavs, window)
         MainWindow._finalize_project(window)
 
         assert os.path.exists(os.path.join(project_dir, "frames.idx"))
@@ -502,6 +508,7 @@ class TestFullRoundtrip:
             _enable_playback_controls=lambda enabled: None,
             _connect_timeline_signals=lambda: None, _switch_to_editor=lambda: None,
             _create_playback_controller=lambda: None,
+            _sync_audio_regions=lambda: None,
             _project_session=None, _recording_controller=None,
             _export_controller=SimpleNamespace(),
             _show_notification=lambda title, msg, level: print(f"REOPEN: {title} {msg}"),
