@@ -145,7 +145,7 @@ def test_rebind_disables_old_shortcuts_and_activates_new_binding(qapp, monkeypat
 
 
 def test_settings_acceptance_updates_shared_registry_and_rebinds(monkeypatch):
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
     from core.shortcuts import ShortcutRegistry
     import ui.settings_dialog as settings_dialog_module
@@ -269,7 +269,7 @@ def test_space_shortcut_ignores_input_focus(qapp, monkeypatch, widget_type):
 
 
 def test_frame_update_shows_time_and_follows_playhead():
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
 
     class FakeLabel:
@@ -336,8 +336,57 @@ def test_playback_receives_regions_based_audio_player(monkeypatch):
     assert "video_clips" not in captured
 
 
-def test_playback_falls_back_to_default_samplerate(monkeypatch):
+def test_playback_player_truncates_to_video_duration(monkeypatch, tmp_path):
+    """预览播放器以视频时长为界截断音频（超长 region 不拖长播放）"""
+    import wave
+    import numpy as np
     from types import SimpleNamespace
+    from app.main_window import MainWindow
+    from core.project import AudioRegion
+    import ui.preview_widget as preview_module
+
+    captured = {}
+
+    class FakePlayback:
+        def __init__(self, widget, compositor, **kwargs):
+            captured.update(kwargs)
+
+        def set_on_frame_changed(self, callback):
+            captured["callback"] = callback
+
+    # 60s 超长 region wav
+    sr = 44100
+    long = np.zeros((sr * 60, 2), dtype=np.float32) + 0.1
+    path = str(tmp_path / "bgm.wav")
+    arr = np.clip(long, -1, 1)
+    s = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(s.tobytes())
+    regions = [AudioRegion(
+        start_ms=0, end_ms=60000, source_start_ms=0,
+        source_end_ms=60000, audio_path=path, volume=1.0)]
+
+    monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
+    window = SimpleNamespace(
+        _preview=SimpleNamespace(set_fps=lambda fps: None),
+        _compositor=SimpleNamespace(fps=30, total_output_frames=360),
+        _recorded_data={"audio": SimpleNamespace(samplerate=sr)},
+        _audio_regions=regions,
+        _timeline=SimpleNamespace(tracks=[]),
+        _update_frame_counter=lambda _idx: None,
+    )
+
+    MainWindow._create_playback_controller(window)
+
+    player = captured["audio_player"]
+    assert player.duration == 12.0  # 360 帧 / 30fps = 12s 截断（非 60s）
+
+
+def test_playback_falls_back_to_default_samplerate(monkeypatch):
+    from types import SimpleNamespace, MethodType
     from app.constants import DEFAULT_SAMPLE_RATE
     from app.main_window import MainWindow
     import ui.preview_widget as preview_module
@@ -369,7 +418,7 @@ def test_playback_falls_back_to_default_samplerate(monkeypatch):
 
 
 def test_recording_duration_prefers_capture_timestamps_over_frame_count():
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
 
     window = SimpleNamespace(
@@ -385,7 +434,7 @@ def test_recording_duration_prefers_capture_timestamps_over_frame_count():
 
 def test_recording_start_error_restores_idle_state():
     import app.main_window as main_window_module
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     errors = []
 
@@ -497,7 +546,7 @@ def test_timeline_signal_connection_is_idempotent():
 def test_zoom_blank_creation_uses_add_clip_defaults_and_returned_object(
         start, expected_end):
     from dataclasses import asdict
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
     from core.project import Clip, Track
 
@@ -558,7 +607,7 @@ def test_zoom_blank_creation_uses_add_clip_defaults_and_returned_object(
 
 
 def test_existing_zoom_clip_only_fills_empty_rect_without_add_command():
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
     from core.project import Clip, Track
 
@@ -593,7 +642,7 @@ def test_existing_zoom_clip_only_fills_empty_rect_without_add_command():
 
 def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
     from dataclasses import asdict
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
     from core.project import Clip, Track
     from ui.timeline import TimelineWidget
@@ -634,6 +683,7 @@ def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
         _preview=preview,
         _editing_zoom_clip=None,
         _audio_regions=[],
+        _sync_audio_regions=lambda: None,
         _on_zoom_rect_changed=lambda *_args: None,
     )
 
@@ -661,7 +711,7 @@ def test_zoom_add_undo_hides_overlay_and_redo_restores_full_clip(qapp):
 
 def test_on_clips_changed_syncs_three_audio_tracks():
     """_on_clips_changed 把 audio / audio_system / audio_extra 三轨 clip 一并 sync 进 _audio_regions"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from app.main_window import MainWindow
     from core.project import Clip, Track
@@ -702,6 +752,8 @@ def test_on_clips_changed_syncs_three_audio_tracks():
         _editing_zoom_clip=None,
         _audio_regions=[],
     )
+    window._sync_audio_regions = MethodType(
+        MainWindow._sync_audio_regions, window)
 
     MainWindow._on_clips_changed(window)
 
@@ -755,7 +807,7 @@ def test_settings_cursor_style_choices_and_save(qapp, monkeypatch):
 
 
 def test_apply_cursor_config_updates_active_effect():
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from app.main_window import MainWindow
 
     class FakeWindow:
@@ -797,7 +849,7 @@ def test_export_dialog_exposes_mp4_fps_and_bitrate(qapp, monkeypatch):
 
 
 def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
 
@@ -896,7 +948,7 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
 
 
 def test_export_entry_is_not_reentrant(monkeypatch):
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from functools import partial
     import app.main_window as main_window_module
     from app.main_window import MainWindow
@@ -1024,7 +1076,7 @@ def test_playhead_seek_play_ignores_empty_frames(monkeypatch):
     """无帧时 playhead_seek_play 静默忽略，不触发 QTimer"""
     import app.main_window as main_window_module
     from app.main_window import MainWindow
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     timer_calls = []
     monkeypatch.setattr(main_window_module.QTimer, "singleShot",
@@ -1043,7 +1095,7 @@ def test_playhead_seek_play_ignores_input_focus(monkeypatch):
     """焦点在输入控件时 playhead_seek_play 静默忽略"""
     import app.main_window as main_window_module
     from app.main_window import MainWindow
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     from PyQt5 import QtWidgets
 
     timer_calls = []
@@ -1075,7 +1127,7 @@ def test_playhead_seek_play_schedules_delayed_playback(monkeypatch):
     """正常路径：播放头位置已设，QTimer.singleShot(0, ...) 被调度"""
     import app.main_window as main_window_module
     from app.main_window import MainWindow
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     timer_calls = []
     monkeypatch.setattr(main_window_module.QTimer, "singleShot",
@@ -1118,7 +1170,7 @@ def test_start_playback_at_initiates_playback(monkeypatch):
     """_start_playback_at：停止当前播放 → 从指定秒数开始播放"""
     import app.main_window as main_window_module
     from app.main_window import MainWindow
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     play_calls = []
     pause_calls = []
@@ -1197,7 +1249,7 @@ def test_timeline_undo_redo_descriptions(qapp):
 def test_is_editor_active_and_safe_rejects_blocked_contexts(
         qapp, monkeypatch, blocked_by):
     """守卫方法在非编辑器语境下返回 False"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
 
@@ -1234,7 +1286,7 @@ def test_is_editor_active_and_safe_rejects_blocked_contexts(
 ])
 def test_is_editor_active_and_safe_rejects_input_focus(qapp, monkeypatch, widget_type):
     """焦点在输入控件上时守卫返回 False"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
     from PyQt5 import QtWidgets
@@ -1263,7 +1315,7 @@ def test_is_editor_active_and_safe_rejects_input_focus(qapp, monkeypatch, widget
 
 def test_is_editor_active_and_safe_allows_safe_editor(qapp, monkeypatch):
     """编辑器在前台且无输入焦点时返回 True"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
     import app.main_window as main_window_module
     from app.main_window import MainWindow
 
@@ -1510,7 +1562,7 @@ def test_playback_toolbar_step_buttons_symmetric():
 def _fake_populate_window(project_dir, wav_names=("audio_mic.wav",
                                                   "audio_system.wav")):
     """构造 _populate_timeline 测试用的 fake window"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     class FakeFrame:
         timestamp = 0.0
@@ -1665,7 +1717,7 @@ def test_ensure_builtin_audio_tracks_skips_empty_system(tmp_path):
 
 def test_restore_timeline_and_playback_backfills_then_roundtrips(tmp_path):
     """加载路径调用补齐；补齐结果随 _collect_project_state 保存回 project.json"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from app.main_window import MainWindow
     from core.project import Project
@@ -1701,6 +1753,8 @@ def test_restore_timeline_and_playback_backfills_then_roundtrips(tmp_path):
         _playback=None,
         _update_audio_timeline=lambda: None,
     )
+    window._sync_audio_regions = MethodType(
+        MainWindow._sync_audio_regions, window)
 
     MainWindow._restore_timeline_and_playback(window, window._compositor, project)
 
@@ -1727,7 +1781,7 @@ def test_restore_timeline_and_playback_backfills_then_roundtrips(tmp_path):
 
 def _make_track_audio_window(project_dir):
     """带双音频轨 + wav 文件的 fake window（用于 _track_audio_provider 测试）"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from core.project import Clip, Track
 
@@ -1806,7 +1860,7 @@ def test_track_audio_provider_caches_by_source_path(tmp_path, monkeypatch):
 def test_track_audio_provider_cache_invalidates_on_clear_editor_state(
         tmp_path):
     """_clear_editor_state 清空 _track_audio_cache"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from app.main_window import MainWindow
 
@@ -1857,7 +1911,7 @@ def _re_record_audio_result():
 
 def _re_record_window(project_dir):
     """构造 _on_re_record_requested 测试用的 fake window"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from core.project import Clip, Track
 
@@ -1999,7 +2053,7 @@ def test_re_record_without_project_rejects(tmp_path, monkeypatch):
 
 def test_re_record_clip_roundtrips_through_save_and_load(tmp_path):
     """补录后保存/加载：_collect_project_state → save → load → _restore 完整恢复"""
-    from types import SimpleNamespace
+    from types import SimpleNamespace, MethodType
 
     from app.main_window import MainWindow
     from core.project import Clip, Project, Track
@@ -2071,6 +2125,8 @@ def test_re_record_clip_roundtrips_through_save_and_load(tmp_path):
         _update_audio_timeline=lambda: None,
         _playback=None,
     )
+    restore_window._sync_audio_regions = MethodType(
+        MainWindow._sync_audio_regions, restore_window)
     MainWindow._restore_timeline_and_playback(
         restore_window, restore_window._compositor, loaded)
 

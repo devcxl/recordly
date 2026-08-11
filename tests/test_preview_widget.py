@@ -85,6 +85,27 @@ class TestPreviewWidgetImport:
         assert extra.size() == w._label.size()
 
 
+    def test_duration_truncates_oversized_regions(self, tmp_path):
+        """超长 region（超出视频时长）被 duration 截断，不拖长播放（慢放回归）"""
+        from core.project import AudioRegion
+        from ui.preview_widget import AudioPreviewPlayer
+
+        samplerate = 44100
+        long = np.zeros((samplerate * 60, 2), dtype=np.float32) + 0.1  # 60s BGM
+        path = str(tmp_path / "bgm.wav")
+        _write_wav(path, long, samplerate)
+        regions = [AudioRegion(
+            start_ms=0, end_ms=60000, source_start_ms=0,
+            source_end_ms=60000, audio_path=path, volume=1.0)]
+
+        player = AudioPreviewPlayer(
+            regions, samplerate, duration=12.0,
+            stream_factory=lambda **_: None)
+        assert player.duration == 12.0
+        assert len(player.timeline_data) == samplerate * 12
+        player.start(0)  # stream_factory 返回 None → start 失败但不抛异常
+
+
 class TestPlaybackController:
     def test_audio_clock_selects_video_frame(self):
         from ui.preview_widget import PlaybackController
