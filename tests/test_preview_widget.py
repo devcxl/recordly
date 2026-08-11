@@ -103,7 +103,7 @@ class TestPreviewWidgetImport:
             stream_factory=lambda **_: None)
         assert player.duration == 12.0
         assert len(player.timeline_data) == samplerate * 12
-        assert player.start(0) is False or player.duration == 12.0
+        player.start(0)  # stream_factory 返回 None → start 失败但不抛异常
 
 
 class TestPlaybackController:
