@@ -35,10 +35,13 @@ sha256sums=('SKIP')
 build() {
     cd "$srcdir/$pkgname-$pkgver"
 
-    # 安装 Arch 仓库没有的 Python 依赖到当前用户的 site-packages
-    # 包裹 pyinstaller 以让后续 python -m PyInstaller 可用
+    # pyinstaller 需要装上其依赖（altgraph / macholib 等）
+    pip install --user --break-system-packages \
+        pyinstaller
+
+    # 其他 Arch 仓库缺失的运行时依赖：带 --no-deps 避免引入系统包重复
     pip install --user --break-system-packages --no-deps \
-        pyinstaller pynput sounddevice ffmpeg-python
+        pynput sounddevice ffmpeg-python
 
     # 直接由 PyInstaller 收集源码及其所有 import；不再 pip install .
     # user site-packages 会被 python 自动加入 sys.path
