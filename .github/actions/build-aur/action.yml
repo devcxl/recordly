@@ -59,7 +59,7 @@ runs:
         sed -i '/sha256sums=/d' "${BUILD_DIR}/PKGBUILD"
         printf "\nsha256sums=('SKIP')\n" >> "${BUILD_DIR}/PKGBUILD"
 
-        # 在 Docker 容器内执行构建（shell heredoc 会导致 YAML 解析错误，故用 sh -c）
+        # 在 Docker 容器内执行构建（依赖安装统一由 PKGBUILD 中的 build() 负责）
         docker run --rm \
           -v "${BUILD_DIR}:/build:Z" \
           archlinux:latest \
@@ -67,7 +67,6 @@ runs:
             pacman-key --init &&
             pacman-key --populate archlinux &&
             pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pip python-pyqt5 python-pillow python-numpy python-opencv python-xlib python-mss ffmpeg portaudio &&
-            pip install --break-system-packages --user --no-deps pyinstaller pynput sounddevice ffmpeg-python &&
             useradd -m builder &&
             chown -R builder:builder /build &&
             su builder -c 'cd /build && makepkg -sr --noconfirm --skipchecksums --nodeps'

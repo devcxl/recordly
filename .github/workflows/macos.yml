@@ -46,9 +46,10 @@ jobs:
         run: |
           mkdir -p pkg-out
           if [ -d "dist/recordly.app" ]; then
-            # macOS 应用包：打成 tar.gz
+            # macOS 应用程序包：打包为 zip（保留元数据与执行权限）与 tar.gz
+            ditto -c -k --sequesterRsrc --keepParent dist/recordly.app pkg-out/recordly-macos.zip
             tar -C dist -czf pkg-out/recordly-macos.tar.gz recordly.app
-          else
+          elif [ -f "dist/recordly" ]; then
             # 单文件 fallback
             cp dist/recordly pkg-out/recordly-macos
           fi

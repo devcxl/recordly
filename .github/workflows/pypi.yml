@@ -3,6 +3,16 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target repository"
+        required: true
+        default: "testpypi"
+        type: choice
+        options:
+          - testpypi
+          - pypi
 
 jobs:
   build:
@@ -34,7 +44,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
-    environment: pypi
+    environment: ${{ inputs.target || 'pypi' }}
     permissions:
       id-token: write  # OIDC trusted publishing
     steps:
@@ -44,23 +54,9 @@ jobs:
           name: pypi-dist
           path: dist
 
-      - name: Publish to PyPI
+      - name: Publish to PyPI / TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-
-  test-pypi:
-    # 手动触发：将 dry-run 包推到 TestPyPI，避免正式发布失误
-    if: false  # 默认关闭，发布前用 workflow_dispatch 临时开启
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install build
-      - run: python -m build --sdist --wheel
-      - uses: actions/upload-artifact@v4
-        with:
-          name: testpypi-dist
-          path: dist/*
+          repository-url: ${{ (inputs.target == 'testpypi') && 'https://test.pypi.org/legacy/' || '' }}
+          skip-existing: true
