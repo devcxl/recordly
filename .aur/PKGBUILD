@@ -36,11 +36,12 @@ build() {
     cd "$srcdir/$pkgname-$pkgver"
 
     # 安装 Arch 仓库没有的 Python 依赖到当前用户的 site-packages
+    # 包裹 pyinstaller 以让后续 python -m PyInstaller 可用
     pip install --user --break-system-packages --no-deps \
-        pynput sounddevice ffmpeg-python
+        pyinstaller pynput sounddevice ffmpeg-python
 
     # 直接由 PyInstaller 收集源码及其所有 import；不再 pip install .
-    PYTHONPATH="$HOME/.local/lib/python3.13/site-packages:${PYTHONPATH:-}" \
+    # user site-packages 会被 python 自动加入 sys.path
     python -m PyInstaller recordly.spec \
         --distpath="$srcdir/dist" \
         --workpath="$srcdir/build" \
