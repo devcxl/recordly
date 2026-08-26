@@ -69,7 +69,8 @@ jobs:
             libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
             libxcb-shape0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 \
             libxcb-xkb1 libxkbcommon0 libgl1 libegl1 libfontconfig1 \
-            libdbus-1-3
+            libdbus-1-3 \
+            desktop-file-utils
           # 安装包（保留依赖）
           sudo dpkg -i pkg-out/recordly_*.deb || sudo apt-get install -f -y --no-install-recommends
           # 验证主入口存在且 desktop file 合法

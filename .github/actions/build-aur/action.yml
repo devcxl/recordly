@@ -66,8 +66,8 @@ runs:
           sh -c "
             pacman-key --init &&
             pacman-key --populate archlinux &&
-            pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pip python-pyqt5 python-pillow python-numpy python-opencv python-xlib python-mss ffmpeg portaudio pyinstaller &&
-            pip install --break-system-packages --user --no-deps pynput sounddevice ffmpeg-python &&
+            pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pip python-pyqt5 python-pillow python-numpy python-opencv python-xlib python-mss ffmpeg portaudio &&
+            pip install --break-system-packages --user --no-deps pyinstaller pynput sounddevice ffmpeg-python &&
             useradd -m builder &&
             chown -R builder:builder /build &&
             su builder -c 'cd /build && makepkg -sr --noconfirm --skipchecksums --nodeps'
