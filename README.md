@@ -7,7 +7,7 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
-  <img src="https://img.shields.io/badge/license-AGPL--3.0-orange" alt="License">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
   <img src="https://img.shields.io/badge/tests-288%20passed-brightgreen" alt="Tests">
 </p>
 
@@ -117,4 +117,4 @@ python -m pytest tests/ -v
 
 ## 协议
 
-AGPL-3.0
+本项目以 [MIT License](LICENSE) 发布。

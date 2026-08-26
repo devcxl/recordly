@@ -2,33 +2,49 @@
 # Contributor: devcxl <64475363+devcxl@users.noreply.github.com>
 
 pkgname=recordly
-pkgver=1.1.0
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="开源屏幕录制与回放工具 — 支持鼠标轨迹记录、多轨道时间线编辑、光标特效和 MP4/GIF/APNG 导出"
 arch=('any')
 url="https://github.com/devcxl/recordly"
 license=('MIT')
 depends=(
+    'python-pyqt5'
+    'python-pillow'
+    'python-numpy'
+    'python-opencv'
+    'python-xlib'
+    'python-mss'
     'ffmpeg'
     'portaudio'
 )
+# PyInstaller 与 pip 安装的 Python 包仅在构建阶段使用
 makedepends=(
-    'python>=3.10'
     'python-build'
     'python-installer'
     'python-wheel'
     'python-setuptools'
     'python-pip'
+    'pyinstaller'
 )
+# 不在 Arch 官方仓库的 Python 依赖（pynput / sounddevice / ffmpeg-python）：
+# 在 build() 中通过 pip --user 安装，PyInstaller 会跟随打包。
 source=("$pkgname-$pkgver.tar.gz::https://github.com/devcxl/recordly/archive/v$pkgver.tar.gz")
 sha256sums=('SKIP')
-validpgpkeys=('SKIP')
 
 build() {
     cd "$srcdir/$pkgname-$pkgver"
-    pip install --break-system-packages pyinstaller
-    pip install --break-system-packages .
-    python -m PyInstaller recordly.spec --distpath="$srcdir/dist" --workpath="$srcdir/build"
+
+    # 安装 Arch 仓库没有的 Python 依赖到当前用户的 site-packages
+    pip install --user --break-system-packages --no-deps \
+        pynput sounddevice ffmpeg-python
+
+    # 直接由 PyInstaller 收集源码及其所有 import；不再 pip install .
+    PYTHONPATH="$HOME/.local/lib/python3.13/site-packages:${PYTHONPATH:-}" \
+    python -m PyInstaller recordly.spec \
+        --distpath="$srcdir/dist" \
+        --workpath="$srcdir/build" \
+        --noconfirm
 }
 
 package() {

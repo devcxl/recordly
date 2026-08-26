@@ -20,6 +20,8 @@ jobs:
             devscripts \
             fakeroot \
             build-essential \
+            dh-python \
+            pybuild-plugin-pyproject \
             python3 \
             python3-setuptools \
             python3-pip \
@@ -28,13 +30,10 @@ jobs:
             python3-numpy \
             python3-opencv \
             python3-xlib \
+            python3-pynput \
             ffmpeg \
             libportaudio2 \
             pulseaudio-utils
-
-      - name: Install pip-only dependencies
-        run: |
-          pip install --break-system-packages --no-deps mss pynput sounddevice ffmpeg-python future
 
       - name: Build Debian package
         run: |
@@ -85,9 +84,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+  build-windows:
+    uses: ./.github/workflows/windows.yml
+
+  build-macos:
+    uses: ./.github/workflows/macos.yml
+
   release:
     runs-on: ubuntu-24.04
-    needs: [build-deb, build-aur]
+    needs: [build-deb, build-aur, build-windows, build-macos]
     permissions:
       contents: write
 
@@ -97,7 +102,7 @@ jobs:
 
       - name: List downloaded files
         shell: bash
-        run: find . -type f -name "*.deb" -o -name "*.pkg.tar.zst" | sort
+        run: find . -type f \( -name "*.deb" -o -name "*.pkg.tar.zst" -o -name "*.exe" -o -name "recordly-macos.tar.gz" -o -name "recordly-windows.zip" \) | sort
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -105,6 +110,9 @@ jobs:
           files: |
             recordly-deb-ubuntu-24.04/*.deb
             recordly-aur/*.pkg.tar.zst
+            recordly-windows/*.exe
+            recordly-windows/recordly-windows.zip
+            recordly-macos/recordly-macos.tar.gz
           generate_release_notes: true
           draft: true
           fail_on_unmatched_files: false

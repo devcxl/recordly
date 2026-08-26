@@ -1,0 +1,62 @@
+name: macOS
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            PyQt5 pynput mss sounddevice \
+            Pillow numpy ffmpeg-python opencv-python-headless \
+            pyinstaller
+
+      - name: Build .app with PyInstaller
+        run: |
+          python -m PyInstaller recordly.spec \
+            --distpath=dist \
+            --workpath=build \
+            --noconfirm
+
+      - name: Stage artifact
+        run: |
+          mkdir -p pkg-out
+          if [ -d "dist/recordly.app" ]; then
+            # macOS 应用包：打成 tar.gz
+            tar -C dist -czf pkg-out/recordly-macos.tar.gz recordly.app
+          else
+            # 单文件 fallback
+            cp dist/recordly pkg-out/recordly-macos
+          fi
+          ls -lh pkg-out/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: recordly-macos
+          path: pkg-out/*
+          if-no-files-found: error
+          retention-days: 90

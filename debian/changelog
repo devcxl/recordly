@@ -1,4 +1,4 @@
-recordly (1.0.0-1) unstable; urgency=medium
+recordly (1.2.0-1) unstable; urgency=medium
 
   * Initial release.
   * Screen recording with mouse tracking.
@@ -6,4 +6,4 @@ recordly (1.0.0-1) unstable; urgency=medium
   * Export to MP4/GIF/APNG.
   * Cursor effects and annotations support.
 
- -- devcxl <64475363+devcxl@users.noreply.github.com>  Mon, 29 Jun 2026 00:00:00 +0800
+ -- devcxl <64475363+devcxl@users.noreply.github.com>  Tue, 26 Aug 2026 00:00:00 +0800

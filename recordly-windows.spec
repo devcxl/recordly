@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+# Windows-only PyInstaller spec
+# 与 recordly.spec 的区别：icon 使用 .ico（Windows EXE 必需）
 from PyInstaller.utils.hooks import collect_submodules
 
-# 自动收集易被遗漏的子模块（避免手写 hiddenimports 与上游版本漂移）
 auto_hidden = (
     collect_submodules('pynput')
     + collect_submodules('sounddevice')
@@ -12,7 +13,6 @@ auto_hidden = (
     + collect_submodules('ffmpeg')
 )
 
-# 已知容易被静态分析忽略的模块
 static_hidden = [
     'PyQt5.QtCore',
     'PyQt5.QtGui',
@@ -66,5 +66,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='resources/icons/recordly.svg',
+    icon='resources/icons/recordly.ico',
 )

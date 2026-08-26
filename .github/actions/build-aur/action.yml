@@ -51,12 +51,12 @@ runs:
 
         # 复制 PKGBUILD 并更新版本
         cp "${WORKSPACE}/.aur/PKGBUILD" "${BUILD_DIR}/PKGBUILD"
-        sed -i "s/pkgver=.*/pkgver=${PKGVER}/" "${BUILD_DIR}/PKGBUILD"
-        sed -i "s/pkgrel=.*/pkgrel=${PKGREL}/" "${BUILD_DIR}/PKGBUILD"
+        sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" "${BUILD_DIR}/PKGBUILD"
+        sed -i "s/^pkgrel=.*/pkgrel=${PKGREL}/" "${BUILD_DIR}/PKGBUILD"
 
-        # 更新 source 为本地文件
-        sed -i "s|source=.*|source=(\"recordly-${PKGVER}.tar.gz\")|" "${BUILD_DIR}/PKGBUILD"
-        sed -i '/sha256sums/d' "${BUILD_DIR}/PKGBUILD"
+        # 使用本地 tar 包（CI 中不联网下载 GitHub tarball）
+        sed -i "s|^source=.*|source=(\"recordly-${PKGVER}.tar.gz\")|" "${BUILD_DIR}/PKGBUILD"
+        sed -i '/sha256sums=/d' "${BUILD_DIR}/PKGBUILD"
         echo "sha256sums=('SKIP')" >> "${BUILD_DIR}/PKGBUILD"
 
         # 在 Docker 容器内执行构建（shell heredoc 会导致 YAML 解析错误，故用 sh -c）
@@ -66,8 +66,8 @@ runs:
           sh -c "
             pacman-key --init &&
             pacman-key --populate archlinux &&
-            pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pip python-pyqt5 python-pillow python-numpy python-mss ffmpeg portaudio &&
-            pip install --break-system-packages pynput sounddevice &&
+            pacman -Syu --noconfirm base-devel python python-build python-installer python-wheel python-setuptools python-pip python-pyqt5 python-pillow python-numpy python-opencv python-xlib python-mss ffmpeg portaudio pyinstaller &&
+            pip install --break-system-packages --user --no-deps pynput sounddevice ffmpeg-python &&
             useradd -m builder &&
             chown -R builder:builder /build &&
             su builder -c 'cd /build && makepkg -sr --noconfirm --skipchecksums --nodeps'

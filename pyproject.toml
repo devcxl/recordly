@@ -52,7 +52,7 @@ recordly = "main:main"
 include = ["app*", "core*", "ui*", "resources*"]
 
 [tool.setuptools.package-data]
-resources = ["icons/*"]
+resources = ["icons/*", "style.qss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
