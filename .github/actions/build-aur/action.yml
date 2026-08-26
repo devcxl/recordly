@@ -57,7 +57,7 @@ runs:
         # 使用本地 tar 包（CI 中不联网下载 GitHub tarball）
         sed -i "s|^source=.*|source=(\"recordly-${PKGVER}.tar.gz\")|" "${BUILD_DIR}/PKGBUILD"
         sed -i '/sha256sums=/d' "${BUILD_DIR}/PKGBUILD"
-        echo "sha256sums=('SKIP')" >> "${BUILD_DIR}/PKGBUILD"
+        printf "\nsha256sums=('SKIP')\n" >> "${BUILD_DIR}/PKGBUILD"
 
         # 在 Docker 容器内执行构建（shell heredoc 会导致 YAML 解析错误，故用 sh -c）
         docker run --rm \
