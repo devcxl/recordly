@@ -116,7 +116,7 @@ jobs:
             recordly-aur/recordly-${{ steps.ver.outputs.pkgver }}-*-any.pkg.tar.zst
             recordly-windows/recordly.exe
             recordly-windows/recordly-windows.zip
-            recordly-macos/recordly-macos.tar.gz
+            recordly-macos/*
           generate_release_notes: true
           draft: true
           fail_on_unmatched_files: false
