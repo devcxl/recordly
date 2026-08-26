@@ -108,9 +108,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            recordly-deb-ubuntu-24.04/*.deb
-            recordly-aur/*.pkg.tar.zst
-            recordly-windows/*.exe
+            recordly-deb-ubuntu-24.04/recordly_${{ github.ref_name }}-*_all.deb
+            recordly-aur/recordly-${{ github.ref_name }}-*-any.pkg.tar.zst
+            recordly-windows/recordly.exe
             recordly-windows/recordly-windows.zip
             recordly-macos/recordly-macos.tar.gz
           generate_release_notes: true

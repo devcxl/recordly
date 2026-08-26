@@ -73,9 +73,15 @@ runs:
             su builder -c 'cd /build && makepkg -sr --noconfirm --skipchecksums --nodeps'
           "
 
-        # 复制构建产物回来
+        # 复制构建产物回来（排除 makepkg 自动生成的 -debug 包）
         mkdir -p "${WORKSPACE}/.aur/out"
-        cp "${BUILD_DIR}"/*.pkg.tar.zst "${WORKSPACE}/.aur/out/" 2>/dev/null || true
+        for pkg in "${BUILD_DIR}"/*.pkg.tar.zst; do
+          [ -f "$pkg" ] || continue
+          case "$(basename "$pkg")" in
+            *-debug-*) continue ;;
+          esac
+          cp "$pkg" "${WORKSPACE}/.aur/out/"
+        done
         ls -lh "${WORKSPACE}/.aur/out/" || echo "No artifacts found"
 
     - name: Collect artifact
