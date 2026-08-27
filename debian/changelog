@@ -1,7 +1,7 @@
-recordly (1.2.1-1) unstable; urgency=medium
+recordly (1.2.2-1) unstable; urgency=medium
 
-  * Bug fix: add future as transitive dep of ffmpeg-python (past.builtins).
-  * Wheel smoke test in CI matrix.
-  * macOS .app bundle with ditto-zip artifact.
+  * Bug fix: AUR package — pynput._xorg module missing due to PyInstaller
+    collect_submodules() failing silently when build env has no X server.
+    Now adding xorg-server-xvfb to AUR makedepends + running Xvfb in build().
 
- -- devcxl <64475363+devcxl@users.noreply.github.com>  Wed, 27 Aug 2026 13:45:00 +0800
+ -- devcxl <64475363+devcxl@users.noreply.github.com>  Wed, 27 Aug 2026 14:25:00 +0800
