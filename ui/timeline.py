@@ -33,6 +33,11 @@ UNDO_STACK_LIMIT = 100
 MIN_PIXELS_PER_SEC = 5.0
 MAX_PIXELS_PER_SEC = 300.0
 ZOOM_STEP_FACTOR = 1.25
+# audio clip 左侧内嵌 mini volume slider 几何参数
+VOLUME_SLIDER_WIDTH = 5
+VOLUME_SLIDER_INSET_X = 2
+VOLUME_SLIDER_INSET_Y = 5
+MAX_VOLUME = 2.0
 
 
 class TimelineWidget(QWidget):
@@ -47,6 +52,11 @@ class TimelineWidget(QWidget):
     playhead_seek_play = pyqtSignal(float)
     status_message = pyqtSignal(str)
     re_record_requested = pyqtSignal(int, int)
+    # 音量相关信号（拖动中实时发出用于 Inspector 显示；拖动结束时发 old/new 用于撤销）
+    clip_volume_changed = pyqtSignal(int, int, float)
+    clip_volume_drag_finished = pyqtSignal(int, int, float, float)
+    # 选中变化（用于主窗口控制 Inspector 面板显隐）
+    selection_changed = pyqtSignal()
 
     SnapDistance = 5
 
@@ -69,6 +79,7 @@ class TimelineWidget(QWidget):
         self._drag_orig_end = 0.0
         self._drag_orig_source_start = 0.0
         self._drag_orig_source_end = None
+        self._drag_orig_volume = 1.0
         self._snap_alignment_time = None
         self._undo_stack = []
         self._redo_stack = []
@@ -220,6 +231,31 @@ class TimelineWidget(QWidget):
         x2 = self._time_to_x(clip.end)
         return QRectF(x1, y, x2 - x1, TRACK_HEIGHT - 4)
 
+    def _volume_slider_rect(self, track_idx: int, clip_idx: int) -> QRectF:
+        """audio clip 内嵌 mini volume slider 矩形；非 audio clip 返回空矩形。"""
+        clip = self._tracks[track_idx].clips[clip_idx]
+        if clip.type not in ("audio", "audio_system", "audio_extra"):
+            return QRectF()
+        rect = self._clip_rect(track_idx, clip_idx)
+        if rect.width() < VOLUME_SLIDER_WIDTH + VOLUME_SLIDER_INSET_X * 2 + 8:
+            return QRectF()  # clip 过窄，不画 mini slider
+        return QRectF(
+            rect.x() + VOLUME_SLIDER_INSET_X,
+            rect.y() + VOLUME_SLIDER_INSET_Y,
+            VOLUME_SLIDER_WIDTH,
+            rect.height() - VOLUME_SLIDER_INSET_Y * 2,
+        )
+
+    def _hit_volume_slider(self, pos):
+        """返回 (ti, ci) 如果 pos 命中某个 audio clip 的 mini slider。"""
+        for ti, track in enumerate(self._tracks):
+            for ci, clip in enumerate(track.clips):
+                if clip.type not in ("audio", "audio_system", "audio_extra"):
+                    continue
+                if self._volume_slider_rect(ti, ci).contains(pos):
+                    return ti, ci
+        return None
+
     def _hit_test(self, pos: QPointF) -> tuple[int, int]:
         for ti, track in enumerate(self._tracks):
             for ci in range(len(track.clips)):
@@ -288,6 +324,18 @@ class TimelineWidget(QWidget):
         """压入并执行一条撤销命令（外部模块（如补录）使用，语义同 _push_undo）。"""
         self._push_undo(cmd)
 
+    def get_selected_audio_clip(self):
+        """返回当前选中的 audio 类型 clip（(ti, ci, clip)）或 None。"""
+        ti, ci = self._selected_track, self._selected_clip
+        if ti < 0 or ci < 0:
+            return None
+        if ti >= len(self._tracks) or ci >= len(self._tracks[ti].clips):
+            return None
+        clip = self._tracks[ti].clips[ci]
+        if clip.type not in ("audio", "audio_system", "audio_extra"):
+            return None
+        return ti, ci, clip
+
     def _push_undo(self, cmd: UndoCommand):
         self._undo_stack.append(cmd)
         self._redo_stack.clear()
@@ -347,6 +395,18 @@ class TimelineWidget(QWidget):
             self.playhead_changed.emit(self._playhead_s)
             return
 
+        # 命中 audio clip 内嵌的 mini volume slider（优先于 resize 边缘，
+# 避免 mini slider 区域与 left/right edge SnapDistance 重叠时点不中）
+        vol_hit = self._hit_volume_slider(pos)
+        if vol_hit:
+            ti, ci = vol_hit
+            self._drag_state = "volume"
+            self._drag_track = ti
+            self._drag_clip = ci
+            clip = self._tracks[ti].clips[ci]
+            self._drag_orig_volume = getattr(clip, "volume", 1.0)
+            return
+
         # 命中 clip 边缘：进入 resize 拖拽，不移动播放头
         edge = self._hit_edge(pos)
         if edge:
@@ -371,6 +431,7 @@ class TimelineWidget(QWidget):
                     self._selected_track = -1
                     self._selected_clip = -1
                     self.update()
+                    self.selection_changed.emit()
                     return
                 self._multi_selected.add((ti, ci))
             elif (ti, ci) not in self._multi_selected:
@@ -394,6 +455,7 @@ class TimelineWidget(QWidget):
             if self._tracks[ti].type == "zoom":
                 self.zoom_clip_selected.emit(clip)
             self.update()
+            self.selection_changed.emit()
             return
 
         # 空白区域：移动播放头
@@ -405,8 +467,24 @@ class TimelineWidget(QWidget):
         self.playhead_drag_started.emit()
         self.update()
         self.playhead_changed.emit(self._playhead_s)
+        self.selection_changed.emit()
 
     def mouseMoveEvent(self, event):
+        if self._drag_state == "volume":
+            s_rect = self._volume_slider_rect(
+                self._drag_track, self._drag_clip)
+            if s_rect.height() > 4:
+                pos = event.localPos()
+                # 滑块顶部 = max volume；底部 = 0
+                ratio = (s_rect.bottom() - pos.y()) / s_rect.height()
+                ratio = max(0.0, min(1.0, ratio))
+                new_volume = ratio * MAX_VOLUME
+                clip = self._tracks[self._drag_track].clips[self._drag_clip]
+                clip.volume = new_volume
+                self.clip_volume_changed.emit(
+                    self._drag_track, self._drag_clip, new_volume)
+                self.update()
+            return
         if self._drag_state in ("move", "resize_left", "resize_right", "playhead"):
             pos = event.localPos()
 
@@ -548,6 +626,25 @@ class TimelineWidget(QWidget):
         if event.button() != Qt.LeftButton:
             return
         self._snap_alignment_time = None
+
+        # volume_drag 收尾：入一次 ChangeVolumeCommand 撤销栈，发结束信号
+        if self._drag_state == "volume":
+            ti, ci = self._drag_track, self._drag_clip
+            clip = self._tracks[ti].clips[ci]
+            new_volume = getattr(clip, "volume", 1.0)
+            old_volume = self._drag_orig_volume
+            if abs(old_volume - new_volume) > 0.001:
+                cmd = ChangeVolumeCommand(ti, ci, old_volume, new_volume)
+                self._undo_stack.append(cmd)
+                self._redo_stack.clear()
+                self.clip_volume_drag_finished.emit(ti, ci, old_volume, new_volume)
+                self.clips_changed.emit()
+            self._drag_state = None
+            self._drag_track = -1
+            self._drag_clip = -1
+            self._drag_orig_volume = 1.0
+            self.update()
+            return
 
         if self._drag_state not in ("move", "resize_left", "resize_right"):
             was_playhead = self._drag_state == "playhead"
@@ -1053,6 +1150,11 @@ class TimelineWidget(QWidget):
 
         self._draw_clip_content(p, rect, clip, track.type)
 
+        # audio clip 左侧内嵌 mini volume slider（除了 clip 过窄的情况）
+        if (clip.type in ("audio", "audio_system", "audio_extra")
+                and not self._volume_slider_rect(track_idx, clip_idx).isEmpty()):
+            self._draw_volume_slider(p, track_idx, clip_idx)
+
         if rect.width() > 40:
             p.setPen(QColor("white"))
             p.setFont(QFont("sans-serif", 8))
@@ -1124,6 +1226,49 @@ class TimelineWidget(QWidget):
             height = max(1.0, peak * half_h)
             p.drawLine(int(x), int(mid_y - height),
                        int(x), int(mid_y + height))
+        p.restore()
+
+    def _draw_volume_slider(self, p: QPainter, track_idx: int, clip_idx: int):
+        """绘制 audio clip 左侧内嵌 mini volume slider。
+        垂直轨道：底部 = 0%，中点 = 100%，顶部 = 200%。
+        """
+        s_rect = self._volume_slider_rect(track_idx, clip_idx)
+        if s_rect.isEmpty():
+            return
+        clip = self._tracks[track_idx].clips[clip_idx]
+        volume = max(0.0, min(getattr(clip, "volume", 1.0), MAX_VOLUME))
+
+        # 背景轨（深色）
+        p.save()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor("#1a1a1a"))
+        p.drawRoundedRect(s_rect, 1.5, 1.5)
+
+        # 已填充部分（底部到 volume 位置）
+        fill_ratio = volume / MAX_VOLUME
+        fill_h = s_rect.height() * fill_ratio
+        if fill_h > 0:
+            fill_rect = QRectF(
+                s_rect.x(), s_rect.bottom() - fill_h,
+                s_rect.width(), fill_h,
+            )
+            fill_color = QColor("#ffb84d") if volume > 0 else QColor("#555")
+            p.setBrush(fill_color)
+            p.drawRect(fill_rect)
+
+        # 100% 中线标记（参考线）
+        mid_y = s_rect.y() + s_rect.height() / 2
+        p.setPen(QPen(QColor("#888"), 1, Qt.DashLine))
+        p.drawLine(
+            int(s_rect.x() - 1), int(mid_y),
+            int(s_rect.right() + 1), int(mid_y),
+        )
+
+        # 滑块（小圆点）
+        knob_y = s_rect.bottom() - fill_h
+        p.setPen(QPen(QColor("#222"), 1))
+        p.setBrush(QColor("white"))
+        p.drawEllipse(QPointF(s_rect.center().x(), knob_y), 2.5, 2.5)
         p.restore()
 
     def _draw_playhead(self, p: QPainter):

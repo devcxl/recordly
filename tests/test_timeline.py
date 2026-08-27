@@ -2472,3 +2472,148 @@ class TestReRecordCommand:
         clips = window.tracks[0].clips
         assert clips[0].volume == 0.0
         assert clips[1].content == "补录音频"
+
+
+class TestTimelineVolumeSlider:
+    """T11: clip 内嵌 mini volume slider + Inspector 面板交互。"""
+
+    def test_volume_slider_rect_audio_clip(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import (
+            RULER_HEIGHT, TRACK_HEIGHT, TimelineWidget,
+        )
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=5.0),
+        ])])
+        rect = w._volume_slider_rect(0, 0)
+        assert not rect.isEmpty()
+        clip_rect = w._clip_rect(0, 0)
+        assert rect.x() >= clip_rect.x()
+        assert rect.x() < clip_rect.x() + 10
+
+    def test_volume_slider_rect_video_clip_empty(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w.set_tracks([Track(type="video", clips=[
+            Clip(type="video", start=0.0, end=5.0),
+        ])])
+        assert w._volume_slider_rect(0, 0).isEmpty()
+
+    def test_volume_slider_rect_narrow_clip_empty(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 20.0
+        # 1s clip @ 32 px/s = 32px；略低于最小阈值
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=10.0, end=10.5),
+        ])])
+        # clip width = 16px < VOLUME_SLIDER_WIDTH(5) + INSET_X(2)*2 + 8 = 17
+        assert w._volume_slider_rect(0, 0).isEmpty()
+
+    def test_drag_mini_slider_updates_volume(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.commands import ChangeVolumeCommand
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 30.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=10.0, volume=1.0),
+        ])])
+        s_rect = w._volume_slider_rect(0, 0)
+        # 按住 slider 中点（= 100%）
+        press = QPointF(s_rect.center().x(), s_rect.center().y())
+        # 拖到顶部 → ratio=1 → volume=2.0
+        release = QPointF(s_rect.center().x(), s_rect.y())
+        signals = []
+        w.clip_volume_changed.connect(
+            lambda ti, ci, v: signals.append(("changing", ti, ci, v)))
+        w.clip_volume_drag_finished.connect(
+            lambda ti, ci, o, n: signals.append(("finished", ti, ci, o, n)))
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+        assert w._drag_state == "volume"
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, release,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+        w.mouseReleaseEvent(QMouseEvent(
+            QEvent.MouseButtonRelease, release,
+            Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
+        clip = w._tracks[0].clips[0]
+        # 拖到顶 → volume=200%
+        assert abs(clip.volume - 2.0) < 0.01
+        # 撤销栈应有一条 ChangeVolumeCommand
+        assert any(isinstance(c, ChangeVolumeCommand) for c in w._undo_stack)
+        # 期间发出过 clip_volume_changed 和 drag_finished
+        assert any(s[0] == "changing" for s in signals)
+        assert any(s[0] == "finished" for s in signals)
+
+    def test_mini_slider_drag_to_bottom_mutes(self, qapp):
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 30.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=10.0, volume=1.0),
+        ])])
+        s_rect = w._volume_slider_rect(0, 0)
+        press = QPointF(s_rect.center().x(), s_rect.center().y())
+        # 拖到 slider 底部 → volume = 0
+        release = QPointF(s_rect.center().x(), s_rect.bottom())
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+        assert w._drag_state == "volume"
+        w.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, release,
+            Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+        w.mouseReleaseEvent(QMouseEvent(
+            QEvent.MouseButtonRelease, release,
+            Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
+        clip = w._tracks[0].clips[0]
+        assert abs(clip.volume) < 0.01
+
+    def test_get_selected_audio_clip(self, qapp):
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w.set_tracks([
+            Track(type="video", clips=[Clip(type="video", start=0, end=5)]),
+            Track(type="audio", clips=[Clip(type="audio", start=0, end=5)]),
+        ])
+        # 无选中
+        assert w.get_selected_audio_clip() is None
+        # 选中 video clip
+        w._selected_track = 0
+        w._selected_clip = 0
+        assert w.get_selected_audio_clip() is None
+        # 选中 audio clip
+        w._selected_track = 1
+        w._selected_clip = 0
+        info = w.get_selected_audio_clip()
+        assert info is not None
+        ti, ci, clip = info
+        assert ti == 1 and ci == 0
+        assert clip.type == "audio"
+
+    def test_inspector_panel_exists(self, qapp):
+        from ui.inspector_panel import InspectorPanel
+        panel = InspectorPanel()
+        assert panel.isHidden()
+        panel.show_clip(0, 0, type("MockClip", (), {
+            "type": "audio", "content": "测试", "volume": 0.5})())
+        assert panel.isVisible()
+        panel.clear()
+        assert panel.isHidden()

@@ -41,6 +41,7 @@ from ui.timeline import TimelineWidget
 from ui.crop_overlay import CropOverlay
 from ui.export_dialog import ExportDialog
 from ui.home_page import HomePage
+from ui.inspector_panel import InspectorPanel
 from ui.record_audio_dialog import RecordAudioDialog
 from app.project_session import ProjectSession
 from app.recording_controller import RecordingController, RecordingState
@@ -271,11 +272,15 @@ class MainWindow(QMainWindow):
         self._timeline_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._timeline_scroll.setFrameShape(QScrollArea.NoFrame)
 
+        self._inspector = InspectorPanel()
+
         splitter.addWidget(self._preview)
         splitter.addWidget(self._timeline_scroll)
-        splitter.setSizes([480, 200])
+        splitter.addWidget(self._inspector)
+        splitter.setSizes([480, 200, 56])
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
 
         layout.addWidget(splitter, 1)
 
@@ -891,6 +896,12 @@ class MainWindow(QMainWindow):
             (self._timeline.status_message, self.update_status),
             (self._timeline.playhead_seek_play, self._on_playhead_seek_play),
             (self._timeline.re_record_requested, self._on_re_record_requested),
+            (self._timeline.selection_changed, self._on_timeline_selection_changed),
+            (self._timeline.clip_volume_changed, self._on_clip_volume_changing),
+            (self._timeline.clip_volume_drag_finished,
+             self._on_clip_volume_committed),
+            (self._inspector.volume_changing, self._on_inspector_volume_changing),
+            (self._inspector.volume_committed, self._on_inspector_volume_committed),
         )
         for signal, slot in pairs:
             try:
@@ -1372,6 +1383,60 @@ class MainWindow(QMainWindow):
                            clip_index=insert_at),
         ])
         self._timeline.push_command(cmd)
+
+    # ── Inspector / volume 交互 ─────────────────────────
+
+    def _on_timeline_selection_changed(self):
+        """选中变化：同步 Inspector 显示。"""
+        info = self._timeline.get_selected_audio_clip()
+        if info is None:
+            self._inspector.clear()
+            return
+        ti, ci, clip = info
+        self._inspector.show_clip(ti, ci, clip)
+
+    def _on_clip_volume_changing(self, ti: int, ci: int, new_volume: float):
+        """timeline mini slider 拖动中：同步 Inspector 数值 + 重绘 timeline。"""
+        self._inspector.update_volume_display(new_volume)
+        # timeline mini slider drag 中只改了 clip.volume，未 emit clips_changed，
+        # 这里手动重绘确保 Inspector 的进度同步
+        self._timeline.update()
+
+    def _on_clip_volume_committed(self, ti: int, ci: int,
+                                  old_volume: float, new_volume: float):
+        """timeline mini slider 拖动结束：ChangeVolumeCommand 已入撤销栈。
+        重建 audio preview 使新音量生效。
+        """
+        # ChangeVolumeCommand 由 timeline mouseReleaseEvent 中入栈，此处仅重建播放
+        self._rebuild_playback_after_audio_change()
+
+    def _on_inspector_volume_changing(self, ti: int, ci: int, new_volume: float):
+        """Inspector slider/mute/preset 拖动中：改 clip.volume + 重绘 timeline。"""
+        if ti < 0 or ti >= len(self._timeline.tracks) \
+                or ci < 0 or ci >= len(self._timeline.tracks[ti].clips):
+            return
+        clip = self._timeline.tracks[ti].clips[ci]
+        clip.volume = max(0.0, min(new_volume, 2.0))
+        self._timeline.update()
+
+    def _on_inspector_volume_committed(self, ti: int, ci: int,
+                                       old_volume: float, new_volume: float):
+        """Inspector 拖动结束：入撤销栈（clip.volume 已由 changing 改过）。
+        push_command 会 emit clips_changed → _on_clips_changed 重建 playback。
+        """
+        if abs(old_volume - new_volume) < 0.001:
+            return
+        cmd = ChangeVolumeCommand(ti, ci, old_volume, new_volume)
+        self._timeline.push_command(cmd)
+
+    def _rebuild_playback_after_audio_change(self):
+        """timeline mini slider 拖动结束重建 audio playback。"""
+        self._sync_audio_regions()
+        if self._playback:
+            current_frame = self._playback.current_frame
+            self._playback.stop()
+            self._create_playback_controller()
+            self._playback.seek(current_frame)
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)

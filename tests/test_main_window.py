@@ -1,6 +1,7 @@
 """主窗口生命周期的纯逻辑回归测试。"""
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -491,9 +492,16 @@ def test_timeline_signal_connection_is_idempotent():
         status_message = _FakeSignal()
         playhead_seek_play = _FakeSignal()
         re_record_requested = _FakeSignal()
+        selection_changed = _FakeSignal()
+        clip_volume_changed = _FakeSignal()
+        clip_volume_drag_finished = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
+        _inspector = SimpleNamespace(
+            volume_changing=_FakeSignal(),
+            volume_committed=_FakeSignal(),
+        )
 
         def _on_timeline_seek(self):
             pass
@@ -508,6 +516,36 @@ def test_timeline_signal_connection_is_idempotent():
             pass
 
         def _on_zoom_clip_selected(self):
+            pass
+
+        def _on_clips_changed(self):
+            pass
+
+        def _refresh_undo_redo_state(self):
+            pass
+
+        def update_status(self, msg):
+            pass
+
+        def _on_playhead_seek_play(self, sec):
+            pass
+
+        def _on_re_record_requested(self, ti, ci):
+            pass
+
+        def _on_timeline_selection_changed(self):
+            pass
+
+        def _on_clip_volume_changing(self, ti, ci, v):
+            pass
+
+        def _on_clip_volume_committed(self, ti, ci, old, new):
+            pass
+
+        def _on_inspector_volume_changing(self, ti, ci, v):
+            pass
+
+        def _on_inspector_volume_committed(self, ti, ci, old, new):
             pass
 
         def _on_clips_changed(self):
