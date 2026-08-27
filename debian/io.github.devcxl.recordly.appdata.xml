@@ -26,7 +26,11 @@
     <keyword>mp4</keyword>
   </keywords>
   <releases>
-    <release version="1.2.0" date="2026-08-26"/>
+    <release version="1.2.1" date="2026-08-27">
+      <description>
+        <p>Bug fix: add future as transitive dep of ffmpeg-python (past.builtins).</p>
+      </description>
+    </release>
   </releases>
   <content_rating type="oars-1.1"/>
 </component>
