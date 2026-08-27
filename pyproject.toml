@@ -23,6 +23,7 @@ dependencies = [
     "python-xlib>=0.33; sys_platform == 'linux'",
     "sounddevice>=0.5",
     "ffmpeg-python>=0.2",
+    "future>=0.18",  # ffmpeg-python 传递依赖 (past.builtins)
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

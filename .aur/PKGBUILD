@@ -15,6 +15,7 @@ depends=(
     'python-opencv'
     'python-xlib'
     'python-mss'
+    'python-future'
     'ffmpeg'
     'portaudio'
 )
@@ -40,8 +41,9 @@ build() {
         pyinstaller
 
     # 其他 Arch 仓库缺失的运行时依赖：带 --no-deps 避免引入系统包重复
+    # 但 ffmpeg-python 必须依赖 future，需明确加进 hiddenimports（PyInstaller spec 已包含）
     pip install --user --break-system-packages --no-deps \
-        pynput sounddevice ffmpeg-python
+        pynput sounddevice ffmpeg-python future
 
     # 直接由 PyInstaller 收集源码及其所有 import；不再 pip install .
     # user site-packages 会被 python 自动加入 sys.path

@@ -22,7 +22,7 @@ override_dh_auto_build:
 	# 仅当运行 dpkg-buildpackage 时安装 pip-only 依赖的 wheel 缓存
 	mkdir -p .wheels
 	pip wheel --no-deps --wheel-dir=.wheels \
-		pynput sounddevice ffmpeg-python 2>&1
+		pynput sounddevice ffmpeg-python future 2>&1
 
 override_dh_auto_install:
 	dh_auto_install

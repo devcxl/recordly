@@ -11,6 +11,7 @@ pkgbase = recordly
 	depends = python-opencv
 	depends = python-xlib
 	depends = python-mss
+	depends = python-future
 	depends = ffmpeg
 	depends = portaudio
 	makedepends = python-build

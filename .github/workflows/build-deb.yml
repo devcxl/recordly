@@ -36,6 +36,7 @@ jobs:
             python3-opencv \
             python3-xlib \
             python3-pynput \
+            python3-future \
             ffmpeg \
             libportaudio2 \
             pulseaudio-utils

@@ -11,6 +11,9 @@ auto_hidden = (
     + collect_submodules('Xlib')
     + collect_submodules('cv2')
     + collect_submodules('ffmpeg')
+    # ffmpeg-python 传递依赖：past.builtins.basestring 等
+    + collect_submodules('future')
+    + collect_submodules('past')
 )
 
 static_hidden = [
@@ -19,6 +22,7 @@ static_hidden = [
     'PyQt5.QtWidgets',
     'PyQt5.sip',
     'json',
+    'builtins',  # ffmpeg-python: from builtins import str/object
 ]
 
 hiddenimports = sorted(set(auto_hidden + static_hidden))
