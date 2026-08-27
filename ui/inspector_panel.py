@@ -161,9 +161,13 @@ class InspectorPanel(QWidget):
         self._value_label.setText("—")
         self.setVisible(False)
 
-    def update_volume_display(self, volume: float):
-        """外部（timeline mini slider 拖动）触发的同步显示，不发射信号。"""
-        if self._track_idx < 0:
+    def update_volume_display(self, track_idx: int, clip_idx: int,
+                              volume: float):
+        """外部（timeline mini slider 拖动）触发的同步显示，不发射信号。
+        仅当面板当前显示的就是目标 clip 时才更新，避免拖动别的 clip 时误刷新。
+        """
+        if (self._track_idx != track_idx or self._clip_idx != clip_idx
+                or self._track_idx < 0):
             return
         volume = max(0.0, min(volume, 2.0))
         self._slider.blockSignals(True)

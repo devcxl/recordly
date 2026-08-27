@@ -2617,3 +2617,70 @@ class TestTimelineVolumeSlider:
         assert panel.isVisible()
         panel.clear()
         assert panel.isHidden()
+
+    def test_mini_slider_press_selects_clip(self, qapp):
+        """点 mini slider 应同时选中该 clip（否则 Inspector 无反应）。"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import TimelineWidget
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 30.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=10.0, volume=1.0),
+        ])])
+        s_rect = w._volume_slider_rect(0, 0)
+        press = QPointF(s_rect.center().x(), s_rect.center().y())
+        selects = []
+        w.selection_changed.connect(lambda: selects.append(True))
+        w.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, press,
+            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+        assert w._drag_state == "volume"
+        assert w._selected_track == 0
+        assert w._selected_clip == 0
+        assert selects
+
+    def test_undo_stack_limited_for_volume_drags(self, qapp):
+        """mini slider 连续拖动入栈不得超过 UNDO_STACK_LIMIT。"""
+        from PyQt5.QtCore import QEvent, QPointF, Qt
+        from PyQt5.QtGui import QMouseEvent
+        from core.project import Clip, Track
+        from ui.timeline import UNDO_STACK_LIMIT, TimelineWidget
+        w = TimelineWidget()
+        w._pixels_per_sec = 32.0
+        w.duration = 30.0
+        w.set_tracks([Track(type="audio", clips=[
+            Clip(type="audio", start=0.0, end=10.0, volume=1.0),
+        ])])
+        s_rect = w._volume_slider_rect(0, 0)
+        # 每步从底部拖到顶部 → new_volume=2.0，入栈一次
+        for _ in range(UNDO_STACK_LIMIT + 10):
+            bottom = QPointF(s_rect.center().x(), s_rect.bottom())
+            top = QPointF(s_rect.center().x(), s_rect.y())
+            w.mousePressEvent(QMouseEvent(
+                QEvent.MouseButtonPress, bottom,
+                Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+            w.mouseMoveEvent(QMouseEvent(
+                QEvent.MouseMove, top,
+                Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+            w.mouseReleaseEvent(QMouseEvent(
+                QEvent.MouseButtonRelease, top,
+                Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
+        assert len(w._undo_stack) <= UNDO_STACK_LIMIT
+
+
+class TestTimelineVolumeSliderInspectorSync:
+    """T12: Inspector 与 timeline 音量双向同步（含 undo/redo）。"""
+
+    def test_update_volume_display_ignores_other_clip(self, qapp):
+        from ui.inspector_panel import InspectorPanel
+        panel = InspectorPanel()
+        mock = type("MockClip", (), {
+            "type": "audio", "content": "", "volume": 1.0})()
+        panel.show_clip(0, 0, mock)
+        panel.update_volume_display(1, 0, 2.0)
+        assert panel._slider.value() == 100  # 目标不是当前 clip → 不刷新
+        panel.update_volume_display(0, 0, 2.0)
+        assert panel._slider.value() == 200  # 目标是当前 clip → 同步显示

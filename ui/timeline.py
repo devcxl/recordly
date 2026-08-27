@@ -396,7 +396,7 @@ class TimelineWidget(QWidget):
             return
 
         # 命中 audio clip 内嵌的 mini volume slider（优先于 resize 边缘，
-# 避免 mini slider 区域与 left/right edge SnapDistance 重叠时点不中）
+        # 避免 mini slider 区域与 left/right edge SnapDistance 重叠时点不中）
         vol_hit = self._hit_volume_slider(pos)
         if vol_hit:
             ti, ci = vol_hit
@@ -405,6 +405,11 @@ class TimelineWidget(QWidget):
             self._drag_clip = ci
             clip = self._tracks[ti].clips[ci]
             self._drag_orig_volume = getattr(clip, "volume", 1.0)
+            # 点 mini slider 即选中该 clip，保证 Inspector 面板同步显示
+            self._selected_track = ti
+            self._selected_clip = ci
+            self._multi_selected = {(ti, ci)}
+            self.selection_changed.emit()
             return
 
         # 命中 clip 边缘：进入 resize 拖拽，不移动播放头
@@ -637,7 +642,10 @@ class TimelineWidget(QWidget):
                 cmd = ChangeVolumeCommand(ti, ci, old_volume, new_volume)
                 self._undo_stack.append(cmd)
                 self._redo_stack.clear()
-                self.clip_volume_drag_finished.emit(ti, ci, old_volume, new_volume)
+                while len(self._undo_stack) > UNDO_STACK_LIMIT:
+                    self._undo_stack.pop(0)
+                self.clip_volume_drag_finished.emit(
+                    ti, ci, old_volume, new_volume)
                 self.clips_changed.emit()
             self._drag_state = None
             self._drag_track = -1

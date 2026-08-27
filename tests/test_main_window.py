@@ -494,7 +494,6 @@ def test_timeline_signal_connection_is_idempotent():
         re_record_requested = _FakeSignal()
         selection_changed = _FakeSignal()
         clip_volume_changed = _FakeSignal()
-        clip_volume_drag_finished = _FakeSignal()
 
     class FakeWindow:
         _timeline = FakeTimeline()
@@ -537,9 +536,6 @@ def test_timeline_signal_connection_is_idempotent():
             pass
 
         def _on_clip_volume_changing(self, ti, ci, v):
-            pass
-
-        def _on_clip_volume_committed(self, ti, ci, old, new):
             pass
 
         def _on_inspector_volume_changing(self, ti, ci, v):

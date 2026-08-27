@@ -898,8 +898,6 @@ class MainWindow(QMainWindow):
             (self._timeline.re_record_requested, self._on_re_record_requested),
             (self._timeline.selection_changed, self._on_timeline_selection_changed),
             (self._timeline.clip_volume_changed, self._on_clip_volume_changing),
-            (self._timeline.clip_volume_drag_finished,
-             self._on_clip_volume_committed),
             (self._inspector.volume_changing, self._on_inspector_volume_changing),
             (self._inspector.volume_committed, self._on_inspector_volume_committed),
         )
@@ -1396,19 +1394,10 @@ class MainWindow(QMainWindow):
         self._inspector.show_clip(ti, ci, clip)
 
     def _on_clip_volume_changing(self, ti: int, ci: int, new_volume: float):
-        """timeline mini slider 拖动中：同步 Inspector 数值 + 重绘 timeline。"""
-        self._inspector.update_volume_display(new_volume)
-        # timeline mini slider drag 中只改了 clip.volume，未 emit clips_changed，
-        # 这里手动重绘确保 Inspector 的进度同步
-        self._timeline.update()
-
-    def _on_clip_volume_committed(self, ti: int, ci: int,
-                                  old_volume: float, new_volume: float):
-        """timeline mini slider 拖动结束：ChangeVolumeCommand 已入撤销栈。
-        重建 audio preview 使新音量生效。
+        """timeline mini slider 拖动中：同步 Inspector 数值。
+        mouseReleaseEvent 已 emit clips_changed → 重建 playback，此处无需重绘。
         """
-        # ChangeVolumeCommand 由 timeline mouseReleaseEvent 中入栈，此处仅重建播放
-        self._rebuild_playback_after_audio_change()
+        self._inspector.update_volume_display(ti, ci, new_volume)
 
     def _on_inspector_volume_changing(self, ti: int, ci: int, new_volume: float):
         """Inspector slider/mute/preset 拖动中：改 clip.volume + 重绘 timeline。"""
@@ -1428,15 +1417,6 @@ class MainWindow(QMainWindow):
             return
         cmd = ChangeVolumeCommand(ti, ci, old_volume, new_volume)
         self._timeline.push_command(cmd)
-
-    def _rebuild_playback_after_audio_change(self):
-        """timeline mini slider 拖动结束重建 audio playback。"""
-        self._sync_audio_regions()
-        if self._playback:
-            current_frame = self._playback.current_frame
-            self._playback.stop()
-            self._create_playback_controller()
-            self._playback.seek(current_frame)
 
     def _enable_playback_controls(self, enabled: bool):
         self._btn_rewind.setEnabled(enabled)
@@ -1872,10 +1852,12 @@ class MainWindow(QMainWindow):
     def _on_undo(self):
         if hasattr(self, '_timeline'):
             self._timeline.undo()
+            self._on_timeline_selection_changed()  # undo 音量后同步 Inspector
 
     def _on_redo(self):
         if hasattr(self, '_timeline'):
             self._timeline.redo()
+            self._on_timeline_selection_changed()
 
     def _on_add_text_track(self):
         from PyQt5.QtWidgets import QInputDialog
