@@ -19,6 +19,7 @@ pkgbase = recordly
 	makedepends = python-setuptools
 	makedepends = python-pip
 	makedepends = pyinstaller
+	makedepends = xorg-server-xvfb
 	source = recordly-1.2.0.tar.gz::https://github.com/devcxl/recordly/archive/v1.2.0.tar.gz
 	sha256sums = SKIP
 

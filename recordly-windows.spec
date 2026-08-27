@@ -3,12 +3,26 @@
 # 与 recordly.spec 的区别：icon 使用 .ico（Windows EXE 必需）
 from PyInstaller.utils.hooks import collect_submodules
 
+# 手动列出 pynput 子模块（同 recordly.spec）
+pynput_hidden = [
+    'pynput',
+    'pynput.mouse',
+    'pynput.mouse._win32',
+    'pynput.mouse._base',
+    'pynput.mouse._dummy',
+    'pynput.keyboard',
+    'pynput.keyboard._win32',
+    'pynput.keyboard._base',
+    'pynput.keyboard._dummy',
+    'pynput._util',
+    'pynput._util.win32',
+    'pynput._util.win32_vks',
+]
+
 auto_hidden = (
-    collect_submodules('pynput')
-    + collect_submodules('sounddevice')
+    collect_submodules('sounddevice')
     + collect_submodules('PIL')
     + collect_submodules('numpy')
-    + collect_submodules('Xlib')
     + collect_submodules('cv2')
     + collect_submodules('ffmpeg')
     # ffmpeg-python 传递依赖：past.builtins.basestring 等
@@ -25,7 +39,7 @@ static_hidden = [
     'builtins',  # ffmpeg-python: from builtins import str/object
 ]
 
-hiddenimports = sorted(set(auto_hidden + static_hidden))
+hiddenimports = sorted(set(pynput_hidden + auto_hidden + static_hidden))
 
 a = Analysis(
     ['main.py'],

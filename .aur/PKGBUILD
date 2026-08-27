@@ -29,6 +29,7 @@ makedepends=(
     'python-setuptools'
     'python-pip'
     'pyinstaller'
+    'xorg-server-xvfb'  # 让 pynput 在 build 时可 import（连虚拟 X server）
 )
 # 不在 Arch 官方仓库的 Python 依赖（pynput / sounddevice / ffmpeg-python）：
 # 在 build() 中通过 pip --user 安装，PyInstaller 会跟随打包。
@@ -46,6 +47,13 @@ build() {
     # 但 ffmpeg-python 必须依赖 future，需明确加进 hiddenimports（PyInstaller spec 已包含）
     pip install --user --break-system-packages --no-deps \
         pynput sounddevice ffmpeg-python future
+
+    # pynput 在 Linux 上 import 会连接 X server。build 环境启动虚拟 X。
+    export DISPLAY=:99
+    Xvfb :99 -screen 0 1024x768x24 -nolisten tcp &
+    XVFB_PID=$!
+    sleep 1
+    trap "kill $XVFB_PID 2>/dev/null || true" EXIT
 
     # 直接由 PyInstaller 收集源码及其所有 import；不再 pip install .
     # user site-packages 会被 python 自动加入 sys.path
