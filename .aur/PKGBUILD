@@ -15,10 +15,12 @@ depends=(
     'python-opencv'
     'python-xlib'
     'python-mss'
-    'python-future'
     'ffmpeg'
     'portaudio'
 )
+# 注：ffmpeg-python 依赖 future (past.builtins) — future 模块已被 PyInstaller
+# 打进二进制产物 /usr/bin/recordly，运行时不需要系统包。
+# Arch 官方仓库未提供 python-future（只在 AUR）。
 # PyInstaller 与 pip 安装的 Python 包仅在构建阶段使用
 makedepends=(
     'python-build'
