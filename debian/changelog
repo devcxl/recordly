@@ -1,3 +1,11 @@
+recordly (1.3.0-1) unstable; urgency=medium
+
+  * Feature: audio clip inline mini volume slider (drag on clip, 0-200%)
+  * Feature: Inspector panel at bottom of editor with continuous volume slider,
+    mute toggle, live sync with timeline drag and undo/redo support.
+
+ -- devcxl <64475363+devcxl@users.noreply.github.com>  Fri, 28 Aug 2026 11:20:00 +0800
+
 recordly (1.2.2-1) unstable; urgency=medium
 
   * Bug fix: AUR package — pynput._xorg module missing due to PyInstaller
