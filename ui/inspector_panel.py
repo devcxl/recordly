@@ -94,22 +94,6 @@ class InspectorPanel(QWidget):
         self._value_label.setAlignment(Qt.AlignCenter)
         outer.addWidget(self._value_label)
 
-        # 快速预设
-        for preset_pct in (50, 100, 150):
-            btn = QPushButton(f"{preset_pct}%")
-            btn.setObjectName(f"preset_{preset_pct}")
-            btn.setFixedWidth(56)
-            btn.setEnabled(False)
-            btn.clicked.connect(
-                lambda checked, p=preset_pct: self._apply_preset(p))
-            outer.addWidget(btn)
-            if preset_pct == 50:
-                self._preset_50 = btn
-            elif preset_pct == 100:
-                self._preset_100 = btn
-            else:
-                self._preset_150 = btn
-
         self.setVisible(False)
         self.setFixedHeight(56)
 
@@ -139,8 +123,6 @@ class InspectorPanel(QWidget):
         self._mute_btn.setChecked(volume <= 0.0)
         self._mute_btn.setEnabled(True)
         self._mute_btn.blockSignals(False)
-        for btn in (self._preset_50, self._preset_100, self._preset_150):
-            btn.setEnabled(True)
         self.setVisible(True)
 
     def clear(self):
@@ -156,8 +138,6 @@ class InspectorPanel(QWidget):
         self._mute_btn.setChecked(False)
         self._mute_btn.setEnabled(False)
         self._mute_btn.blockSignals(False)
-        for btn in (self._preset_50, self._preset_100, self._preset_150):
-            btn.setEnabled(False)
         self._value_label.setText("—")
         self.setVisible(False)
 
@@ -220,24 +200,6 @@ class InspectorPanel(QWidget):
         old_volume = self._old_volume
         if abs(old_volume - new_volume) > 0.001:
             self._old_volume = new_volume
-            self.volume_committed.emit(
-                self._track_idx, self._clip_idx, old_volume, new_volume)
-
-    def _apply_preset(self, percent: int):
-        if self._track_idx < 0:
-            return
-        new_volume = percent / 100.0
-        self._slider.blockSignals(True)
-        self._slider.setValue(percent)
-        self._slider.blockSignals(False)
-        self._update_value_label(new_volume)
-        self._mute_btn.blockSignals(True)
-        self._mute_btn.setChecked(new_volume <= 0.0)
-        self._mute_btn.blockSignals(False)
-        self.volume_changing.emit(self._track_idx, self._clip_idx, new_volume)
-        old_volume = self._old_volume
-        self._old_volume = new_volume
-        if abs(old_volume - new_volume) > 0.001:
             self.volume_committed.emit(
                 self._track_idx, self._clip_idx, old_volume, new_volume)
 
