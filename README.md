@@ -5,10 +5,10 @@
 Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.11%2B-blue" alt="Python">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-288%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-655%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -28,15 +28,28 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
 | ⏏ 导出 | MP4 / GIF，分辨率预设（4K/2K/1080p/720p），自定义宽高比 |
 | 📁 项目管理 | 录制即创建项目，卡片网格浏览，缩略图预览 |
 
-## 快速开始
+## 安装
+
+### 分发版（推荐）
+
+| 平台 | 安装方式 |
+|------|----------|
+| Arch Linux | `paru -S recordly`（AUR）或下载 Release 中的 `.pkg.tar.zst` 后 `sudo pacman -U` |
+| Debian / Ubuntu | 下载 Release 中的 `recordly_*.deb` 后 `sudo dpkg -i` |
+| Windows | 下载 Release 中的 `recordly.exe` 直接运行 |
+| macOS | 下载 Release 中的 `recordly-macos.zip` 解压后拖入 Applications |
+
+各版本产物可在 [GitHub Releases](https://github.com/devcxl/recordly/releases) 下载。
+
+### 从源码运行
 
 ```bash
 # 克隆
 git clone https://github.com/devcxl/recordly
 cd recordly
 
-# 安装 Python 依赖
-pip install -r requirements.txt
+# 安装 Python 依赖（PEP 621，依赖声明在 pyproject.toml）
+pip install -e .
 
 # 安装 FFmpeg（系统依赖）
 # macOS:  brew install ffmpeg
@@ -44,7 +57,8 @@ pip install -r requirements.txt
 # Windows: choco install ffmpeg
 
 # 启动
-python main.py
+recordly
+# 或 python main.py
 ```
 
 ## 技术栈
@@ -64,14 +78,17 @@ python main.py
 ```
 recordly/
 ├── main.py                 # 入口 + 全局暗色主题
+├── pyproject.toml          # PEP 621 包配置（依赖/构建/入口）
 ├── app/
 │   ├── main_window.py      # 主窗口（QMainWindow）
+│   ├── resources.py        # 统一资源加载（打包感知）
 │   ├── config.py           # 应用配置（QSettings）
 │   └── constants.py        # 常量
 ├── core/
 │   ├── recorder.py         # 录制控制器
 │   ├── screen_capture.py   # 屏幕捕获引擎
 │   ├── audio_capture.py    # 音频捕获
+│   ├── audio_mix.py        # 音频合成（compose_audio）
 │   ├── pointer_tracker.py  # 鼠标追踪
 │   ├── cursor_effects.py   # 光标特效
 │   ├── compositor.py       # 帧合成器
@@ -85,7 +102,8 @@ recordly/
 │   ├── aspect_ratio.py     # 宽高比 + 分辨率预设
 │   └── speed.py            # 速度计算
 ├── ui/
-│   ├── timeline.py         # 时间线组件
+│   ├── timeline.py         # 时间线组件（含 clip 内嵌音量滑块）
+│   ├── inspector_panel.py  # 音量属性面板
 │   ├── preview_widget.py   # 预览播放器
 │   ├── export_dialog.py    # 导出对话框
 │   ├── settings_dialog.py  # 设置对话框
@@ -93,13 +111,12 @@ recordly/
 │   ├── crop_overlay.py     # 裁剪叠加层
 │   ├── project_card.py     # 项目卡片组件
 │   └── project_gallery.py  # 项目画廊（卡片网格）
-├── tests/                  # 18 个测试文件，288 个用例
-├── docs/                   # 文档
-│   ├── prd/                # 产品需求文档
-│   ├── adr/                # 架构决策记录
-│   └── dev/                # 技术方案 + 任务定义
-└── resources/
-    └── icons/
+├── tests/                  # 33 个测试文件，655 个用例
+├── docs/                   # 文档（prd / adr / design / dev / review / task）
+├── debian/                 # Debian 打包（dh-python + pybuild）
+├── .aur/                   # AUR PKGBUILD
+├── recordly.spec           # PyInstaller（Linux/macOS）
+└── recordly-windows.spec   # PyInstaller（Windows）
 ```
 
 ## 测试
