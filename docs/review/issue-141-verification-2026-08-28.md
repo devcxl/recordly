@@ -11,13 +11,14 @@
 
 | 状态 | 数量 | 条目 |
 |------|------|------|
-| ✅ 已修复 | 3 | 发现 #1（滤镜图注入）、发现 #2（录制停止竞态）、许可证一致性（技术债项） |
-| 🟡 部分修复 | 3 | 发现 #3、#10；私有成员访问收敛（技术债项） |
-| ❌ 未修复 | 9 | 发现 #4、#5、#6、#7、#8、#9；临时文件（A4）、main_window 行数（A5）、半成品路径（A5） |
+| ✅ 已修复 | 4 | 发现 #1、#2、#3、许可证一致性（技术债项） |
+| 🟡 部分修复 | 2 | 发现 #10；私有成员访问收敛（技术债项） |
+| ❌ 未修复 | 8 | 发现 #4、#5、#6、#7、#8、#9；main_window 行数（A5）、半成品路径（A5） |
 
-修复率约 **20%**（3/15 完全修复，3/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
+修复率约 **27%**（4/15 完全修复，2/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
 
 > 2026-08-29 更新：**发现 #2（录制停止竞态）已修复**（commit `a657c89`）——锁保护 + 快照读取 + 可中断循环 + clear 守卫，含 4 个回归测试。
+> 2026-08-29 更新：**发现 #3（损坏项目崩溃）已修复**（commit `7426f48`）——`_validate_schema` 深度类型/范围校验（加载即拒绝非法字段，带字段路径错误信息）+ `_on_open_project` restore 步骤整体 try/except 回退干净状态，含 12 个回归测试。
 
 ---
 
@@ -80,13 +81,14 @@
 - `core/recorder.py`：`stop_recording` 对 join 超时记录 warning
 - `tests/test_screen_capture.py`：+4 回归测试（并发写读快照一致性、可中断循环 + stop 确认、clear 守卫）
 
-### #3 [LOW][安全] project.json 子结构无类型校验 — 🟡 部分修复
+### #3 [LOW][安全] project.json 子结构无类型校验 — ✅ 已修复（2026-08-29, commit `7426f48`）
 **原问题**: `Project.load` 对子结构 `**data` 展开无类型校验，打开损坏项目抛未处理异常。
 
-**现状**:
-- ✅ `core/project.py:253` 已调用 `_validate_schema(data)`（299-322 行）：校验 **top-level 未知键** + cursor/frame_style 未知键，报"项目格式不兼容"。
-- ❌ **不递归**：`Track(**t)`/`Clip(**c)`/`AudioRegion(**a)`/`SourceInfo(**data["source"])`（`project.py:256-264`）仍直接展开；`cursor_events`/`click_events` 等直接赋值。错误类型（如 `source: {"video": 123}`）仍抛 TypeError。
-- ❌ `_on_open_project`（`app/main_window.py:1666-1684`）：**只包了 `open_project` 的 try/except**，`_restore_cursor_events`/`_restore_video_frames`/`_restore_project_audio`/`_restore_timeline_and_playback`/`_restore_editor_ui` 5 个 restore 步骤仍在 try 外，异常直达 Qt 槽（与 issue 描述一致）。
+**修复**:
+- `core/project.py`：`_validate_schema` 扩展为深度类型/范围校验——`source`（字符串/数值/fps 1-240）、`timeline→clips`（start/end/source_start 数值、source_end 可空、speed 0.0001-8、volume 0-2、绘制字段 font_size/color/rect）、`cursor_events`/`click_events`（[x,y,ts] 三元组）、`audio_regions`（ms + volume 0-2）、`annotations`、`crop_region`（0-1 归一化）、`duration`/`monitor_offset` 等；非法字段加载时即抛 ValueError（含字段路径）
+- `app/main_window.py`：`_on_open_project` 的 6 个 restore 步骤整体 try/except，失败回退 `_clear_editor_state()` + `_project_dir=None` + 错误通知，不进入编辑器
+- `tests/test_data_persistence.py`：+10 参数化坏字段拒绝 + 合法边界值加载
+- `tests/test_main_window.py`：+2 打开失败/恢复失败回退测试
 
 ### #4 [LOW][安全] 临时文件生命周期 — ❌ 未修复
 **原问题**: 录屏临时文件仅 atexit 清理（崩溃残留）；导出取消/断管跳过 WAV 清理。
@@ -148,7 +150,6 @@
 
 | 优先级 | 条目 | 位置 | 建议 |
 |--------|------|------|------|
-| **中** | #3 打开损坏项目仍有未处理异常 | `core/project.py:249-297`、`app/main_window.py:1666-1684` | `_validate_schema` 递归校验子结构类型；restore 步骤并入 try/except + 回退干净状态 |
 | **中** | #8 首页缩略图永不显示 | `core/project_manager.py:32-60`、`ui/project_card.py:104-115` | list_projects 用项目目录拼接相对路径 + 越界绝对路径拒绝 |
 | **中** | #5 公开 API 目录穿越 | `core/project_manager.py:66`、`app/project_session.py:58` | name 消毒（剔除路径分隔符/控制字符）+ resolve 后校验仍在 projects_dir 内（复用 delete_project 守卫） |
 | **中** | #4 临时文件泄漏（崩溃残留 + 取消泄漏 WAV） | `core/screen_capture.py:46-59`、`core/exporter.py` 取消路径 | 录制用 TemporaryDirectory 或信号清理；`_temp_paths` 清理移入 try/finally |
