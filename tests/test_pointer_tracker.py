@@ -131,3 +131,63 @@ class TestPointerTrackerData:
     def test_stop_without_start(self, tracker):
         """未 start 就 stop 不应报错"""
         tracker.stop()
+
+
+class TestPointerTrackerConcurrency:
+    """issue #141 #6：监听线程并发写入时读取快照安全。"""
+
+    def test_concurrent_write_read_snapshots(self):
+        import threading
+        from core.pointer_tracker import PointerTracker
+
+        pt = PointerTracker()
+        stop = threading.Event()
+
+        # 模拟真实 pynput 事件频率（事件驱动，远非无界高速循环）
+        def writer():
+            i = 0
+            while not stop.is_set() and i < 5000:
+                pt._on_move(i % 100, i % 100)
+                pt._on_click(i % 100, i % 100, "left", i % 2 == 0)
+                i += 1
+                time.sleep(0.0005)
+
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        try:
+            for _ in range(200):
+                evts = pt.events
+                assert isinstance(evts, list)
+                assert pt.get_clicks() is not None
+                pt.get_at(len(pt.events) / 2)
+                time.sleep(0.001)
+        finally:
+            stop.set()
+            t.join(timeout=5)
+        assert t.is_alive() is False
+
+    def test_normalize_timestamps_in_lock(self):
+        """#6：时间戳换算走锁内快照，recorder 不再直接遍历私有列表。"""
+        from core.pointer_tracker import PointerTracker
+        pt = PointerTracker()
+        pt._on_move(10, 20)
+        pt._on_click(30, 40, "left", True)
+        before = pt.events[0].timestamp  # time.time() 基准
+
+        pt.normalize_timestamps(100.0, 50.0)
+
+        evts = pt.events
+        # new = perf_start + (old - wall_start)
+        assert abs(evts[0].timestamp - (100.0 + (before - 50.0))) < 1e-6
+        for e in evts:
+            assert abs((e.timestamp - 100.0) - (before - 50.0)) < 1e-6 or \
+                e.event_type == "click"
+
+    def test_events_returns_snapshot_copy(self):
+        """events 返回副本，外部修改不影响内部状态。"""
+        from core.pointer_tracker import PointerTracker
+        pt = PointerTracker()
+        pt._on_move(1, 2)
+        snapshot = pt.events
+        snapshot.clear()
+        assert len(pt.events) == 1

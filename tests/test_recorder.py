@@ -157,6 +157,9 @@ class TestRecorder:
             def stop(self):
                 pass
 
+            def normalize_timestamps(self, perf_start, wall_start):
+                pass
+
             @property
             def events(self):
                 return []
@@ -221,6 +224,9 @@ class TestRecorder:
                 pass
 
             def stop(self):
+                pass
+
+            def normalize_timestamps(self, perf_start, wall_start):
                 pass
 
             @property

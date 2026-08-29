@@ -105,8 +105,8 @@ class Recorder:
             raise RuntimeError(f"屏幕采集失败: {self.screen.error}") from self.screen.error
 
         # 统一时间基准：光标事件从 time.time() 转换到 time.perf_counter()
-        for e in self.pointer._events:
-            e.timestamp = self._perf_start + (e.timestamp - self._wall_start)
+        # （PointerTracker 锁内快照换算，监听线程在途回调不会造成迭代竞态）
+        self.pointer.normalize_timestamps(self._perf_start, self._wall_start)
 
         mixed_audio = mix_audio_results(mic_audio, system_audio)
 
