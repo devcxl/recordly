@@ -11,14 +11,15 @@
 
 | 状态 | 数量 | 条目 |
 |------|------|------|
-| ✅ 已修复 | 4 | 发现 #1、#2、#3、许可证一致性（技术债项） |
+| ✅ 已修复 | 5 | 发现 #1、#2、#3、#4、许可证一致性（技术债项） |
 | 🟡 部分修复 | 2 | 发现 #10；私有成员访问收敛（技术债项） |
-| ❌ 未修复 | 8 | 发现 #4、#5、#6、#7、#8、#9；main_window 行数（A5）、半成品路径（A5） |
+| ❌ 未修复 | 7 | 发现 #5、#6、#7、#8、#9；main_window 行数（A5）、半成品路径（A5） |
 
-修复率约 **27%**（4/15 完全修复，2/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
+修复率约 **33%**（5/15 完全修复，2/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
 
 > 2026-08-29 更新：**发现 #2（录制停止竞态）已修复**（commit `a657c89`）——锁保护 + 快照读取 + 可中断循环 + clear 守卫，含 4 个回归测试。
 > 2026-08-29 更新：**发现 #3（损坏项目崩溃）已修复**（commit `7426f48`）——`_validate_schema` 深度类型/范围校验（加载即拒绝非法字段，带字段路径错误信息）+ `_on_open_project` restore 步骤整体 try/except 回退干净状态，含 12 个回归测试。
+> 2026-08-29 更新：**发现 #4（临时文件泄漏）已修复**（commit `16f8b67`）——导出临时 WAV 统一注册到 `ExportWorker._temp_wavs` 由 `run()` finally 清理（覆盖取消/断管/异常全部退出路径）；录屏崩溃残留由启动清扫 `cleanup_stale_temp_frames()` 处理（24h 阈值不误删活跃实例），含 5 个回归测试。
 
 ---
 
@@ -90,12 +91,14 @@
 - `tests/test_data_persistence.py`：+10 参数化坏字段拒绝 + 合法边界值加载
 - `tests/test_main_window.py`：+2 打开失败/恢复失败回退测试
 
-### #4 [LOW][安全] 临时文件生命周期 — ❌ 未修复
+### #4 [LOW][安全] 临时文件生命周期 — ✅ 已修复（2026-08-29, commit `16f8b67`）
 **原问题**: 录屏临时文件仅 atexit 清理（崩溃残留）；导出取消/断管跳过 WAV 清理。
 
-**现状**:
-- 录制: `core/screen_capture.py:46-59` 仍 `tempfile.NamedTemporaryFile(prefix="recordly-", suffix=".frames", delete=False)` + `atexit.register(self.cleanup)`，未用 `TemporaryDirectory`，崩溃残留依旧。
-- 导出: `core/exporter.py` 的 `_temp_paths` 删除循环（`_export_mp4_cpu` ~358 行、`_export_mp4_nvenc` ~437 行）位于正常完成路径；取消/断管时 `_stream_frames_parallel` 提前 return（`if not ...: return`），**跳过清理**。GIF 路径无音频临时文件，不受影响。
+**修复**:
+- `core/exporter.py`：临时 WAV 统一注册到 `ExportWorker._temp_wavs`，`run()` 的 finally 调用 `_cleanup_temp_wavs()` 删除——**覆盖成功/取消/断管/异常全部退出路径**（此前取消/断管提前 return 跳过清理）；`_export_mp4_cpu`/`_export_mp4_nvenc` 内局部删除循环移除
+- `core/screen_capture.py`：新增 `cleanup_stale_temp_frames(max_age_seconds=24h)` 启动清扫——删除系统临时目录中超过 24h 的 `recordly-*.frames` 崩溃残留，新文件（可能是其他活跃实例）不误删；临时文件名改用共享常量
+- `main.py`：启动时执行清扫（带日志）；顺手修复 `setApplicationVersion` 1.2.0 → 1.3.0
+- `tests/test_exporter.py`：+2（WAV 注册-删除、run finally 异常路径清理）；`tests/test_screen_capture.py`：+3（旧文件删除/新文件保留/目录缺失幂等）
 
 ### #5 [LOW][安全] 项目名未消毒，目录穿越 — ❌ 未修复
 **原问题**: `create_project`/`ProjectSession.create` 拼接 name 不校验。
@@ -152,7 +155,6 @@
 |--------|------|------|------|
 | **中** | #8 首页缩略图永不显示 | `core/project_manager.py:32-60`、`ui/project_card.py:104-115` | list_projects 用项目目录拼接相对路径 + 越界绝对路径拒绝 |
 | **中** | #5 公开 API 目录穿越 | `core/project_manager.py:66`、`app/project_session.py:58` | name 消毒（剔除路径分隔符/控制字符）+ resolve 后校验仍在 projects_dir 内（复用 delete_project 守卫） |
-| **中** | #4 临时文件泄漏（崩溃残留 + 取消泄漏 WAV） | `core/screen_capture.py:46-59`、`core/exporter.py` 取消路径 | 录制用 TemporaryDirectory 或信号清理；`_temp_paths` 清理移入 try/finally |
 | **中** | #9 GPU 探测 UI 阻塞最多 10s | `core/exporter.py:25-41`、`ui/export_dialog.py:138-142` | 探测移入后台线程/导出线程；缓存可失效 |
 | **低** | #6 指针事件竞态 | `core/recorder.py:104-105`、`core/pointer_tracker.py:54-57` | PointerTracker.stop() 内 join + `normalize_timestamps()` 快照方法；消费 events 副本 |
 | **低** | #7 BGR/RGB 错乱（潜伏） | `core/compositor.py:132-146, 460` | 存帧前 `cv2.cvtColor(BGR2RGB)` |
