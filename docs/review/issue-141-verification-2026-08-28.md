@@ -11,11 +11,13 @@
 
 | 状态 | 数量 | 条目 |
 |------|------|------|
-| ✅ 已修复 | 2 | 发现 #1（滤镜图注入）、许可证一致性（技术债项） |
+| ✅ 已修复 | 3 | 发现 #1（滤镜图注入）、发现 #2（录制停止竞态）、许可证一致性（技术债项） |
 | 🟡 部分修复 | 3 | 发现 #3、#10；私有成员访问收敛（技术债项） |
-| ❌ 未修复 | 10 | 发现 #2、#4、#5、#6、#7、#8、#9；录制竞态（A2）、临时文件（A4）、main_window 行数（A5）、半成品路径（A5） |
+| ❌ 未修复 | 9 | 发现 #4、#5、#6、#7、#8、#9；临时文件（A4）、main_window 行数（A5）、半成品路径（A5） |
 
-修复率约 **13%**（2/15 完全修复，3/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
+修复率约 **20%**（3/15 完全修复，3/15 部分修复）。审查 12 天间项目经历了 v1.2.x 打包重建与 v1.3.0 音量功能，但**运行时/安全类问题基本未动**。
+
+> 2026-08-29 更新：**发现 #2（录制停止竞态）已修复**（commit `a657c89`）——锁保护 + 快照读取 + 可中断循环 + clear 守卫，含 4 个回归测试。
 
 ---
 
@@ -70,13 +72,13 @@
 
 **遗留小点**: `core/audio_mix.py:73-74` `data * region.volume` 对 volume 无范围校验（畸形大值 → 最终 `np.clip(mixed, -1.0, 1.0)` 削波，降级为音频失真，不构成注入）。
 
-### #2 [MEDIUM][架构] 录制停止竞态 — ❌ 未修复
+### #2 [MEDIUM][架构] 录制停止竞态 — ✅ 已修复（2026-08-29, commit `a657c89`）
 **原问题**: 采集线程 join 超时后主线程仍读取/清理其数据。
 
-**现状**: 与 issue 描述**一致**（证据见 A2 表）：
-- `stop()` 仍 `join(timeout=5)` 后即返回；
-- `all_frames` zip 遍历原列表、`frame_offsets` 返回原引用（`app/main_window.py:872` 直接使用）；
-- `clear()`（下次录制）无"线程已死"断言。
+**修复**:
+- `core/screen_capture.py`：新增 `_data_lock` 保护 `_timestamps`/`_indices`/`_latest_frame`；`all_frames`/`frame_meta`/`frame_offsets` 全部锁内返回**快照**；`_CompressedFrameStore.snapshot_offsets()` 锁内复制；`run()` 循环改用可中断的 `_quit.wait()` 且 grab 后检查退出信号；`stop()` 返回线程是否确认退出（join 超时不再静默）；`clear()` 前确认线程已死，仍存活则抛错拒绝清理
+- `core/recorder.py`：`stop_recording` 对 join 超时记录 warning
+- `tests/test_screen_capture.py`：+4 回归测试（并发写读快照一致性、可中断循环 + stop 确认、clear 守卫）
 
 ### #3 [LOW][安全] project.json 子结构无类型校验 — 🟡 部分修复
 **原问题**: `Project.load` 对子结构 `**data` 展开无类型校验，打开损坏项目抛未处理异常。
@@ -146,7 +148,6 @@
 
 | 优先级 | 条目 | 位置 | 建议 |
 |--------|------|------|------|
-| **高** | #2 录制停止竞态（数据丢失/迭代异常） | `core/screen_capture.py:190-240`、`core/recorder.py:90-107` | stop() 改为可中断短超时 grab 循环 + join 成功后再取数据；`all_frames`/`frame_offsets` 返回快照；`clear()` 前断言线程已死 |
 | **中** | #3 打开损坏项目仍有未处理异常 | `core/project.py:249-297`、`app/main_window.py:1666-1684` | `_validate_schema` 递归校验子结构类型；restore 步骤并入 try/except + 回退干净状态 |
 | **中** | #8 首页缩略图永不显示 | `core/project_manager.py:32-60`、`ui/project_card.py:104-115` | list_projects 用项目目录拼接相对路径 + 越界绝对路径拒绝 |
 | **中** | #5 公开 API 目录穿越 | `core/project_manager.py:66`、`app/project_session.py:58` | name 消毒（剔除路径分隔符/控制字符）+ resolve 后校验仍在 projects_dir 内（复用 delete_project 守卫） |
@@ -165,10 +166,11 @@
 ## 四、已修复确认（无需处理）
 
 1. ✅ **#1 FFmpeg 滤镜图注入** — compose_audio 重构彻底消除（音频不进滤镜图）
-2. ✅ **许可证一致性** — LICENSE(MIT) 存在，README/pyproject/spec 全 MIT，setup.py 已删
-3. ✅ **#3 部分** — `_validate_schema` 未知键校验已上线（防旧版/误写字段，报错友好）
-4. ✅ **#10 部分** — 已删失效日志行，新增带 f 前缀的行
-5. 🟡 私有成员跨模块访问从多处收敛到 3 处
+2. ✅ **#2 录制停止竞态** — 2026-08-29 修复（commit `a657c89`）：锁保护 + 快照 + 可中断循环 + clear 守卫
+3. ✅ **许可证一致性** — LICENSE(MIT) 存在，README/pyproject/spec 全 MIT，setup.py 已删
+4. ✅ **#3 部分** — `_validate_schema` 未知键校验已上线（防旧版/误写字段，报错友好）
+5. ✅ **#10 部分** — 已删失效日志行，新增带 f 前缀的行
+6. 🟡 私有成员跨模块访问从多处收敛到 3 处
 
 ---
 
