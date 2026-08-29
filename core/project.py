@@ -296,6 +296,72 @@ _KNOWN_FRAMESTYLE_KEYS = {
 }
 
 
+def _check_number(value, field: str, lo=None, hi=None, allow_none=False):
+    """数值类型 + 范围校验；非法抛 ValueError（含字段路径）。"""
+    if value is None:
+        if allow_none:
+            return
+        raise ValueError(f"{field} 必须是数字")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(
+            f"{field} 必须是数字，得到 {type(value).__name__}")
+    v = float(value)
+    if lo is not None and v < lo:
+        raise ValueError(f"{field} 不能小于 {lo}")
+    if hi is not None and v > hi:
+        raise ValueError(f"{field} 不能大于 {hi}")
+
+
+def _check_str(value, field: str, allow_none=False):
+    if value is None:
+        if allow_none:
+            return
+        raise ValueError(f"{field} 必须是字符串")
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field} 必须是字符串，得到 {type(value).__name__}")
+
+
+def _check_point_list(value, field: str):
+    """校验 [x, y, timestamp] 形式的点列表（cursor_events/click_events）。"""
+    if not isinstance(value, list):
+        raise ValueError(f"{field} 必须是列表")
+    for i, point in enumerate(value):
+        if (not isinstance(point, (list, tuple)) or len(point) < 3):
+            raise ValueError(
+                f"{field}[{i}] 必须是 [x, y, timestamp] 三元组")
+        _check_number(point[0], f"{field}[{i}].x")
+        _check_number(point[1], f"{field}[{i}].y")
+        _check_number(point[2], f"{field}[{i}].timestamp")
+
+
+def _validate_clip(c: dict, path: str):
+    _check_str(c.get("type", "video"), f"{path}.type")
+    _check_number(c.get("start", 0.0), f"{path}.start")
+    _check_number(c.get("end", 0.0), f"{path}.end")
+    _check_number(c.get("source_start", 0.0), f"{path}.source_start")
+    _check_number(c.get("source_end"), f"{path}.source_end",
+                  allow_none=True)
+    _check_number(c.get("speed", 1.0), f"{path}.speed", lo=0.0001, hi=8.0)
+    _check_number(c.get("volume", 1.0), f"{path}.volume", lo=0.0, hi=2.0)
+    _check_str(c.get("content", ""), f"{path}.content")
+    _check_str(c.get("source_path", ""), f"{path}.source_path")
+    _check_str(c.get("color", "white"), f"{path}.color")
+    _check_str(c.get("id", ""), f"{path}.id")
+    _check_number(c.get("font_size", 24), f"{path}.font_size",
+                  lo=1.0, hi=10000.0)
+    _check_number(c.get("x", 0), f"{path}.x")
+    _check_number(c.get("y", 0), f"{path}.y")
+    rect = c.get("rect")
+    if rect is not None:
+        if (not isinstance(rect, (list, tuple)) or len(rect) != 4):
+            raise ValueError(f"{path}.rect 必须是 [x, y, w, h] 四元组")
+        for i, v in enumerate(rect):
+            _check_number(v, f"{path}.rect[{i}]")
+    _check_number(c.get("transition_duration", 0.4),
+                  f"{path}.transition_duration", lo=0.0)
+
+
 def _validate_schema(data: dict):
     unknown_top = set(data.keys()) - _KNOWN_TOP_KEYS
     if unknown_top:
@@ -319,6 +385,98 @@ def _validate_schema(data: dict):
             raise ValueError(
                 f"project.json frame_style 字段包含未知键: {', '.join(sorted(unknown_frame))}"
             )
+
+    # ── 深度类型/范围校验（损坏或恶意字段在加载时拒绝，而非打开后崩溃）──
+    _check_number(data.get("duration", 0.0), "duration", lo=0.0)
+    _check_number(data.get("frame_count", 0), "frame_count", lo=0.0)
+
+    source = data.get("source")
+    if source is not None:
+        if not isinstance(source, dict):
+            raise ValueError(f"source 必须是对象，得到 {type(source).__name__}")
+        _check_str(source.get("video", ""), "source.video")
+        _check_str(source.get("audio_mic", ""), "source.audio_mic")
+        _check_str(source.get("audio_system", ""), "source.audio_system")
+        _check_number(source.get("duration", 0.0), "source.duration", lo=0.0)
+        _check_number(source.get("fps", 30), "source.fps", lo=1.0, hi=240.0)
+        _check_number(source.get("width", 0), "source.width", lo=0.0)
+        _check_number(source.get("height", 0), "source.height", lo=0.0)
+
+    timeline = data.get("timeline")
+    if timeline is not None:
+        if not isinstance(timeline, list):
+            raise ValueError(
+                f"timeline 必须是列表，得到 {type(timeline).__name__}")
+        for ti, t in enumerate(timeline):
+            if not isinstance(t, dict):
+                raise ValueError(f"timeline[{ti}] 必须是对象")
+            _check_str(t.get("type", "video"), f"timeline[{ti}].type")
+            clips = t.get("clips", [])
+            if not isinstance(clips, list):
+                raise ValueError(f"timeline[{ti}].clips 必须是列表")
+            for ci, c in enumerate(clips):
+                if not isinstance(c, dict):
+                    raise ValueError(
+                        f"timeline[{ti}].clips[{ci}] 必须是对象")
+                _validate_clip(c, f"timeline[{ti}].clips[{ci}]")
+
+    for field in ("cursor_events", "click_events"):
+        if data.get(field):
+            _check_point_list(data[field], field)
+
+    monitor_offset = data.get("monitor_offset")
+    if monitor_offset:
+        if (not isinstance(monitor_offset, (list, tuple))
+                or len(monitor_offset) != 2):
+            raise ValueError("monitor_offset 必须是 [left, top] 二元组")
+        _check_number(monitor_offset[0], "monitor_offset[0]")
+        _check_number(monitor_offset[1], "monitor_offset[1]")
+
+    audio_regions = data.get("audio_regions")
+    if audio_regions:
+        if not isinstance(audio_regions, list):
+            raise ValueError(
+                f"audio_regions 必须是列表，得到 {type(audio_regions).__name__}")
+        for i, r in enumerate(audio_regions):
+            if not isinstance(r, dict):
+                raise ValueError(f"audio_regions[{i}] 必须是对象")
+            _check_number(r.get("start_ms", 0.0),
+                          f"audio_regions[{i}].start_ms", lo=0.0)
+            _check_number(r.get("end_ms", 0.0),
+                          f"audio_regions[{i}].end_ms", lo=0.0)
+            _check_number(r.get("source_start_ms", 0.0),
+                          f"audio_regions[{i}].source_start_ms", lo=0.0)
+            _check_number(r.get("source_end_ms"),
+                          f"audio_regions[{i}].source_end_ms",
+                          lo=0.0, allow_none=True)
+            _check_number(r.get("volume", 1.0),
+                          f"audio_regions[{i}].volume", lo=0.0, hi=2.0)
+            _check_str(r.get("audio_path", ""),
+                       f"audio_regions[{i}].audio_path")
+
+    annotations = data.get("annotations")
+    if annotations:
+        if not isinstance(annotations, list):
+            raise ValueError(
+                f"annotations 必须是列表，得到 {type(annotations).__name__}")
+        for i, a in enumerate(annotations):
+            if not isinstance(a, dict):
+                raise ValueError(f"annotations[{i}] 必须是对象")
+            _check_number(a.get("start_ms", 0.0),
+                          f"annotations[{i}].start_ms")
+            _check_number(a.get("end_ms", 0.0),
+                          f"annotations[{i}].end_ms")
+
+    crop = data.get("crop_region")
+    if crop is not None:
+        if not isinstance(crop, dict):
+            raise ValueError(
+                f"crop_region 必须是对象，得到 {type(crop).__name__}")
+        for f in ("x", "y", "width", "height"):
+            _check_number(crop.get(f, 1.0 if f in ("width", "height") else 0.0),
+                          f"crop_region.{f}", lo=0.0, hi=1.0)
+
+    _check_str(data.get("aspect_ratio", "native"), "aspect_ratio")
 
 
 def _load_frame_style(data: dict) -> FrameStyle:

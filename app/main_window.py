@@ -1676,12 +1676,21 @@ class MainWindow(QMainWindow):
         self._project_dir = project_dir
         comp = self._compositor
 
-        self._restore_cursor_events(comp, project)
-        self._restore_video_frames(comp, project, project_dir)
-        mixed_audio = self._restore_project_audio(project_dir, project.source)
-        self._build_recorded_data_from_project(comp, mixed_audio)
-        self._restore_timeline_and_playback(comp, project)
-        self._restore_editor_ui(comp, project)
+        try:
+            self._restore_cursor_events(comp, project)
+            self._restore_video_frames(comp, project, project_dir)
+            mixed_audio = self._restore_project_audio(
+                project_dir, project.source)
+            self._build_recorded_data_from_project(comp, mixed_audio)
+            self._restore_timeline_and_playback(comp, project)
+            self._restore_editor_ui(comp, project)
+        except Exception as exc:
+            # 回退到干净状态，避免界面半初始化后残留脏数据
+            self._clear_editor_state()
+            self._project_dir = None
+            self._show_notification(
+                "打开项目失败", f"项目数据恢复失败: {exc}", "error")
+            return
 
         self._switch_to_editor()
         self.update_status(f"● 已打开项目: {project.name}")

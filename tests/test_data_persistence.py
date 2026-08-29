@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 import tempfile
 
 import pytest
@@ -146,3 +147,103 @@ class TestEventDataConversion:
         assert x == 100
         assert y == 200
         assert ts == 1.5
+
+
+class TestSchemaDeepValidation:
+    """issue #141 #3：损坏/恶意 project.json 子结构在加载时被拒绝。"""
+
+    def _write(self, data):
+        import json
+        import tempfile
+        with tempfile.NamedTemporaryFile(
+                suffix=".json", mode="w", delete=False) as f:
+            json.dump(data, f)
+            path = f.name
+        return path
+
+    def _base_project(self):
+        return {
+            "version": "1.1",
+            "created_at": "2026-01-01",
+            "name": "p",
+            "modified_at": "2026-01-01",
+            "duration": 10.0,
+            "thumbnail_path": "",
+            "source": None,
+            "timeline": [],
+            "cursor": {},
+            "frame_style": {"background": "solid"},
+            "annotations": [],
+            "audio_regions": [],
+            "crop_region": None,
+            "aspect_ratio": "native",
+            "cursor_events": [],
+            "click_events": [],
+            "monitor_offset": [0, 0],
+            "frame_count": 0,
+        }
+
+    @pytest.mark.parametrize("mutate, match", [
+        (lambda d: d.__setitem__("source", {"video": 123}),
+         "source.video 必须是字符串"),
+        (lambda d: d["timeline"].append(
+            {"type": "video", "clips": [{"start": "abc", "end": 1.0}]}),
+         "timeline[0].clips[0].start 必须是数字"),
+        (lambda d: d.__setitem__("cursor_events", [["a", 1, 2]]),
+         "cursor_events[0].x 必须是数字"),
+        (lambda d: d.__setitem__("click_events", [[1, 2]]),
+         "必须是 [x, y, timestamp] 三元组"),
+        (lambda d: d["audio_regions"].append(
+            {"start_ms": 0, "end_ms": 100, "volume": "loud"}),
+         "audio_regions[0].volume 必须是数字"),
+        (lambda d: d.__setitem__("crop_region", {"x": 0, "y": 0,
+                                                 "width": 2.0, "height": 1.0}),
+         "crop_region.width 不能大于"),
+        (lambda d: d["timeline"].append(
+            {"type": "video", "clips": [{"start": 0, "end": 1,
+                                         "volume": 5.0}]}),
+         "clips[0].volume 不能大于"),
+        (lambda d: d.__setitem__("duration", "10"), "duration 必须是数字"),
+        (lambda d: d.__setitem__("monitor_offset", [1]),
+         "monitor_offset 必须是 [left, top] 二元组"),
+    ])
+    def test_malformed_fields_rejected(self, mutate, match):
+        from core.project import Project
+        data = self._base_project()
+        mutate(data)
+        path = self._write(data)
+        try:
+            with pytest.raises(ValueError, match=re.escape(match)):
+                Project.load(path)
+        finally:
+            import os
+            os.unlink(path)
+
+    def test_valid_project_with_optional_values_loads(self):
+        from core.project import Project
+        data = self._base_project()
+        data["timeline"].append({
+            "type": "audio",
+            "clips": [{
+                "start": 0.0, "end": 5.0, "source_start": 0.0,
+                "source_end": None, "speed": 2.0, "volume": 1.5,
+                "content": "x", "source_path": "a.wav",
+            }],
+        })
+        data["audio_regions"].append({
+            "start_ms": 0, "end_ms": 5000, "source_start_ms": 0,
+            "source_end_ms": 2500, "volume": 1.5, "audio_path": "a.wav",
+        })
+        data["cursor_events"] = [[10, 20, 0.5], [30, 40, 1.0]]
+        data["crop_region"] = {"x": 0.1, "y": 0.1,
+                               "width": 0.8, "height": 0.8}
+        path = self._write(data)
+        try:
+            p = Project.load(path)
+            assert len(p.timeline) == 1
+            assert p.timeline[0].clips[0].volume == 1.5
+            assert len(p.cursor_events) == 2
+            assert p.crop_region.width == 0.8
+        finally:
+            import os
+            os.unlink(path)

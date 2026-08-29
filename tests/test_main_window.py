@@ -2175,3 +2175,155 @@ def test_re_record_clip_roundtrips_through_save_and_load(tmp_path):
     assert re_clip.source_end == 1.0
     assert re_clip.source_path == re_wav
     assert re_clip.volume == 1.0
+
+
+class TestOpenProjectFailureRecovery:
+    """issue #141 #3：打开损坏项目不崩溃，加载/恢复失败均回退干净状态。"""
+
+    def _make_window(self):
+        from types import SimpleNamespace, MethodType
+        from app.main_window import MainWindow
+
+        comp = SimpleNamespace(
+            frames=[], frame_times=[], cursor_events=[], click_events=[],
+            crop_region=None,
+        )
+
+        class FakeWindow:
+            def __init__(self):
+                self._compositor = comp
+                self._project_dir = None
+                self._recorded_data = object()
+                self._playback = None
+                self._crop_active = False
+                self._audio_regions = []
+                self._track_audio_cache = {}
+                self._notifications = []
+                self._switched = False
+
+            def _show_notification(self, title, msg, level=""):
+                self._notifications.append((title, msg))
+
+            def _switch_to_editor(self):
+                self._switched = True
+
+            def update_status(self, msg):
+                pass
+
+        fw = FakeWindow()
+        fw._on_open_project = MethodType(MainWindow._on_open_project, fw)
+        fw._clear_editor_state = MethodType(
+            MainWindow._clear_editor_state, fw)
+        from core.project_manager import ProjectManager
+        fw._project_manager = ProjectManager(str(
+            SimpleNamespace()).__str__() if False else ".")
+        return fw
+
+    def test_corrupt_json_load_failure_notifies(self, tmp_path):
+        import json
+        from core.project_manager import ProjectManager
+        from types import MethodType
+        from app.main_window import MainWindow
+
+        comp = SimpleNamespace(
+            frames=[], frame_times=[], cursor_events=[], click_events=[],
+            crop_region=None,
+        )
+
+        class FakeWindow:
+            def __init__(self):
+                self._compositor = comp
+                self._project_dir = None
+                self._recorded_data = object()
+                self._playback = None
+                self._crop_active = False
+                self._audio_regions = []
+                self._track_audio_cache = {}
+                self._notifications = []
+
+            def _show_notification(self, title, msg, level=""):
+                self._notifications.append((title, msg))
+
+            def _switch_to_editor(self):
+                raise AssertionError("损坏项目不应进入编辑器")
+
+            def update_status(self, msg):
+                pass
+
+        fw = FakeWindow()
+        fw._on_open_project = MethodType(MainWindow._on_open_project, fw)
+        fw._clear_editor_state = MethodType(
+            MainWindow._clear_editor_state, fw)
+        fw._project_manager = ProjectManager(str(tmp_path))
+
+        proj_dir = tmp_path / "bad"
+        proj_dir.mkdir()
+        with open(proj_dir / "project.json", "w") as f:
+            json.dump({
+                "version": "1.1",
+                "name": "bad",
+                "source": {"video": 123},  # 类型损坏
+                "timeline": [],
+                "cursor": {},
+                "frame_style": {"background": "solid"},
+                "annotations": [],
+                "audio_regions": [],
+                "crop_region": None,
+                "aspect_ratio": "native",
+            }, f)
+
+        fw._on_open_project(str(proj_dir))
+        assert fw._project_dir is None
+        assert any("打开项目失败" in t for t, _ in fw._notifications)
+
+    def test_restore_failure_rolls_back_clean(self, tmp_path):
+        from core.project import Project
+        from core.project_manager import ProjectManager
+        from types import MethodType
+        from app.main_window import MainWindow
+
+        comp = SimpleNamespace(
+            frames=[], frame_times=[], cursor_events=[], click_events=[],
+            crop_region=None,
+        )
+
+        class FakeWindow:
+            def __init__(self):
+                self._compositor = comp
+                self._project_dir = None
+                self._recorded_data = object()
+                self._playback = None
+                self._crop_active = False
+                self._audio_regions = []
+                self._track_audio_cache = {}
+                self._notifications = []
+
+            def _show_notification(self, title, msg, level=""):
+                self._notifications.append((title, msg))
+
+            def _switch_to_editor(self):
+                raise AssertionError("失败恢复不应进入编辑器")
+
+            def update_status(self, msg):
+                pass
+
+        fw = FakeWindow()
+        fw._on_open_project = MethodType(MainWindow._on_open_project, fw)
+        fw._clear_editor_state = MethodType(
+            MainWindow._clear_editor_state, fw)
+        fw._project_manager = ProjectManager(str(tmp_path))
+
+        proj_dir = tmp_path / "good"
+        proj_dir.mkdir()
+        p = Project()
+        p.name = "good"
+        p.save(str(proj_dir / "project.json"))
+
+        def boom(comp, project):
+            raise RuntimeError("restore 崩了")
+
+        fw._restore_cursor_events = boom
+        fw._on_open_project(str(proj_dir))
+        assert fw._project_dir is None
+        assert fw._recorded_data is None  # 回退干净状态
+        assert any("打开项目失败" in t for t, _ in fw._notifications)
