@@ -101,6 +101,8 @@ class ExportWorker(QObject):
         self._settings = settings
         self._cancelled = False
         self._process = None
+        # 导出产生的临时 WAV 路径，统一在 run() finally 清理（含取消/断管/异常路径）
+        self._temp_wavs: list[str] = []
 
     def cancel(self):
         self._cancelled = True
@@ -134,6 +136,17 @@ class ExportWorker(QObject):
         finally:
             if restored_crop is not None:
                 self._compositor.set_crop(restored_crop)
+            # 无论成功/取消/断管/异常，都删除本次导出产生的临时 WAV
+            self._cleanup_temp_wavs()
+
+    def _cleanup_temp_wavs(self):
+        """删除本次导出产生的所有临时 WAV（不抛错）。"""
+        for path in self._temp_wavs:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        self._temp_wavs.clear()
 
     @staticmethod
     def _compose_and_encode(compositor, raw_frame, index, ts,
@@ -301,7 +314,7 @@ class ExportWorker(QObject):
 
         # ── 速度滤镜 ────────────────────────────────────────
         # ── 音频处理 ────────────────────────────────────────
-        _temp_paths = []
+        # 临时 WAV 统一注册到 self._temp_wavs，由 run() finally 清理
 
         # 1) 按音频区域列表内存合成时间轴音频（替代旧 orig_wav + amix 链路）
         video_duration = total / s.fps
@@ -313,7 +326,7 @@ class ExportWorker(QObject):
         final_wav = None
         if mixed is not None:
             final_wav = self._save_temp_wav(mixed, s.samplerate)
-            _temp_paths.append(final_wav)
+            self._temp_wavs.append(final_wav)
         if final_wav:
             audio_input = ffmpeg.input(final_wav)
 
@@ -357,12 +370,6 @@ class ExportWorker(QObject):
         stderr_text = "".join(stderr_chunks).strip()
         self._process = None
 
-        for p in _temp_paths:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
-
         if returncode != 0 or not os.path.exists(s.output_path):
             self.finished.emit(ExportResult(
                 False, s.output_path,
@@ -404,7 +411,6 @@ class ExportWorker(QObject):
             return
 
         # 音频处理（与 CPU 路径共用 compose_audio 合成语义）
-        _temp_paths = []
         video_duration = total / s.fps
         regions = [r for r in (s.audio_regions or [])
                    if os.path.exists(r.audio_path)]
@@ -413,7 +419,7 @@ class ExportWorker(QObject):
         final_wav = None
         if mixed is not None:
             final_wav = self._save_temp_wav(mixed, s.samplerate)
-            _temp_paths.append(final_wav)
+            self._temp_wavs.append(final_wav)
 
         # RGB 管道避免合成后再做整帧 RGBA 转换。
         video = ffmpeg.input("pipe:", format="rawvideo",
@@ -456,12 +462,6 @@ class ExportWorker(QObject):
         stderr_thread.join(timeout=2)
         stderr_text = "".join(stderr_chunks).strip()
         self._process = None
-
-        for p in _temp_paths:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
 
         if returncode != 0 or not os.path.exists(s.output_path):
             self.finished.emit(ExportResult(

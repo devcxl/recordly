@@ -167,3 +167,57 @@ class TestScreenCapture:
         time.sleep(0.1)
         assert len(sc.all_frames) == n
         sc.clear()
+
+
+class TestStaleTempFramesCleanup:
+    """#4：崩溃残留的录屏临时帧文件启动时清扫。"""
+
+    def test_deletes_old_matching_files_only(self, monkeypatch, tmp_path):
+        import os
+        import time
+        from core.screen_capture import cleanup_stale_temp_frames
+
+        old = tmp_path / "recordly-abc.frames"
+        old.write_bytes(b"data")
+        old_time = time.time() - 48 * 3600
+        os.utime(old, (old_time, old_time))
+
+        fresh = tmp_path / "recordly-fresh.frames"
+        fresh.write_bytes(b"data")  # 新文件，应该保留
+
+        unrelated = tmp_path / "other-output.txt"
+        unrelated.write_bytes(b"data")
+        unrelated_time = time.time() - 48 * 3600
+        os.utime(unrelated, (unrelated_time, unrelated_time))
+
+        monkeypatch.setattr(
+            "core.screen_capture.tempfile.gettempdir",
+            lambda: str(tmp_path))
+
+        removed = cleanup_stale_temp_frames()
+        assert removed == 1
+        assert not old.exists()
+        assert fresh.exists()
+        assert unrelated.exists()  # 非录屏文件不动
+
+    def test_keeps_active_files(self, monkeypatch, tmp_path):
+        import time
+        from core.screen_capture import cleanup_stale_temp_frames
+
+        active = tmp_path / "recordly-active.frames"
+        active.write_bytes(b"data")  # 近期文件 = 可能正在录制的实例
+
+        monkeypatch.setattr(
+            "core.screen_capture.tempfile.gettempdir",
+            lambda: str(tmp_path))
+
+        assert cleanup_stale_temp_frames() == 0
+        assert active.exists()
+
+    def test_missing_temp_dir_returns_zero(self, monkeypatch, tmp_path):
+        from core.screen_capture import cleanup_stale_temp_frames
+        missing = tmp_path / "nope"
+        monkeypatch.setattr(
+            "core.screen_capture.tempfile.gettempdir",
+            lambda: str(missing))
+        assert cleanup_stale_temp_frames() == 0

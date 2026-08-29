@@ -12,6 +12,42 @@ import time
 from typing import Callable
 
 
+# ── 崩溃残留清扫 ─────────────────────────────────────────
+_TEMP_FRAME_PREFIX = "recordly-"
+_TEMP_FRAME_SUFFIX = ".frames"
+
+
+def cleanup_stale_temp_frames(max_age_seconds: float = 24 * 3600) -> int:
+    """启动时清扫崩溃残留的录屏临时帧文件。
+
+    无项目目录录制时帧写入系统临时目录（recordly-*.frames），
+    仅在 atexit 正常清理；进程被 kill/崩溃后残留。启动时删除
+    超过 max_age_seconds 的旧文件，避免误删其他运行实例的活跃文件。
+    返回删除数量。
+    """
+    temp_dir = tempfile.gettempdir()
+    now = time.time()
+    removed = 0
+    try:
+        for name in os.listdir(temp_dir):
+            if (name.startswith(_TEMP_FRAME_PREFIX)
+                    and name.endswith(_TEMP_FRAME_SUFFIX)):
+                path = os.path.join(temp_dir, name)
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                if now - mtime > max_age_seconds:
+                    try:
+                        os.remove(path)
+                        removed += 1
+                    except OSError:
+                        pass
+    except OSError:
+        pass
+    return removed
+
+
 class CapturedFrame:
     def __init__(self, data: np.ndarray | None, timestamp: float, index: int,
                  _loader: Callable[[int], np.ndarray] | None = None):
@@ -44,7 +80,8 @@ class _CompressedFrameStore:
                 self._file = open(store_path, "w+b")
         else:
             handle = tempfile.NamedTemporaryFile(
-                prefix="recordly-", suffix=".frames", delete=False)
+                prefix=_TEMP_FRAME_PREFIX, suffix=_TEMP_FRAME_SUFFIX,
+                delete=False)
             self.path = handle.name
             self._file = handle
         self._quality = jpeg_quality

@@ -780,3 +780,54 @@ class TestExportWorker:
         thread.join(timeout=2)
         assert not thread.is_alive()
         assert result == [True]
+
+
+class TestTempWavCleanup:
+    """#4：导出临时 WAV 在 run() finally 统一清理（含取消/异常路径）。"""
+
+    def test_save_temp_wav_registers_and_cleanup_removes(self, tmp_path):
+        import os
+        import numpy as np
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+
+        worker = ExportWorker(Compositor(320, 240, 30), ExportSettings(
+            output_path=str(tmp_path / "out.mp4")))
+        audio = np.zeros(4410, dtype=np.float32)
+        path = ExportWorker._save_temp_wav(audio, 44100)
+        try:
+            assert os.path.exists(path)
+            # 直接路径调用不注册（静态方法），run() 路径才注册
+            worker._temp_wavs.append(path)
+            worker._cleanup_temp_wavs()
+            assert not os.path.exists(path)
+            assert worker._temp_wavs == []
+        finally:
+            worker._cleanup_temp_wavs()
+
+    def test_run_finally_cleans_after_exception(self, monkeypatch,
+                                                tmp_path):
+        import os
+        import numpy as np
+        from core.compositor import Compositor
+        from core.exporter import ExportWorker, ExportSettings
+
+        worker = ExportWorker(Compositor(320, 240, 30), ExportSettings(
+            output_path=str(tmp_path / "out.mp4")))
+        # 模拟导出过程已产生临时 WAV 后异常
+        wav = ExportWorker._save_temp_wav(
+            np.zeros(4410, dtype=np.float32), 44100)
+        worker._temp_wavs.append(wav)
+
+        def boom():
+            raise RuntimeError("导出中崩溃")
+
+        monkeypatch.setattr(worker, "_export_mp4", boom)
+        results = []
+        worker.finished.connect(lambda r: results.append(r))
+        worker.run()
+
+        assert not os.path.exists(wav)  # finally 已删除
+        assert worker._temp_wavs == []
+        assert len(results) == 1
+        assert results[0].success is False
