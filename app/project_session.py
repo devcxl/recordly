@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from core.project import Project
+from core.project_manager import sanitize_project_name
 
 
 class ProjectSession:
@@ -52,13 +53,14 @@ class ProjectSession:
 
     @classmethod
     def create(cls, projects_dir: str, name: str) -> "ProjectSession":
-        """创建新项目目录和占位 project.json"""
+        """创建新项目目录和占位 project.json。name 会先消毒防目录穿越。"""
         from datetime import datetime
+        safe_name = sanitize_project_name(name)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        project_dir = os.path.join(projects_dir, f"{timestamp}_{name}")
+        project_dir = os.path.join(projects_dir, f"{timestamp}_{safe_name}")
         os.makedirs(project_dir, exist_ok=True)
         project = Project()
-        project.name = name
+        project.name = safe_name
         project.save(os.path.join(project_dir, "project.json"))
         session = cls.__new__(cls)
         session._project_dir = project_dir

@@ -248,3 +248,121 @@ class TestProjectManager:
         assert result is True
         assert output.is_file()
         assert output.stat().st_size > 0
+
+
+class TestSanitizeProjectName:
+    """#5：项目名消毒防目录穿越。"""
+
+    def test_rejects_path_separators(self):
+        from pathlib import Path
+        from core.project_manager import sanitize_project_name
+        # 消毒后不含路径分隔符/绝对路径 → 拼成子目录不可能越界
+        assert "/" not in sanitize_project_name("a/b")
+        assert "\\" not in sanitize_project_name("a\\b")
+        assert not Path(sanitize_project_name("../../etc")).is_absolute()
+        assert not any(
+            part == ".." for part in
+            Path(sanitize_project_name("../../etc")).parts)
+        assert sanitize_project_name("/etc/passwd") == "_etc_passwd"
+
+    def test_strips_control_chars_and_limits_length(self):
+        from core.project_manager import sanitize_project_name
+        assert sanitize_project_name("evil\x00name") == "evil_name"
+        assert len(sanitize_project_name("x" * 200)) == 64
+
+    def test_empty_falls_back(self):
+        from core.project_manager import sanitize_project_name
+        assert sanitize_project_name("") == "untitled"
+        assert sanitize_project_name("   ") == "untitled"
+
+    def test_normal_name_kept(self):
+        from core.project_manager import sanitize_project_name
+        assert sanitize_project_name("我的录制 2026-08-29") == \
+            "我的录制 2026-08-29"
+
+
+class TestProjectCreationSecurity:
+    """#5：create_project/ProjectSession.create 目录穿越防护。"""
+
+    def test_create_project_sanitizes_hostile_name(self, tmp_path: Path):
+        from core.project import Project
+        from core.project_manager import ProjectManager
+        mgr = ProjectManager(str(tmp_path / "projects"))
+        source = tmp_path / "src.mp4"
+        source.write_bytes(b"fake-video")
+        proj = Project()
+
+        summary = mgr.create_project("../../escape", proj, str(source))
+
+        # 目录必须创建在 projects_dir 内
+        assert Path(summary.path).resolve().is_relative_to(
+            Path(mgr._projects_dir).resolve())
+        assert "escape" in Path(summary.path).name
+        assert mgr.list_projects()  # 能被正常扫描到
+
+    def test_project_session_sanitizes_hostile_name(self, tmp_path: Path):
+        from pathlib import Path
+        from app.project_session import ProjectSession
+        projects_dir = tmp_path / "projects"
+        projects_dir.mkdir()
+
+        session = ProjectSession.create(str(projects_dir), "../evil/name")
+
+        rel = Path(session.project_dir).relative_to(projects_dir)
+        # 单组件、无分隔符、无裸 .. → 不可能越界
+        assert len(rel.parts) == 1
+        assert "/" not in rel.name and "\\" not in rel.name
+        assert not any(p == ".." for p in rel.parts)
+        assert Path(session.project_dir).resolve().is_relative_to(
+            projects_dir.resolve())
+
+
+class TestThumbnailPathResolution:
+    """#8：缩略图路径解析（CWD 失效 + 越界拒绝）。"""
+
+    def test_relative_thumbnail_resolved_to_project_dir(self, tmp_path: Path):
+        from core.project_manager import ProjectManager
+        mgr = ProjectManager(str(tmp_path / "projects"))
+        self._make_project_with_thumbnail(mgr, tmp_path)
+        d = mgr._projects_dir / "proj1"
+        (d / "thumbnail.png").write_bytes(b"png")
+        projects = mgr.list_projects()
+        assert len(projects) == 1
+        assert projects[0].thumbnail_path == str((d / "thumbnail.png").resolve())
+        assert (d / "thumbnail.png").resolve().is_relative_to(
+            Path(mgr._projects_dir).resolve())
+
+    def test_absolute_thumbnail_outside_project_rejected(self, tmp_path: Path):
+        from core.project_manager import ProjectManager
+        mgr = ProjectManager(str(tmp_path / "projects"))
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"png")
+        d = mgr._projects_dir / "proj1"
+        d.mkdir(parents=True)
+        data = {"name": "proj1", "modified_at": "2024-01-01",
+                "thumbnail_path": str(outside)}
+        with open(d / "project.json", "w") as f:
+            json.dump(data, f)
+        projects = mgr.list_projects()
+        assert projects[0].thumbnail_path == ""
+
+    def test_relative_traversal_rejected(self, tmp_path: Path):
+        from core.project_manager import ProjectManager
+        mgr = ProjectManager(str(tmp_path / "projects"))
+        d = mgr._projects_dir / "proj1"
+        d.mkdir(parents=True)
+        data = {"name": "proj1", "modified_at": "2024-01-01",
+                "thumbnail_path": "../../secret.png"}
+        with open(d / "project.json", "w") as f:
+            json.dump(data, f)
+        projects = mgr.list_projects()
+        assert projects[0].thumbnail_path == ""
+
+    def _make_project_with_thumbnail(self, mgr, tmp_path):
+        d = mgr._projects_dir / "proj1"
+        d.mkdir(parents=True)
+        data = {"name": "proj1", "modified_at": "2024-01-01",
+                "thumbnail_path": "thumbnail.png"}
+        with open(d / "project.json", "w") as f:
+            json.dump(data, f)
+        return d

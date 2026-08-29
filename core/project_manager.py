@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -21,11 +22,48 @@ class ProjectSummary:
     thumbnail_path: str
 
 
+# ── 项目名消毒 ───────────────────────────────────────────
+_INVALID_PROJECT_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_MAX_PROJECT_NAME_LEN = 64
+
+
+def sanitize_project_name(name: str) -> str:
+    """消毒项目名：剔除路径分隔符/控制字符，限制长度。
+
+    防目录穿越：name 含 `/`、`\\`、`..` 等会被替换/截断，
+    保证拼接出的子目录始终位于 projects_dir 内。
+    """
+    cleaned = _INVALID_PROJECT_NAME_CHARS.sub("_", name or "").strip()
+    if len(cleaned) > _MAX_PROJECT_NAME_LEN:
+        cleaned = cleaned[:_MAX_PROJECT_NAME_LEN]
+    return cleaned or "untitled"
+
+
 class ProjectManager:
     """基于目录的项目管理器"""
 
     def __init__(self, projects_dir: str):
         self._projects_dir = Path(projects_dir)
+
+    # ── 缩略图路径解析 ─────────────────────────────────────
+
+    @staticmethod
+    def _resolve_thumbnail_path(project_dir: Path, thumb_raw: str) -> str:
+        """把 project.json 里的 thumbnail_path 解析为项目目录内的绝对路径。
+
+        相对路径（如 "thumbnail.png"）按项目目录解析——原实现按进程 CWD
+        解析导致首页缩略图永不显示；绝对路径 resolve 后必须仍在项目目录内，
+        否则拒绝（防恶意项目指向任意图片被加载显示）。
+        """
+        if not thumb_raw:
+            return ""
+        p = Path(thumb_raw)
+        resolved = (p.resolve() if p.is_absolute()
+                    else (project_dir / p).resolve())
+        root = project_dir.resolve()
+        if root not in resolved.parents and resolved != root:
+            return ""
+        return str(resolved)
 
     # ── 查询 ──────────────────────────────────────────────
 
@@ -51,7 +89,8 @@ class ProjectManager:
                 path=str(child),
                 modified_at=data.get("modified_at", ""),
                 duration=data.get("duration", 0.0),
-                thumbnail_path=data.get("thumbnail_path", ""),
+                thumbnail_path=self._resolve_thumbnail_path(
+                    child, data.get("thumbnail_path", "")),
             ))
 
         results.sort(key=lambda p: p.modified_at, reverse=True)
@@ -62,9 +101,16 @@ class ProjectManager:
     def create_project(self, name: str, project: Project,
                        source_video_path: str) -> ProjectSummary:
         """创建时间戳子目录 → 复制源视频 → 生成缩略图 → 保存 project.json。"""
+        safe_name = sanitize_project_name(name)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest_dir = self._projects_dir / f"{timestamp}_{name}"
+        dest_dir = self._projects_dir / f"{timestamp}_{safe_name}"
         dest_dir.mkdir(parents=True, exist_ok=True)
+        # 目录穿越守卫：消毒后仍校验目录必须位于 projects_dir 内
+        root = self._projects_dir.resolve()
+        if root not in dest_dir.resolve().parents:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            raise ValueError(
+                f"项目目录越界: {dest_dir}，拒绝创建")
         try:
             # 复制源视频
             source_dest = dest_dir / "source.mp4"
@@ -75,7 +121,7 @@ class ProjectManager:
             self.generate_thumbnail(str(source_dest), str(thumbnail_path))
 
             # 填充 project 元数据
-            project.name = name
+            project.name = safe_name
             if project.source:
                 project.source.video = str(source_dest)
             # duration 由调用方录制器在 project 对象上预设
@@ -86,11 +132,12 @@ class ProjectManager:
             project.save(str(proj_file))
 
             return ProjectSummary(
-                name=name,
+                name=safe_name,
                 path=str(dest_dir),
                 modified_at=project.modified_at,
                 duration=project.duration,
-                thumbnail_path="thumbnail.png",
+                thumbnail_path=self._resolve_thumbnail_path(
+                    dest_dir, project.thumbnail_path or "thumbnail.png"),
             )
         except Exception:
             shutil.rmtree(dest_dir, ignore_errors=True)
