@@ -119,3 +119,47 @@ def test_cancel_button_is_visually_deemphasized(qapp):
     assert "background-color" in stylesheet
     assert "#d1d5db" in stylesheet  # 灰色背景
     assert dialog.export_btn.styleSheet() == ""  # 主按钮保持默认强调样式
+
+
+class TestGpuProbeAsync:
+    """issue #141 #9：GPU 探测在后台线程执行，不阻塞对话框构造。"""
+
+    def test_dialog_construction_does_not_block(self, monkeypatch):
+        """构造立即返回（gpu_check 初始禁用），探测完成后异步回填。"""
+        import time
+        from ui.export_dialog import ExportDialog
+
+        calls = []
+
+        def slow_probe():
+            calls.append(1)
+            time.sleep(0.2)
+            return True
+
+        monkeypatch.setattr("core.exporter.is_gpu_available", slow_probe)
+
+        t0 = time.monotonic()
+        dialog = ExportDialog()
+        elapsed = time.monotonic() - t0
+
+        # 构造不等待探测（0.2s 探测 + 毫秒级构造）
+        assert elapsed < 0.15, f"构造被探测阻塞: {elapsed:.3f}s"
+        assert dialog.gpu_check.isEnabled() is False
+        assert calls == [1]  # 探测线程已启动但 UI 未阻塞等待
+
+    def test_gpu_probe_result_updates_checkbox(self, qapp, monkeypatch):
+        """探测完成后 gpu_check 启用（经 Qt 跨线程信号回填）。"""
+        import time
+        from ui.export_dialog import ExportDialog
+
+        monkeypatch.setattr(
+            "core.exporter.is_gpu_available", lambda: True)
+
+        dialog = ExportDialog()
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not dialog.gpu_check.isEnabled():
+            qapp.processEvents()
+            time.sleep(0.02)
+
+        assert dialog.gpu_check.isEnabled() is True
+        assert dialog.gpu_check.toolTip() == ""

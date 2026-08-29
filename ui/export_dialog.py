@@ -1,7 +1,9 @@
 """导出设置对话框 — 格式/分辨率/宽高比/质量/帧率"""
 
 import os
+import threading
 
+from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QComboBox,
     QLabel, QPushButton, QFileDialog, QSpinBox, QCheckBox,
@@ -15,6 +17,12 @@ from core.aspect_ratio import (
 
 
 _CUSTOM_RESOLUTION = "自定义..."
+
+
+class _GpuProbeBridge(QObject):
+    """后台线程 → UI 线程的 GPU 探测结果桥（跨线程 emit Qt 信号自动队列投递）。"""
+
+    probed = pyqtSignal(bool)
 
 
 class ExportDialog(QDialog):
@@ -135,12 +143,12 @@ class ExportDialog(QDialog):
         layout.addWidget(self.gif_loop)
 
         # GPU 硬件编码（仅 MP4）
-        from core.exporter import is_gpu_available
         self.gpu_check = QCheckBox("GPU 硬件编码 (NVENC)")
-        self.gpu_check.setEnabled(is_gpu_available())
-        if not is_gpu_available():
-            self.gpu_check.setToolTip("未检测到可用 GPU 或 NVENC 编码器")
+        self.gpu_check.setEnabled(False)
+        self.gpu_check.setToolTip("正在检测 GPU…")
         layout.addWidget(self.gpu_check)
+        # 异步探测：ffmpeg 探测最长阻塞 10s，放到后台线程，完成后回填 UI
+        self._probe_gpu_async()
 
         # 按钮
         btn_layout = QHBoxLayout()
@@ -165,14 +173,38 @@ class ExportDialog(QDialog):
 
         # 信号连接
         self.format_combo.currentTextChanged.connect(self._on_format_changed)
-        self.resolution_combo.currentTextChanged.connect(self._on_resolution_changed)
+        self.resolution_combo.currentTextChanged.connect(
+            self._on_resolution_changed)
         self.crop_combo.currentTextChanged.connect(self._update_size_preview)
         self.ratio_combo.currentTextChanged.connect(self._update_size_preview)
-        self.quality_combo.currentTextChanged.connect(self._update_size_preview)
+        self.quality_combo.currentTextChanged.connect(
+            self._update_size_preview)
         self._custom_width.valueChanged.connect(self._update_size_preview)
         self._custom_height.valueChanged.connect(self._update_size_preview)
         self._on_format_changed("MP4")
         self._update_size_preview()
+
+    # ── GPU 探测（异步） ──────────────────────────────────
+
+    def _probe_gpu_async(self):
+        """后台线程执行 is_gpu_available()（含 ffmpeg 探测，最长 10s），
+        结果通过信号回填 UI，不阻塞对话框打开。"""
+        from core.exporter import is_gpu_available
+
+        bridge = _GpuProbeBridge()
+        bridge.probed.connect(self._on_gpu_probed)
+        threading.Thread(
+            target=lambda: bridge.probed.emit(is_gpu_available()),
+            daemon=True,
+        ).start()
+
+    def _on_gpu_probed(self, available: bool):
+        if available:
+            self.gpu_check.setEnabled(True)
+            self.gpu_check.setToolTip("")
+        else:
+            self.gpu_check.setEnabled(False)
+            self.gpu_check.setToolTip("未检测到可用 GPU 或 NVENC 编码器")
 
     def _on_format_changed(self, fmt: str):
         is_gif = fmt == "GIF"

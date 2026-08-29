@@ -350,7 +350,7 @@ class ExportWorker(QObject):
 
         if logger.isEnabledFor(logging.DEBUG):
             cmd = output.compile()
-            logger.debug("ffmpeg {' '.join(cmd)}")
+            logger.debug("ffmpeg " + " ".join(map(str, cmd)))
             logger.debug(f"帧数={total} 尺寸={w}x{h} fps={s.fps}")
 
         direct_output = (
@@ -565,24 +565,6 @@ class ExportWorker(QObject):
                     pass
 
     # ── 工具 ────────────────────────────────────────────
-
-    @staticmethod
-    def _apply_atempo(audio_input, speed: float):
-        """对音频输入应用 atempo 滤镜，支持 0.5-2.0 范围，超出则链式处理"""
-        if speed <= 0:
-            return audio_input
-        # atempo 仅支持 0.5-2.0
-        if 0.5 <= speed <= 2.0:
-            return audio_input.filter("atempo", str(speed))
-        # > 2.0: 链式 atempo（2.0 * 2.0 * ...）
-        remaining = speed
-        chained = audio_input
-        while remaining > 2.0:
-            chained = chained.filter("atempo", "2.0")
-            remaining /= 2.0
-        if remaining >= 0.5:
-            chained = chained.filter("atempo", f"{remaining:.6f}")
-        return chained
 
     @staticmethod
     def _save_temp_wav(audio: np.ndarray, samplerate: int) -> str:

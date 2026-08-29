@@ -137,8 +137,11 @@ class Compositor:
             if not ret:
                 break
             timestamp = index * frame_interval
+            # cv2 解码为 BGR，转 RGB 与 compositor 其余路径（mss BGRA→RGB）
+            # 及 Image.fromarray(mode="RGB") 的色彩空间约定保持一致
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             frames.append(CapturedFrame(
-                data=frame_bgr, timestamp=timestamp, index=index,
+                data=frame_rgb, timestamp=timestamp, index=index,
             ))
             index += 1
         cap.release()

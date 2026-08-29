@@ -641,3 +641,35 @@ class TestPreviewCache:
         c.compose_index(3)
         c.load_clips([Clip(type="video", start=0, end=1.0 / 30 * 10)])
         assert len(c._preview_cache) == 0
+
+
+class TestLoadVideoColorSpace:
+    """issue #141 #7：load_video 从 mp4 导入必须转 RGB（防红蓝互换）。"""
+
+    def test_load_video_converts_bgr_to_rgb(self, tmp_path):
+        import cv2
+        import numpy as np
+        import pytest
+        from core.compositor import Compositor
+
+        path = str(tmp_path / "red.mp4")
+        writer = cv2.VideoWriter(
+            path, cv2.VideoWriter_fourcc(*"mp4v"), 10, (8, 8))
+        if not writer.isOpened():
+            pytest.skip("当前环境无可用视频编码器")
+        try:
+            # BGR 纯红 → 导入后应为 RGB 红（[255, 0, 0]）
+            frame = np.zeros((8, 8, 3), dtype=np.uint8)
+            frame[:, :, 2] = 255
+            writer.write(frame)
+            writer.write(frame)
+        finally:
+            writer.release()
+
+        c = Compositor(8, 8, 10)
+        n = c.load_video(path, 10)
+        assert n == 2
+        pixel = c.frames[0].data[0, 0].tolist()
+        # mp4v YUV 4:2:0 有少量编码损失：判据为 R 主色且 B≈0（若未转 RGB 会红蓝互换）
+        assert pixel[0] > 200 and pixel[2] < 50, \
+            f"导入帧应为 RGB 红，实际 {pixel}"
