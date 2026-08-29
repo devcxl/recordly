@@ -60,7 +60,13 @@ class _CompressedFrameStore:
 
     @property
     def frame_count(self) -> int:
-        return len(self._offsets)
+        with self._lock:
+            return len(self._offsets)
+
+    def snapshot_offsets(self) -> list[tuple[int, int]]:
+        """返回偏移索引快照（写侧并发时保持一致）。"""
+        with self._lock:
+            return list(self._offsets)
 
     def append(self, rgb: np.ndarray) -> int:
         result = cv2.imencode(
@@ -154,6 +160,8 @@ class ScreenCapture(Thread):
         self._monitor_left = 0
         self._monitor_top = 0
         self._error: BaseException | None = None
+        # 采集线程与主线程（停止/保存/清理）之间的数据一致性锁
+        self._data_lock = Lock()
 
     @property
     def monitor_offset(self) -> tuple[int, int]:
@@ -174,67 +182,98 @@ class ScreenCapture(Thread):
                 while not self._quit.is_set():
                     t0 = time.perf_counter()
                     raw = sct.grab(monitor)
+                    if self._quit.is_set():
+                        # 已在抓帧期间请求停止：不再写入，尽快退出
+                        break
                     # mss 返回 BGRA, 转 RGB
                     arr = np.array(raw, dtype=np.uint8)
                     rgb = arr[:, :, :3][:, :, ::-1]
                     self._store_frame(rgb, t0, self._frame_index)
-                    self._frame_index += 1
                     elapsed = time.perf_counter() - t0
                     sleep_time = self.interval - elapsed
                     if sleep_time > 0:
-                        time.sleep(sleep_time)
+                        # 可中断等待：收到停止信号立即退出，不等满一个间隔
+                        self._quit.wait(sleep_time)
         except BaseException as exc:
             self._error = exc
             self._quit.set()
 
-    def stop(self):
+    def stop(self) -> bool:
+        """请求停止采集并等待线程退出。
+
+        返回 True 表示线程已确认退出；False 表示 join 超时（如 mss.grab 阻塞），
+        调用方仍可安全读取数据快照，但可能缺末段帧。
+        """
         self._quit.set()
         if self.ident is not None:
             self.join(timeout=5)
+            return not self.is_alive()
+        return True
 
     @property
     def latest_frame(self) -> CapturedFrame | None:
-        return self._latest_frame
+        with self._data_lock:
+            return self._latest_frame
 
     @property
     def frame_meta(self) -> tuple[list[float], list[int]]:
-        """返回 (timestamps, indices) 用于保存帧元数据"""
-        return (self._timestamps.copy(), self._indices.copy())
+        """返回 (timestamps, indices) 快照，用于保存帧元数据"""
+        with self._data_lock:
+            return (self._timestamps.copy(), self._indices.copy())
 
     @property
     def all_frames(self) -> list[CapturedFrame]:
-        if self._store is None:
-            return []
-        return [
-            CapturedFrame(
-                data=None, timestamp=timestamp, index=index,
-                _loader=self._store.read,
-            )
-            for timestamp, index in zip(self._timestamps, self._indices)
-        ]
+        with self._data_lock:
+            if self._store is None:
+                return []
+            return [
+                CapturedFrame(
+                    data=None, timestamp=timestamp, index=index,
+                    _loader=self._store.read,
+                )
+                for timestamp, index
+                in zip(self._timestamps.copy(), self._indices.copy())
+            ]
 
     @property
     def frame_offsets(self) -> list:
-        if self._store is None:
-            return []
-        return self._store._offsets
+        """返回帧偏移索引快照（文件内写侧并发时也保持一致）。"""
+        with self._data_lock:
+            if self._store is None:
+                return []
+            return self._store.snapshot_offsets()
 
     def _store_frame(self, data: np.ndarray,
                      timestamp: float, index: int):
-        if self._store is None:
-            self._store = _CompressedFrameStore(store_path=self._store_path)
-        self._store.append(data)
-        self._timestamps.append(timestamp)
-        self._indices.append(index)
-        self._latest_frame = CapturedFrame(data, timestamp, index)
+        with self._data_lock:
+            if self._store is None:
+                self._store = _CompressedFrameStore(
+                    store_path=self._store_path)
+            self._store.append(data)
+            self._timestamps.append(timestamp)
+            self._indices.append(index)
+            self._latest_frame = CapturedFrame(data, timestamp, index)
+            self._frame_index = index + 1
 
     def clear(self):
-        if self._store is not None:
-            self._store.cleanup()
-        self._store = None
-        self._timestamps.clear()
-        self._indices.clear()
-        self._latest_frame = None
-        self._frame_index = 0
-        self._error = None
+        """清理录制数据。
+
+        线程仍在运行时禁止清理（否则后台线程可能写入已删除文件），
+        先等待线程退出，仍无法退出则抛错由调用方处理。
+        """
+        if self.is_alive():
+            self._quit.set()
+            self.join(timeout=5)
+            if self.is_alive():
+                raise RuntimeError(
+                    "屏幕采集线程仍在运行，无法安全清理录制数据")
+        with self._data_lock:
+            if self._store is not None:
+                self._store.cleanup()
+            self._store = None
+            self._timestamps.clear()
+            self._indices.clear()
+            self._latest_frame = None
+            self._frame_index = 0
+            self._error = None
         self._quit.clear()

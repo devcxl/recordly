@@ -94,7 +94,11 @@ class Recorder:
         self.pointer.stop()
         mic_audio = self.mic.stop()
         system_audio = self.system_audio.stop()
-        self.screen.stop()
+        screen_stopped = self.screen.stop()
+        if not screen_stopped:
+            logger.warning(
+                "屏幕采集线程未在 5s 内退出（mss.grab 阻塞），"
+                "已读取数据快照但可能缺末尾帧")
         logger.info("录制结束")
 
         if self.screen.error is not None:
