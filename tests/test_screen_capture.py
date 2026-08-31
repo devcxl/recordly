@@ -89,9 +89,13 @@ class TestScreenCapture:
         assert sc.stop() is True
 
     def test_concurrent_write_read_snapshots_never_raise(self):
-        """#2 竞态回归：采集线程持续写入时，主线程读快照不抛迭代异常。"""
+        """#2 竞态回归：采集线程持续写入时，主线程读快照不抛迭代异常。
+
+        并发契约：每个属性在 _data_lock 内返回原子快照（内部自洽），
+        但不同属性的读取是不同时刻的快照，写入只追加 → 跨快照仅保证
+        长度单调不减（前缀关系），不保证相等。
+        """
         import threading
-        import time
         from core.screen_capture import ScreenCapture
 
         sc = ScreenCapture()
@@ -106,17 +110,30 @@ class TestScreenCapture:
 
         t = threading.Thread(target=writer, daemon=True)
         t.start()
+        prev_frames = 0
+        prev_meta = 0
+        prev_offsets = 0
         try:
             for _ in range(200):
                 frames = sc.all_frames
                 meta_ts, meta_idx = sc.frame_meta
                 offsets = sc.frame_offsets
-                # 快照内部长度自洽
+                # 单快照内部自洽
                 assert len(meta_ts) == len(meta_idx)
-                assert len(offsets) == len(meta_ts)
-                assert len(frames) == len(meta_ts)
+                # 跨快照：读取顺序 frames(T1) → meta(T2) → offsets(T3)，
+                # 写入线程只追加，故长度单调不减
+                assert len(frames) >= prev_frames
+                assert len(meta_ts) >= prev_meta
+                assert len(offsets) >= prev_offsets
+                # 前缀关系：越晚读取的快照不会比越早读取的短
+                assert len(meta_ts) >= len(frames)
+                assert len(offsets) >= len(meta_ts)
+                # latest_frame 读取（T4）晚于 frames（T1），只会更新不会更旧
                 latest = sc.latest_frame
-                assert latest is None or latest.index == len(frames) - 1
+                assert latest is None or latest.index >= len(frames) - 1
+                prev_frames = len(frames)
+                prev_meta = len(meta_ts)
+                prev_offsets = len(offsets)
         finally:
             stop.set()
             t.join(timeout=5)
