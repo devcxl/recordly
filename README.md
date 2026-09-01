@@ -4,7 +4,7 @@
 
 **简体中文** | [English](README.en.md)
 
-Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出，并提供 AUR / Debian / Windows / macOS 全平台分发产物。
+Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出，并提供 Arch Linux / Debian / Windows / macOS 全平台分发产物。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
@@ -53,7 +53,7 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
 
 | 平台 | 安装方式 |
 |------|----------|
-| Arch Linux | `paru -S recordly`（AUR）；或下载 Release 中的 `.pkg.tar.zst` 后 `sudo pacman -U` |
+| Arch Linux | 下载 Release 中的 `.pkg.tar.zst` 后 `sudo pacman -U` |
 | Debian / Ubuntu | 下载 Release 中的 `recordly_*.deb` 后 `sudo dpkg -i` |
 | Windows | 下载 Release 中的 `recordly.exe` 直接运行 |
 | macOS | 下载 Release 中的 `recordly-macos.zip`，解压后拖入 Applications |

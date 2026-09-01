@@ -2,7 +2,7 @@
 
 > 开源桌面录屏与演示视频编辑工具 —— 录制、剪辑、导出，一气呵成。
 
-Recordly 是基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出，并提供 AUR / Debian / Windows / macOS 全平台分发产物。
+Recordly 是基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出，并提供 Arch Linux / Debian / Windows / macOS 分发产物。
 
 本文档库面向项目当前状态与决策历史，遵循 Cabbage 文档生命周期规范组织（详见 `.agents/skills/project-docs-management/`）。
 

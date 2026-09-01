@@ -4,7 +4,7 @@
 
 [简体中文](README.md) | **English**
 
-Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It supports screen capture, cursor effects, audio mixing, timeline editing, and MP4/GIF export, with prebuilt packages for Arch Linux (AUR), Debian/Ubuntu, Windows, and macOS.
+Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It supports screen capture, cursor effects, audio mixing, timeline editing, and MP4/GIF export, with prebuilt packages for Arch Linux, Debian/Ubuntu, Windows, and macOS.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
@@ -53,7 +53,7 @@ Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It 
 
 | Platform | Install |
 |----------|---------|
-| Arch Linux | `paru -S recordly` (AUR); or download the `.pkg.tar.zst` from Releases and run `sudo pacman -U` |
+| Arch Linux | Download the `.pkg.tar.zst` from Releases and run `sudo pacman -U` |
 | Debian / Ubuntu | Download `recordly_*.deb` from Releases and run `sudo dpkg -i` |
 | Windows | Download `recordly.exe` from Releases and run it directly |
 | macOS | Download `recordly-macos.zip` from Releases, unzip, and drag into Applications |
