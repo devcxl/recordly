@@ -53,7 +53,6 @@ class AudioFlowMixin:
                 if audio is not None and len(audio.data) > 0:
                     return audio.data, audio.samplerate
         return None
-        return None
 
     def _sync_audio_regions(self):
         """把时间线三轨（audio/audio_system/audio_extra）clip 同步进 _audio_regions"""
