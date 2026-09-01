@@ -1,0 +1,7 @@
+# VitePress build artifacts — do not commit
+node_modules/
+.vitepress/cache/
+.vitepress/dist/
+
+# Agent session logs
+*.jsonl
