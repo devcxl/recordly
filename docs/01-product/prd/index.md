@@ -18,5 +18,5 @@
 ## 管理
 
 - PRD 属当前状态文档：随需求演进就地更新。
-- 实现落地后的技术方案见 [`03-architecture/system-design/`](../../03-architecture/system-design/README.md)。
+- 实现落地后的技术方案见 [`03-architecture/system-design/`](../../03-architecture/system-design/index.md)。
 - 变更流程遵循 Cabbage 生命周期规范。

@@ -10,10 +10,10 @@ Recordly 是基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持�
 
 | 目录 | 内容 | 类型 |
 |---|---|---|
-| [`01-product/prd/`](../01-product/prd/README.md) | 产品 PRD：需求、用户故事、验收标准 | 当前状态 |
-| [`03-architecture/system-design/`](../03-architecture/system-design/README.md) | 技术方案（Tech Spec）：设计决策、组件边界、测试决策 | 当前状态 |
-| [`03-architecture/adr/`](../03-architecture/adr/README.md) | 架构决策记录（ADR），不可变历史 | 决策历史 |
-| [`archive/`](../archive/README.md) | 历史工作记录：任务分解、评审报告、交接文档、开发笔记 | 归档历史 |
+| [`01-product/prd/`](../01-product/prd/index.md) | 产品 PRD：需求、用户故事、验收标准 | 当前状态 |
+| [`03-architecture/system-design/`](../03-architecture/system-design/index.md) | 技术方案（Tech Spec）：设计决策、组件边界、测试决策 | 当前状态 |
+| [`03-architecture/adr/`](../03-architecture/adr/index.md) | 架构决策记录（ADR），不可变历史 | 决策历史 |
+| [`archive/`](../archive/index.md) | 历史工作记录：任务分解、评审报告、交接文档、开发笔记 | 归档历史 |
 
 ## 当前状态文档清单
 
@@ -47,7 +47,7 @@ Recordly 是基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持�
 
 ### 架构决策记录（ADR）
 
-见 [`03-architecture/adr/`](../03-architecture/adr/README.md) 索引。
+见 [`03-architecture/adr/`](../03-architecture/adr/index.md) 索引。
 
 ## 维护规范
 

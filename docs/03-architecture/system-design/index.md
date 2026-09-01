@@ -20,4 +20,4 @@
 ## 管理
 
 - Tech Spec 属当前状态文档：架构演进时就地更新。
-- 配套产品视图见 [`01-product/prd/`](../../01-product/prd/README.md)；决策历史见 [`03-architecture/adr/`](../adr/README.md)。
+- 配套产品视图见 [`01-product/prd/`](../../01-product/prd/index.md)；决策历史见 [`03-architecture/adr/`](../adr/index.md)。
