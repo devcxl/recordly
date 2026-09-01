@@ -160,10 +160,12 @@ python -m pytest tests/ -v
 
 ## 文档
 
-- [产品需求文档（PRD）](docs/prd/)
-- [架构决策记录（ADR）](docs/adr/)
-- [技术方案与规格](docs/dev/)
-- [代码评审与核对报告](docs/review/)
+- **[新用户使用指南](docs/guide/index.md)** —— 从安装、第一次录制到剪辑与导出的完整上手流程
+- [项目概览](docs/00-overview/index.md)
+- [产品需求文档（PRD）](docs/01-product/prd/index.md)
+- [架构决策记录（ADR）](docs/03-architecture/adr/index.md)
+- [技术方案与规格](docs/03-architecture/system-design/index.md)
+- [在线文档站（GitHub Pages）](https://devcxl.github.io/recordly/)
 
 ---
 

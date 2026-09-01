@@ -160,10 +160,12 @@ The suite contains 691 test cases covering recording, composition, export, the c
 
 ## Docs
 
-- [Product requirements (PRD)](docs/prd/)
-- [Architecture decision records (ADR)](docs/adr/)
-- [Technical specs](docs/dev/)
-- [Code review reports](docs/review/)
+- **[User guide (中文)](docs/guide/index.md)** — a complete getting-started walkthrough: install, first recording, editing, and export
+- [Project overview](docs/00-overview/index.md)
+- [Product requirements (PRD)](docs/01-product/prd/index.md)
+- [Architecture decision records (ADR)](docs/03-architecture/adr/index.md)
+- [Technical specs](docs/03-architecture/system-design/index.md)
+- [Docs site (GitHub Pages)](https://devcxl.github.io/recordly/)
 
 ---
 
