@@ -78,6 +78,11 @@ class Compositor:
         self._frames = v
 
     @property
+    def clips(self) -> list | None:
+        """已加载的时间线 clip 列表（zoom 合成用），无则 None。"""
+        return self._clips
+
+    @property
     def cursor_events(self): return self._cursor_events
     @cursor_events.setter
     def cursor_events(self, v): self._cursor_events = v

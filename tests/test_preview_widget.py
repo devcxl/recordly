@@ -115,7 +115,7 @@ class TestPlaybackController:
                 self.generator = generator
 
         class FakeCompositor:
-            _frames = list(range(100))
+            frames = list(range(100))
             fps = 10
 
             def compose_index(self, index):
@@ -149,7 +149,7 @@ class TestPlaybackController:
                 self.generator = generator
 
         class FakeCompositor:
-            _frames = list(range(10))
+            frames = list(range(10))
             fps = 10
 
             def compose_index(self, index):
@@ -188,7 +188,7 @@ class TestPlaybackController:
 
         class FakeCompositor:
             def __init__(self):
-                self._frames = list(range(10))
+                self.frames = list(range(10))
                 self.composed = []
 
             def compose_index(self, index):
@@ -211,7 +211,7 @@ class TestPlaybackController:
                 pass
 
         class FakeCompositor:
-            _frames = list(range(10))
+            frames = list(range(10))
             total_output_frames = 4
 
             def __init__(self):
@@ -240,7 +240,7 @@ class TestPlaybackController:
                 pass
 
         class FakeCompositor:
-            _frames = list(range(5))
+            frames = list(range(5))
             total_output_frames = 5
 
             def compose_index(self, index):

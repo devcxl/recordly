@@ -290,7 +290,7 @@ def test_frame_update_shows_time_and_follows_playhead():
 
     window = SimpleNamespace(
         _playback=SimpleNamespace(total_frames=600),
-        _compositor=SimpleNamespace(fps=30),
+        _compositor=SimpleNamespace(fps=30, frames=[]),
         _frame_label=FakeLabel(),
         _time_label=FakeLabel(),
         _timeline=FakeTimeline(),
@@ -321,7 +321,7 @@ def test_playback_receives_regions_based_audio_player(monkeypatch):
     monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
-        _compositor=SimpleNamespace(fps=30),
+        _compositor=SimpleNamespace(fps=30, frames=[]),
         _recorded_data={"audio": SimpleNamespace(samplerate=48000)},
         _audio_regions=[],
         _timeline=SimpleNamespace(tracks=[]),
@@ -373,7 +373,7 @@ def test_playback_player_truncates_to_video_duration(monkeypatch, tmp_path):
     monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
-        _compositor=SimpleNamespace(fps=30, total_output_frames=360),
+        _compositor=SimpleNamespace(fps=30, total_output_frames=360, frames=[]),
         _recorded_data={"audio": SimpleNamespace(samplerate=sr)},
         _audio_regions=regions,
         _timeline=SimpleNamespace(tracks=[]),
@@ -404,7 +404,7 @@ def test_playback_falls_back_to_default_samplerate(monkeypatch):
     monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
-        _compositor=SimpleNamespace(fps=30),
+        _compositor=SimpleNamespace(fps=30, frames=[]),
         _recorded_data=None,
         _audio_regions=[],
         _timeline=SimpleNamespace(tracks=[]),
@@ -1778,7 +1778,7 @@ def test_restore_timeline_and_playback_backfills_then_roundtrips(tmp_path):
         _timeline=timeline,
         _project_dir=project_dir,
         _compositor=SimpleNamespace(
-            _frames=[], _cursor_events=[], _click_events=[],
+            frames=[], _cursor_events=[], _click_events=[],
             _base_time=0.0, _monitor_left=0, _monitor_top=0,
             _crop_region=None, source_duration=5.0,
             fps=30, width=1280, height=720,
@@ -2113,7 +2113,7 @@ def test_re_record_clip_roundtrips_through_save_and_load(tmp_path):
     ])
 
     class FakeCompositor:
-        _frames = []
+        frames = []
         _cursor_events = []
         _click_events = []
         _base_time = 0.0
