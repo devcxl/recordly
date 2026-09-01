@@ -26,19 +26,14 @@ class Recorder:
         self.system_audio = SystemAudioCapture()
         self.pointer = PointerTracker()
         self._recording = False
-        self._screen_session_started = False
         self._perf_start = 0.0
         self._wall_start = 0.0
 
     def set_target_fps(self, target_fps: int):
+        """修改目标帧率（录制中禁止）。start_recording 会按新帧率新建采集线程。"""
         if self._recording:
             raise RuntimeError("录制过程中不能修改帧率")
         self.target_fps = max(1, int(target_fps))
-        if not self._screen_session_started:
-            self.screen = ScreenCapture(
-                monitor_id=self.screen.monitor_id,
-                target_fps=self.target_fps,
-            )
 
     def start_recording(self, project_dir: str | None = None):
         if self._recording:
@@ -59,7 +54,6 @@ class Recorder:
         try:
             self.screen.start()
             started.append("screen")
-            self._screen_session_started = True
             self.mic.start()
             started.append("mic")
             self.system_audio.start()
