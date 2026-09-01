@@ -970,8 +970,9 @@ def test_main_window_forwards_mp4_fps_and_bitrate(monkeypatch):
         MainWindow._build_export_settings, window)
     window._start_export_progress = partial(
         MainWindow._start_export_progress, window)
-    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
-    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+    import app.export_flow_mixin as export_flow_module
+    monkeypatch.setattr(export_flow_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(export_flow_module, "QProgressDialog", FakeProgress)
 
     MainWindow._on_export(window)
 
@@ -1073,8 +1074,9 @@ def test_export_entry_is_not_reentrant(monkeypatch):
         MainWindow._build_export_settings, window)
     window._start_export_progress = partial(
         MainWindow._start_export_progress, window)
-    monkeypatch.setattr(main_window_module, "ExportDialog", FakeDialog)
-    monkeypatch.setattr(main_window_module, "QProgressDialog", FakeProgress)
+    import app.export_flow_mixin as export_flow_module
+    monkeypatch.setattr(export_flow_module, "ExportDialog", FakeDialog)
+    monkeypatch.setattr(export_flow_module, "QProgressDialog", FakeProgress)
 
     MainWindow._on_export(window)
     MainWindow._on_export(window)
