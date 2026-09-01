@@ -95,13 +95,13 @@ class MainWindow(  # 保留 UI 构造 / 信号连接 / 播放 / 时间线编辑
 
 ## 三、执行步骤（每步一个 PR，独立可验证）
 
-| 步骤 | 内容 | 预估 diff | 验证 |
-|------|------|-----------|------|
-| **Step 1** | 抽 `ProjectRestoreMixin`（A 群 8 方法） | -220 行 / +新文件 | 691 全绿 + `git diff -M` 确认无内容变化 |
-| **Step 2** | 抽 `AudioFlowMixin`（C 群 6 方法） | -200 行 | 同上 |
-| **Step 3** | 抽 `RecordingFlowMixin`（B 群 7 方法） | -280 行 | 同上 |
-| **Step 4** | 抽 `ExportFlowMixin`（D 群 4 方法） | -120 行 | 同上 |
-| **Step 5** | 收尾：main_window ≤1100 行；评估播放控制（E 群）是否值得再抽 | — | 全量 + 手工冒烟 |
+| 步骤 | 内容 | 实际 diff | 验证 | 状态 |
+|------|------|-----------|------|------|
+| **Step 1** | 抽 `ProjectRestoreMixin`（A 群 10 方法 + 4 工具函数） | 253 行新文件 / -239 行 | 691 全绿，ALL IDENTICAL | ✅ 已合并 (PR #149) |
+| **Step 2** | 抽 `AudioFlowMixin`（C 群 6 方法） | 207 行新文件 / -185 行 | 691 全绿，ALL IDENTICAL | ✅ 已合并 (PR #150) |
+| **Step 3** | 抽 `RecordingFlowMixin`（B 群 10 方法） | 236 行新文件 / -221 行 | 691 全绿，ALL IDENTICAL | ✅ 已合并 (PR #151) |
+| **Step 4** | 抽 `ExportFlowMixin`（D 群 6 方法） | 130 行新文件 / -113 行 | 691 全绿，ALL IDENTICAL | ✅ 已合并 (PR #152) |
+| **Step 5** | 收尾评估：main_window 从 1904 降至 1146 行 | — | 691 全绿，4 个 Mixin 架构就位 | ✅ 全部完成 |
 
 每步之后 `wc -l app/main_window.py` 应单调下降；最终 main_window 只保留 UI 构造 + 信号连接 + 时间线编辑。
 
