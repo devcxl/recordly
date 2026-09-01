@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "vuepress dev .",
+    "build": "vuepress build ."
+  },
+  "devDependencies": {
+    "vue": "^3.5.0",
+    "vuepress": "next",
+    "@vuepress/bundler-vite": "next",
+    "@vuepress/theme-default": "next",
+    "@vuepress/plugin-markdown-chart": "next",
+    "mermaid": "^11.0.0",
+    "sass-embedded": "^1.103.1"
+  }
+}

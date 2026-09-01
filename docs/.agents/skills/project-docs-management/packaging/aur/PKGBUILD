@@ -1,0 +1,30 @@
+# Maintainer: devcxl <devcxl@github.com>
+pkgname=cabbage-git
+pkgver=0.1.0.r0.g6ceee9d
+pkgrel=1
+pkgdesc="A spec-driven project documentation management skill & CLI for software teams and AI agents"
+arch=('any')
+url="https://github.com/devcxl/cabbage"
+license=('MIT')
+depends=('python>=3.10' 'python-yaml>=6.0')
+makedepends=('git' 'python-build' 'python-installer' 'python-wheel' 'python-setuptools')
+provides=('cabbage')
+conflicts=('cabbage')
+source=("cabbage::git+https://github.com/devcxl/cabbage.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/cabbage"
+  git describe --long --tags --abbrev=7 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || \
+  printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "$srcdir/cabbage"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$srcdir/cabbage"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+}

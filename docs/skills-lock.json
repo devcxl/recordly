@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "project-docs-management": {
+      "source": "devcxl/cabbage",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "09524316a3a17cdff8bc46efc6c818e1436aead5d686c23b8add4c33ca296e9f"
+    }
+  }
+}

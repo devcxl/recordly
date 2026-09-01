@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "project-docs-cabbage"
+version = "0.1.0"
+description = "Workflow-enforced project documentation CLI for AI-assisted software teams"
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0"]
+
+[project.scripts]
+cabbage = "cabbage_cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cabbage_cli*"]
+
+[tool.setuptools.package-data]
+cabbage_cli = ["assets/**/*", "assets/docs-site/.vitepress/*"]
