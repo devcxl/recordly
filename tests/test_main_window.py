@@ -1875,14 +1875,14 @@ def test_track_audio_provider_caches_by_source_path(tmp_path, monkeypatch):
     _write_test_wav(sys_wav)
 
     reads = []
-    import app.main_window as main_window_module
+    import app.audio_flow_mixin as audio_flow_module
 
     def fake_read_wav(path):
         reads.append(path)
         from core.audio_capture import read_wav
         return read_wav(path)
 
-    monkeypatch.setattr(main_window_module, "_read_wav", fake_read_wav)
+    monkeypatch.setattr(audio_flow_module, "_read_wav", fake_read_wav)
 
     MainWindow._track_audio_provider(window, "audio")
     MainWindow._track_audio_provider(window, "audio")
@@ -1993,7 +1993,8 @@ def test_re_record_accepted_inserts_clip_and_writes_wav(tmp_path, monkeypatch):
     window = _re_record_window(project_dir)
     dialog = _FakeReRecordDialog(accepted=True,
                                  result=_re_record_audio_result())
-    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+    import app.audio_flow_mixin as audio_flow_module
+    monkeypatch.setattr(audio_flow_module, "RecordAudioDialog",
                         lambda parent: dialog)
 
     main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
@@ -2024,7 +2025,8 @@ def test_re_record_rejected_leaves_timeline_and_no_file(tmp_path, monkeypatch):
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
     window = _re_record_window(project_dir)
-    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+    import app.audio_flow_mixin as audio_flow_module
+    monkeypatch.setattr(audio_flow_module, "RecordAudioDialog",
                         lambda parent: _FakeReRecordDialog(accepted=False))
 
     main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
@@ -2044,7 +2046,8 @@ def test_re_record_write_failure_cleans_up_file(tmp_path, monkeypatch):
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
     window = _re_record_window(project_dir)
-    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+    import app.audio_flow_mixin as audio_flow_module
+    monkeypatch.setattr(audio_flow_module, "RecordAudioDialog",
                         lambda parent: _FakeReRecordDialog(
                             accepted=True, result=_re_record_audio_result()))
 
@@ -2075,7 +2078,8 @@ def test_re_record_without_project_rejects(tmp_path, monkeypatch):
     window._project_dir = None
     dialog = _FakeReRecordDialog(accepted=True,
                                  result=_re_record_audio_result())
-    monkeypatch.setattr(main_window_module, "RecordAudioDialog",
+    import app.audio_flow_mixin as audio_flow_module
+    monkeypatch.setattr(audio_flow_module, "RecordAudioDialog",
                         lambda parent: dialog)
 
     main_window_module.MainWindow._on_re_record_requested(window, 0, 0)
