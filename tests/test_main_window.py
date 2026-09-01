@@ -2042,19 +2042,19 @@ def test_re_record_rejected_leaves_timeline_and_no_file(tmp_path, monkeypatch):
 def test_re_record_write_failure_cleans_up_file(tmp_path, monkeypatch):
     """_write_wav 抛 IO 错误 → 无新 clip、残留文件被清理（os.remove 被调用）"""
     import app.main_window as main_window_module
+    import app.audio_flow_mixin as audio_flow_module
 
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
     window = _re_record_window(project_dir)
-    import app.audio_flow_mixin as audio_flow_module
     monkeypatch.setattr(audio_flow_module, "RecordAudioDialog",
                         lambda parent: _FakeReRecordDialog(
                             accepted=True, result=_re_record_audio_result()))
 
     removed = []
-    monkeypatch.setattr(main_window_module, "_write_wav",
+    monkeypatch.setattr(audio_flow_module, "_write_wav",
                         lambda *a, **k: (_ for _ in ()).throw(IOError("disk full")))
-    monkeypatch.setattr(main_window_module.os, "remove",
+    monkeypatch.setattr(audio_flow_module.os, "remove",
                         lambda p: removed.append(p))
 
     main_window_module.MainWindow._on_re_record_requested(window, 0, 0)

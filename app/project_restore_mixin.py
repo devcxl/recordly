@@ -10,6 +10,27 @@ import os
 from core.project import Clip, Project, Track
 from app.project_session import ProjectSession
 
+import wave
+import numpy as np
+
+
+def _write_wav(path: str, data, samplerate: int):
+    """将 numpy float32 音频数据写入 16-bit PCM WAV 文件"""
+    arr = np.asarray(data, dtype=np.float32)
+    arr = np.clip(arr, -1.0, 1.0)
+    if arr.ndim == 1:
+        channels = 1
+        arr = arr.reshape(-1, 1)
+    else:
+        channels = arr.shape[1]
+    samples = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
+
+
 def _read_wav(path: str):
     """从 WAV 文件读取音频（委托 core.audio_capture.read_wav，返回 AudioResult | None）"""
     from core.audio_capture import read_wav

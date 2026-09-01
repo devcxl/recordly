@@ -17,7 +17,7 @@ from core.commands import (
     AddClipCommand, ChangeVolumeCommand, CompositeCommand,
 )
 from core.project import AudioRegion, Clip, Track, sync_audio_regions_from_clips
-from app.project_restore_mixin import _read_wav
+from app.project_restore_mixin import _read_wav, _write_wav
 from ui.record_audio_dialog import RecordAudioDialog
 
 
@@ -83,7 +83,6 @@ class AudioFlowMixin:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         wav_path = os.path.join(self._project_dir, f"re_record_{timestamp}.wav")
         try:
-            from app.main_window import _write_wav
             _write_wav(wav_path, result.data, result.samplerate)
         except Exception as exc:
             try:
