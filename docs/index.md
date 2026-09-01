@@ -7,6 +7,9 @@ hero:
   tagline: "录制、剪辑、导出，一气呵成 —— 项目产品需求、技术方案与架构决策文档"
   actions:
     - theme: brand
+      text: 新用户使用指南
+      link: /guide/
+    - theme: alt
       text: 项目概览
       link: /00-overview/
     - theme: alt
@@ -17,6 +20,8 @@ hero:
       link: /03-architecture/adr/
 
 features:
+  - title: 新用户使用指南
+    details: 从安装、第一次录制到剪辑与导出的完整上手流程，含快捷键速查与常见问题。
   - title: 产品需求 (PRD)
     details: 需求背景、用户故事、功能与非功能需求、验收标准 —— 见 01-product/prd/。
   - title: 技术方案 (Tech Spec)

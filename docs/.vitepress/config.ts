@@ -57,12 +57,16 @@ export default defineConfig({
     outline: { level: [2, 3] },
     nav: [
       { text: '首页', link: '/' },
+      { text: '使用指南', link: '/guide/' },
       { text: '产品需求', link: '/01-product/prd/' },
       { text: '技术方案', link: '/03-architecture/system-design/' },
       { text: 'ADR', link: '/03-architecture/adr/' },
       { text: '归档', link: '/archive/' },
     ],
     sidebar: [
+      { text: '使用指南', items: [
+        { text: '新用户使用指南', link: '/guide/' },
+      ]},
       { text: '概览', items: [
         { text: '项目概览', link: '/00-overview/' },
         { text: 'PRD 索引', link: '/01-product/prd/' },

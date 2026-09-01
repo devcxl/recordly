@@ -10,6 +10,7 @@ Recordly 是基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持�
 
 | 目录 | 内容 | 类型 |
 |---|---|---|
+| [`guide/`](../guide/index.md) | 新用户使用指南：安装、录制、剪辑、导出上手流程 | 用户文档 |
 | [`01-product/prd/`](../01-product/prd/index.md) | 产品 PRD：需求、用户故事、验收标准 | 当前状态 |
 | [`03-architecture/system-design/`](../03-architecture/system-design/index.md) | 技术方案（Tech Spec）：设计决策、组件边界、测试决策 | 当前状态 |
 | [`03-architecture/adr/`](../03-architecture/adr/index.md) | 架构决策记录（ADR），不可变历史 | 决策历史 |
