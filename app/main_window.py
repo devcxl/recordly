@@ -1150,7 +1150,7 @@ class MainWindow(QMainWindow):
             if not frames:
                 return None
             try:
-                if comp._clips is not None:
+                if comp.clips is not None:
                     idx = comp._source_index_at(source_time_s)
                 else:
                     idx = comp._nearest_source_index(source_time_s)
@@ -1767,11 +1767,11 @@ class MainWindow(QMainWindow):
             return None
 
     def _build_recorded_data_from_project(self, comp, mixed_audio):
-        has_content = bool(comp._frames) or mixed_audio is not None
+        has_content = bool(comp.frames) or mixed_audio is not None
         if has_content:
             self._recorded_data = {
                 "audio": mixed_audio,
-                "frames": comp._frames,
+                "frames": comp.frames,
                 "cursor_events": comp._cursor_events,
                 "clicks": comp._click_events,
             }
@@ -1792,7 +1792,7 @@ class MainWindow(QMainWindow):
         self._audio_regions = project.audio_regions[:]
         self._sync_audio_regions()
 
-        if comp._frames:
+        if comp.frames:
             self._bind_thumbnail_provider()
             self._create_playback_controller()
             self._playback.seek(0)
@@ -1807,12 +1807,12 @@ class MainWindow(QMainWindow):
             self._crop_active = True
             self._btn_crop.setChecked(True)
 
-        has_frames = len(comp._frames) > 0
+        has_frames = len(comp.frames) > 0
         self._btn_export.setEnabled(has_frames)
         self._btn_crop.setEnabled(has_frames)
         self._btn_add_audio.setEnabled(has_frames)
         self._enable_playback_controls(has_frames)
-        total = len(comp._frames)
+        total = len(comp.frames)
         self._frame_label.setText(f"1 / {max(total, 1)}")
 
     def _on_project_deleted(self, path: str):

@@ -423,7 +423,7 @@ class PlaybackController:
     def _get_total_frames(self) -> int:
         return int(getattr(
             self.compositor, "total_output_frames",
-            len(self.compositor._frames),
+            len(self.compositor.frames),
         ))
 
     @property
