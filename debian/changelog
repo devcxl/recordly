@@ -1,3 +1,12 @@
+recordly (1.3.1-1) unstable; urgency=medium
+
+  * Refactor: MainWindow modularization into Mixin architecture (1900+ -> 1146 lines)
+  * Bug fix: resolve screen capture stop race condition with data locks & snapshots
+  * Security: deep schema validation on project load, prevent path traversal on project creation
+  * Fix: thumbnail relative path resolution and color space conversion in video import
+
+ -- devcxl <64475363+devcxl@users.noreply.github.com>  Tue, 01 Sep 2026 15:30:00 +0800
+
 recordly (1.3.0-1) unstable; urgency=medium
 
   * Feature: audio clip inline mini volume slider (drag on clip, 0-200%)

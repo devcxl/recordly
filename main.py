@@ -27,7 +27,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Recordly")
     app.setOrganizationName("Recordly")
-    app.setApplicationVersion("1.3.0")
+    app.setApplicationVersion("1.3.1")
     stylesheet = load_text("style.qss")
     if stylesheet:
         app.setStyleSheet(stylesheet)
