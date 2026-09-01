@@ -211,7 +211,7 @@ class TestMediaPathResolution:
     """_resolve_media_path 安全路径解析"""
 
     def test_rejects_outside_absolute_path(self, tmp_path):
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         import pytest
         outside = str(tmp_path / ".." / "outside_file")
         open(outside, "w").close()
@@ -219,18 +219,18 @@ class TestMediaPathResolution:
             _resolve_media_path(str(tmp_path), outside)
 
     def test_rejects_escape_via_dotdot(self, tmp_path):
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         import pytest
         with pytest.raises(ValueError, match="路径越界"):
             _resolve_media_path(str(tmp_path), "../outside_file")
 
     def test_accepts_normal_relative_path(self, tmp_path):
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         result = _resolve_media_path(str(tmp_path), "audio.wav")
         assert result == os.path.realpath(os.path.join(str(tmp_path), "audio.wav"))
 
     def test_accepts_absolute_path_inside_project_dir(self, tmp_path):
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         inside = str(tmp_path / "audio.wav")
         open(inside, "w").close()
         result = _resolve_media_path(str(tmp_path), inside)
@@ -238,7 +238,7 @@ class TestMediaPathResolution:
 
     def test_rejects_outside_sibling_dir(self, tmp_path):
         """与 project_dir 同级的目录内文件也应拒绝"""
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         import pytest
         sibling_dir = str(tmp_path / ".." / "other_project")
         os.makedirs(sibling_dir, exist_ok=True)
@@ -248,7 +248,7 @@ class TestMediaPathResolution:
 
     def test_commonpath_different_drive_raises_valueerror(self, tmp_path, monkeypatch):
         """Windows 不同盘符时 os.path.commonpath 抛 ValueError, 统一重抛为'路径越界'"""
-        from app.main_window import _resolve_media_path
+        from app.project_restore_mixin import _resolve_media_path
         import pytest
         import os as os_mod
 
@@ -318,16 +318,17 @@ class TestAudioHelper:
     """_load_project_audio helper 测试"""
 
     def test_returns_none_when_no_audio_source(self, tmp_path):
-        from app.main_window import _load_project_audio
+        from app.project_restore_mixin import _load_project_audio
         from types import SimpleNamespace, MethodType
         assert _load_project_audio(str(tmp_path), SimpleNamespace(audio_mic="", audio_system="")) is None
 
     def test_returns_none_when_source_is_none(self, tmp_path):
-        from app.main_window import _load_project_audio
+        from app.project_restore_mixin import _load_project_audio
         assert _load_project_audio(str(tmp_path), None) is None
 
     def test_loads_and_mixes_audio(self, tmp_path):
-        from app.main_window import _load_project_audio, _write_wav
+        from app.main_window import _write_wav
+        from app.project_restore_mixin import _load_project_audio
         from core.project import SourceInfo
         samplerate = 44100
         data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
@@ -406,7 +407,8 @@ class TestFullRoundtrip:
         import cv2
         from pathlib import Path
         from types import SimpleNamespace, MethodType
-        from app.main_window import MainWindow, _write_wav, _load_project_audio
+        from app.main_window import MainWindow, _write_wav
+        from app.project_restore_mixin import _load_project_audio
         from core.compositor import Compositor
         from core.project import Project, SourceInfo, Track, Clip
         from core.screen_capture import CapturedFrame

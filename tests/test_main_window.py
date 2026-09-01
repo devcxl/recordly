@@ -1696,7 +1696,7 @@ def _make_legacy_project(project_dir, audio_mic="audio_mic.wav",
 
 def test_ensure_builtin_audio_tracks_backfills_mic_and_system(tmp_path):
     """audio clip 无 source_path → 回退 source.audio_mic；无 system 轨 → 补全时长 clip"""
-    from app.main_window import ensure_builtin_audio_tracks
+    from app.project_restore_mixin import ensure_builtin_audio_tracks
 
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
@@ -1720,7 +1720,7 @@ def test_ensure_builtin_audio_tracks_idempotent(tmp_path):
     """已补齐项目再调用无变化（不重复补轨、不覆盖已有 source_path）"""
     from dataclasses import asdict
 
-    from app.main_window import ensure_builtin_audio_tracks
+    from app.project_restore_mixin import ensure_builtin_audio_tracks
 
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
@@ -1736,7 +1736,7 @@ def test_ensure_builtin_audio_tracks_idempotent(tmp_path):
 
 def test_ensure_builtin_audio_tracks_skips_empty_system(tmp_path):
     """source.audio_system 为空 → 不补 system 轨"""
-    from app.main_window import ensure_builtin_audio_tracks
+    from app.project_restore_mixin import ensure_builtin_audio_tracks
 
     project_dir = str(tmp_path / "proj")
     os.makedirs(project_dir)
