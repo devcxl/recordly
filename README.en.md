@@ -2,15 +2,16 @@
 
 > Open-source desktop screen recorder and demo video editor — record, edit, and export in one flow.
 
-[简体中文](README.md) | **English**
+[简体中文](README.md) | **English** | [Documentation](https://devcxl.github.io/recordly/)
 
 Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It supports screen capture, cursor effects, audio mixing, timeline editing, and MP4/GIF export, with prebuilt packages for Arch Linux, Debian/Ubuntu, Windows, and macOS.
 
 <p align="center">
+  <a href="https://devcxl.github.io/recordly/"><img src="https://img.shields.io/badge/docs-devcxl.github.io%2Frecordly-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-691%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-696%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -160,12 +161,12 @@ The suite contains 691 test cases covering recording, composition, export, the c
 
 ## Docs
 
+- **[Docs site (GitHub Pages)](https://devcxl.github.io/recordly/)** — full user guides, PRDs, ADRs, and system design docs
 - **[User guide (中文)](docs/guide/index.md)** — a complete getting-started walkthrough: install, first recording, editing, and export
 - [Project overview](docs/00-overview/index.md)
 - [Product requirements (PRD)](docs/01-product/prd/index.md)
 - [Architecture decision records (ADR)](docs/03-architecture/adr/index.md)
 - [Technical specs](docs/03-architecture/system-design/index.md)
-- [Docs site (GitHub Pages)](https://devcxl.github.io/recordly/)
 
 ---
 
