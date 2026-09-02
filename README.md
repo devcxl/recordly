@@ -2,15 +2,16 @@
 
 > 开源桌面录屏与演示视频编辑工具 —— 录制、剪辑、导出，一气呵成
 
-**简体中文** | [English](README.en.md)
+**简体中文** | [English](README.en.md) | [在线文档](https://devcxl.github.io/recordly/)
 
 Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，支持屏幕录制、鼠标光标特效、音频混合、时间线剪辑与 MP4/GIF 导出，并提供 Arch Linux / Debian / Windows / macOS 全平台分发产物。
 
 <p align="center">
+  <a href="https://devcxl.github.io/recordly/"><img src="https://img.shields.io/badge/docs-devcxl.github.io%2Frecordly-blue" alt="Documentation"></a>
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-691%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-696%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -160,12 +161,12 @@ python -m pytest tests/ -v
 
 ## 文档
 
+- **[在线文档站（GitHub Pages）](https://devcxl.github.io/recordly/)** —— 完整的使用指南、PRD、ADR 与系统设计文档
 - **[新用户使用指南](docs/guide/index.md)** —— 从安装、第一次录制到剪辑与导出的完整上手流程
 - [项目概览](docs/00-overview/index.md)
 - [产品需求文档（PRD）](docs/01-product/prd/index.md)
 - [架构决策记录（ADR）](docs/03-architecture/adr/index.md)
 - [技术方案与规格](docs/03-architecture/system-design/index.md)
-- [在线文档站（GitHub Pages）](https://devcxl.github.io/recordly/)
 
 ---
 
