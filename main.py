@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QApplication
 
 from app.config import AppConfig
 from app.main_window import MainWindow
-from app.resources import load_text
+from app.resources import load_text, get_app_icon
 
 
 def main():
@@ -28,6 +28,9 @@ def main():
     app.setApplicationName("Recordly")
     app.setOrganizationName("Recordly")
     app.setApplicationVersion("1.3.1")
+    icon = get_app_icon()
+    if not icon.isNull():
+        app.setWindowIcon(icon)
     stylesheet = load_text("style.qss")
     if stylesheet:
         app.setStyleSheet(stylesheet)

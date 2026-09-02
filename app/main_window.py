@@ -35,6 +35,7 @@ from app.recording_flow_mixin import RecordingFlowMixin
 from app.export_flow_mixin import ExportFlowMixin
 from app.recording_controller import RecordingController, RecordingState
 from app.export_controller import ExportController
+from app.resources import get_app_icon
 
 
 
@@ -100,6 +101,9 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
 
     def _setup_window(self):
         self.setWindowTitle("Recordly v1.0")
+        icon = get_app_icon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.resize(1280, 800)
         screen = QApplication.primaryScreen().geometry()
         self.move(
@@ -535,16 +539,18 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
     def _setup_tray(self):
         from PyQt5.QtWidgets import QSystemTrayIcon, QMenu
 
-        px = QPixmap(32, 32)
-        px.fill(Qt.transparent)
-        with QPainter(px) as p:
-            p.setBrush(QColor("#0078D4"))
-            p.setPen(Qt.NoPen)
-            p.drawRoundedRect(4, 4, 24, 24, 4, 4)
-            p.setPen(QColor("white"))
-            p.setFont(self.font())
-            p.drawText(px.rect(), Qt.AlignCenter, "R")
-        icon = QIcon(px)
+        icon = get_app_icon()
+        if icon.isNull():
+            px = QPixmap(32, 32)
+            px.fill(Qt.transparent)
+            with QPainter(px) as p:
+                p.setBrush(QColor("#0078D4"))
+                p.setPen(Qt.NoPen)
+                p.drawRoundedRect(4, 4, 24, 24, 4, 4)
+                p.setPen(QColor("white"))
+                p.setFont(self.font())
+                p.drawText(px.rect(), Qt.AlignCenter, "R")
+            icon = QIcon(px)
         self._tray = QSystemTrayIcon(icon, self)
         self._tray.setToolTip("Recordly")
 

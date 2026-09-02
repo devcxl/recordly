@@ -51,3 +51,26 @@ def load_text(*parts: str, encoding: str = "utf-8") -> str:
 def exists(*parts: str) -> bool:
     """判断资源是否存在。"""
     return resource_path(*parts).is_file()
+
+
+def load_icon(*parts: str):
+    """加载 QIcon 资源，若文件不存在或无效则返回空 QIcon。"""
+    from PyQt5.QtGui import QIcon
+
+    path = resource_path(*parts)
+    if path.is_file():
+        icon = QIcon(str(path))
+        if not icon.isNull():
+            return icon
+    return QIcon()
+
+
+def get_app_icon():
+    """获取应用主图标。
+    依次尝试 SVG、ICO、PNG、ICNS 等格式，若均不存在则返回空 QIcon。
+    """
+    for filename in ("recordly.svg", "recordly.ico", "recordly.png", "recordly.icns"):
+        icon = load_icon("icons", filename)
+        if not icon.isNull():
+            return icon
+    return load_icon("recordly.svg")
