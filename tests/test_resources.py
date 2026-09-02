@@ -39,7 +39,8 @@ def test_get_app_icon(qapp):
     assert pix.width() == 64 and pix.height() == 64
 
 
-def test_main_window_tray_and_window_icon(qapp, tmp_path):
+def test_main_window_tray_and_window_icon(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(MainWindow, "_check_deps", lambda _window: None)
     config = AppConfig(projects_dir=str(tmp_path))
     window = MainWindow(config)
     try:
