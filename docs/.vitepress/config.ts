@@ -1,6 +1,5 @@
 import { defineConfig } from 'vitepress'
 
-// GitHub Pages 项目站点部署路径：/<repo>/。仓库为 recordly，故 base 为 /recordly/。
 const base = process.env.BASE_PATH || '/recordly/'
 
 const prd = [
@@ -77,12 +76,12 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#e53935' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Recordly' }],
-    ['meta', { property: 'og:title', content: 'Recordly - 开源桌面录屏与演示剪辑工具' }],
+    ['meta', { property: 'og:title', content: 'Recordly - 软件演示与教程录屏剪辑神器' }],
     [
       'meta',
       {
         property: 'og:description',
-        content: '基于 PyQt5 + FFmpeg，录制、光标特效、双轨音频、时间线剪辑、NVENC 加速导出，一气呵成。',
+        content: '告别枯燥原画录屏。光标高亮平滑、镜头平滑推近放大、双音轨独立旁白补录，录完即可一键出片。100% 免费开源与离线安全。',
       },
     ],
   ],
@@ -96,12 +95,12 @@ export default defineConfig({
         locales: {
           root: {
             translations: {
-              button: { buttonText: '搜索文档', buttonAriaLabel: '搜索文档' },
+              button: { buttonText: '搜索文档与解答', buttonAriaLabel: '搜索文档与解答' },
               modal: {
                 displayDetails: '显示详细列表',
                 resetButtonTitle: '清除搜索',
                 backButtonTitle: '返回',
-                noResultsText: '未找到相关结果',
+                noResultsText: '未找到相关内容',
                 footer: {
                   selectText: '选择',
                   navigateText: '切换',
@@ -135,44 +134,39 @@ export default defineConfig({
       label: '简体中文',
       lang: 'zh-CN',
       title: 'Recordly',
-      description: '开源桌面录屏与演示视频编辑工具 —— 录制、剪辑、导出，一气呵成',
+      description: '专为软件演示与教程打造的桌面录屏剪辑神器 —— 100% 免费、开源、离线可用',
       themeConfig: {
         nav: [
           { text: '首页', link: '/' },
           { text: '功能特性', link: '/features' },
-          { text: '使用指南', link: '/guide/' },
-          { text: '下载安装', link: '/#download' },
-          {
-            text: '开发与架构',
-            items: [
-              { text: '项目概览', link: '/00-overview/' },
-              { text: '产品需求 (PRD)', link: '/01-product/prd/' },
-              { text: '技术方案 (Tech Spec)', link: '/03-architecture/system-design/' },
-              { text: '架构决策 (ADR)', link: '/03-architecture/adr/' },
-              { text: '研发调研', link: '/dev/research/vitepress-github-pages-strategy' },
-              { text: '历史归档', link: '/archive/' },
-            ],
-          },
+          { text: '使用教程', link: '/guide/' },
+          { text: '常见问题', link: '/faq' },
+          { text: '免费下载', link: '/#download' },
           { text: 'Releases', link: 'https://github.com/devcxl/recordly/releases' },
         ],
+        footer: {
+          message: '基于 MIT 协议开源发布 · 100% 离线与隐私优先',
+          copyright:
+            'Copyright © 2026 Recordly · <a href="/recordly/00-overview/">开发与架构规范 (PRD / ADR / 技术方案)</a>',
+        },
         sidebar: {
           '/guide/': [
             {
-              text: '使用指南',
+              text: '新手教程',
               items: [
-                { text: '新用户上手指南', link: '/guide/' },
+                { text: '15 分钟快速上手', link: '/guide/' },
                 { text: '安装与启动', link: '/guide/#安装与启动' },
                 { text: '首页导览', link: '/guide/#首页导览' },
                 { text: '第一次录制', link: '/guide/#第一次录制' },
                 { text: '编辑器界面导览', link: '/guide/#编辑器界面导览' },
-                { text: '时间线剪辑', link: '/guide/#时间线剪辑' },
-                { text: '速度与音量', link: '/guide/#速度与音量' },
-                { text: '音频进阶与补录', link: '/guide/#音频进阶' },
-                { text: '智能缩放', link: '/guide/#智能缩放' },
-                { text: '光标特效与裁剪', link: '/guide/#光标特效与画面裁剪' },
-                { text: '导出视频', link: '/guide/#导出视频' },
-                { text: '项目管理与保存', link: '/guide/#项目管理与保存' },
-                { text: '常见问题 (FAQ)', link: '/guide/#常见问题-faq' },
+                { text: '时间线剪辑操作', link: '/guide/#时间线剪辑' },
+                { text: '变速与音量微调', link: '/guide/#速度与音量' },
+                { text: '双音频分轨与补录', link: '/guide/#音频进阶' },
+                { text: '智能镜头缩放', link: '/guide/#智能缩放' },
+                { text: '光标特效与画面裁剪', link: '/guide/#光标特效与画面裁剪' },
+                { text: '导出视频与 GIF', link: '/guide/#导出视频' },
+                { text: '项目保存与异常恢复', link: '/guide/#项目管理与保存' },
+                { text: '常见问题解答', link: '/faq' },
               ],
             },
           ],
@@ -180,17 +174,28 @@ export default defineConfig({
             {
               text: '功能特性',
               items: [
-                { text: '特性详解', link: '/features' },
-                { text: '屏幕与音频采集', link: '/features#屏幕与音频采集' },
-                { text: '全局光标追踪与特效', link: '/features#全局光标追踪与特效' },
-                { text: '演示级时间线剪辑', link: '/features#演示级时间线剪辑' },
-                { text: '智能缩放 (Zoom Track)', link: '/features#智能缩放-zoom-track' },
-                { text: 'NVENC 硬件加速与导出', link: '/features#nvenc-硬件加速与导出' },
-                { text: '工程持久化与安全性', link: '/features#工程持久化与安全性' },
+                { text: '功能特性全览', link: '/features' },
+                { text: '高清流畅屏幕采集', link: '/features#高清流畅的屏幕采集' },
+                { text: '醒目光标特效系统', link: '/features#醒目光标特效与轨迹平滑' },
+                { text: '双音轨与旁白补录', link: '/features#独立双音轨与「原地补录」旁白' },
+                { text: '演示专用多轨时间线', link: '/features#演示专用多轨时间线' },
+                { text: '智能镜头运镜与缩放', link: '/features#智能镜头运镜与局部缩放' },
+                { text: '全渠道尺寸快速导出', link: '/features#全渠道尺寸与高速多格式导出' },
+                { text: '本地持久化与隐私安全', link: '/features#本地持久化与工程安全' },
               ],
             },
           ],
-          '/00-overview/': [{ text: '概览', items: overviewItems }],
+          '/faq': [
+            {
+              text: '常见问题',
+              items: [
+                { text: '常见使用疑问解答', link: '/faq' },
+                { text: '返回新手教程', link: '/guide/' },
+                { text: '功能特性介绍', link: '/features' },
+              ],
+            },
+          ],
+          '/00-overview/': [{ text: '开发概览', items: overviewItems }],
           '/01-product/': [{ text: '01 产品需求 (PRD)', items: prd }],
           '/03-architecture/': [
             { text: '03 技术方案 (Tech Spec)', items: techSpec },
@@ -206,40 +211,36 @@ export default defineConfig({
       lang: 'en-US',
       link: '/en/',
       title: 'Recordly',
-      description: 'Open-source desktop screen recording and video demo editing tool.',
+      description: 'Create polished software walkthroughs and demo videos in minutes — 100% free, open source, and offline.',
       themeConfig: {
         nav: [
           { text: 'Home', link: '/en/' },
           { text: 'Features', link: '/en/features' },
-          { text: 'Guide', link: '/en/guide/' },
+          { text: 'Tutorial', link: '/en/guide/' },
+          { text: 'FAQ', link: '/en/faq' },
           { text: 'Download', link: '/en/#download' },
-          {
-            text: 'Architecture & Dev',
-            items: [
-              { text: 'Overview', link: '/00-overview/' },
-              { text: 'Product Specs (PRD)', link: '/01-product/prd/' },
-              { text: 'System Design', link: '/03-architecture/system-design/' },
-              { text: 'ADR', link: '/03-architecture/adr/' },
-              { text: 'Research', link: '/dev/research/vitepress-github-pages-strategy' },
-            ],
-          },
           { text: 'Releases', link: 'https://github.com/devcxl/recordly/releases' },
         ],
+        footer: {
+          message: 'Released under the MIT License · 100% Offline & Privacy-First',
+          copyright:
+            'Copyright © 2026 Recordly · <a href="/recordly/00-overview/">Architecture & Engineering Specs</a>',
+        },
         sidebar: {
           '/en/guide/': [
             {
-              text: 'User Guide',
+              text: 'Tutorial',
               items: [
-                { text: 'Getting Started', link: '/en/guide/' },
+                { text: '15-Minute Quick Walkthrough', link: '/en/guide/' },
                 { text: 'Installation', link: '/en/guide/#installation' },
                 { text: 'Home Gallery', link: '/en/guide/#home-gallery' },
                 { text: 'First Recording', link: '/en/guide/#first-recording' },
                 { text: 'Editor Interface', link: '/en/guide/#editor-interface' },
                 { text: 'Timeline Editing', link: '/en/guide/#timeline-editing' },
-                { text: 'Advanced Audio', link: '/en/guide/#advanced-audio' },
-                { text: 'Smart Zoom Track', link: '/en/guide/#smart-zoom-track' },
-                { text: 'Exporting Video', link: '/en/guide/#exporting-video' },
-                { text: 'Troubleshooting & FAQ', link: '/en/guide/#troubleshooting-and-faq' },
+                { text: 'Dual Audio & Retakes', link: '/en/guide/#advanced-audio' },
+                { text: 'Smart Camera Zoom', link: '/en/guide/#smart-zoom-track' },
+                { text: 'Exporting Video & GIF', link: '/en/guide/#exporting-video' },
+                { text: 'FAQ & Troubleshooting', link: '/en/faq' },
               ],
             },
           ],
@@ -248,12 +249,23 @@ export default defineConfig({
               text: 'Features',
               items: [
                 { text: 'Feature Details', link: '/en/features' },
-                { text: 'Screen & Audio Capture', link: '/en/features#screen-and-audio-capture' },
-                { text: 'Cursor Effects & Tracking', link: '/en/features#cursor-effects-and-tracking' },
-                { text: 'Timeline Editing', link: '/en/features#timeline-editing' },
-                { text: 'Smart Zoom Track', link: '/en/features#smart-zoom-track' },
-                { text: 'Export & Hardware Acceleration', link: '/en/features#export-and-hardware-acceleration' },
-                { text: 'Project Safety & Persistence', link: '/en/features#project-safety-persistence' },
+                { text: 'Screen Capture', link: '/en/features#high-performance-screen-capture' },
+                { text: 'Cursor Beautification', link: '/en/features#cursor-beautification-and-trajectory-smoothing' },
+                { text: 'Dual Audio & Retakes', link: '/en/features#dual-audio-channels-in-place-voiceover-retakes' },
+                { text: 'Multi-Track Timeline', link: '/en/features#demo-first-multi-track-timeline' },
+                { text: 'Cinematic Pan & Zoom', link: '/en/features#cinematic-camera-pan-zoom' },
+                { text: 'Multi-Format Export', link: '/en/features#multi-platform-formats-fast-gpu-export' },
+                { text: 'Project Safety & Privacy', link: '/en/features#project-safety-100-offline-privacy' },
+              ],
+            },
+          ],
+          '/en/faq': [
+            {
+              text: 'FAQ',
+              items: [
+                { text: 'Frequently Asked Questions', link: '/en/faq' },
+                { text: 'Getting Started Guide', link: '/en/guide/' },
+                { text: 'Feature Overview', link: '/en/features' },
               ],
             },
           ],
