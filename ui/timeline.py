@@ -825,7 +825,7 @@ class TimelineWidget(QWidget):
         if "blocked_reason" in result:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(self, "无法变更速度",
-                                f"变更速度会与下一个 clip 重叠，请先拆分或移动 clip")
+                                "变更速度会与下一个 clip 重叠，请先拆分或移动 clip")
             return
         cmd = ChangeSpeedCommand(track_index, clip_index, old_speed, new_speed, clip.end)
         self._push_undo(cmd)

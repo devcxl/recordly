@@ -327,13 +327,13 @@ class TestAudioHelper:
         assert _load_project_audio(str(tmp_path), None) is None
 
     def test_loads_and_mixes_audio(self, tmp_path):
-        from app.main_window import _write_wav
         from app.project_restore_mixin import _load_project_audio
+        from core.audio_capture import write_wav
         from core.project import SourceInfo
         samplerate = 44100
         data = np.ones((samplerate, 1), dtype=np.float32) * 0.3
-        _write_wav(str(tmp_path / "m.wav"), data, samplerate)
-        _write_wav(str(tmp_path / "s.wav"), data, samplerate)
+        write_wav(str(tmp_path / "m.wav"), data, samplerate)
+        write_wav(str(tmp_path / "s.wav"), data, samplerate)
         result = _load_project_audio(str(tmp_path),
                                      SourceInfo(audio_mic="m.wav", audio_system="s.wav",
                                                 duration=1.0, fps=30, width=100, height=100))
@@ -407,12 +407,12 @@ class TestFullRoundtrip:
         import cv2
         from pathlib import Path
         from types import SimpleNamespace, MethodType
-        from app.main_window import MainWindow, _write_wav
+        from app.main_window import MainWindow
         from app.project_restore_mixin import _load_project_audio
+        from core.audio_capture import AudioResult, write_wav
         from core.compositor import Compositor
         from core.project import Project, SourceInfo, Track, Clip
         from core.screen_capture import CapturedFrame
-        from core.audio_capture import AudioResult
 
         project_dir = str(tmp_path / "roundtrip")
         os.makedirs(project_dir)

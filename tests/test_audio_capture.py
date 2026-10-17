@@ -164,7 +164,7 @@ class TestMixAudioResults:
 
 
 class TestReadWav:
-    """read_wav（由 main_window._read_wav 提升）— 返回 AudioResult | None"""
+    """read_wav — 返回 AudioResult | None"""
 
     def test_reads_wav_file(self, tmp_path):
         import numpy as np
@@ -189,3 +189,22 @@ class TestReadWav:
     def test_missing_file_returns_none(self, tmp_path):
         from core.audio_capture import read_wav
         assert read_wav(str(tmp_path / "missing.wav")) is None
+
+
+class TestWriteWav:
+    """write_wav — float32 数据落盘为 16-bit PCM WAV"""
+
+    def test_roundtrip_stereo(self, tmp_path):
+        import numpy as np
+        from core.audio_capture import read_wav, write_wav
+        samplerate = 8000
+        data = np.array([[0.25, -0.5], [0.5, 0.0]], dtype=np.float32)
+
+        path = tmp_path / "stereo.wav"
+        write_wav(str(path), data, samplerate)
+        result = read_wav(str(path))
+
+        assert result is not None
+        assert result.samplerate == samplerate
+        assert result.channels == 2
+        np.testing.assert_allclose(result.data, data, atol=2 / 32767)

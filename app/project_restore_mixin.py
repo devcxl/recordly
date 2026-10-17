@@ -6,35 +6,14 @@
 """
 
 import os
+from typing import TYPE_CHECKING
 
 from core.project import Clip, Project, Track
 from app.project_session import ProjectSession
 
-import wave
-import numpy as np
+if TYPE_CHECKING:
+    from core.audio_capture import AudioResult
 
-
-def _write_wav(path: str, data, samplerate: int):
-    """将 numpy float32 音频数据写入 16-bit PCM WAV 文件"""
-    arr = np.asarray(data, dtype=np.float32)
-    arr = np.clip(arr, -1.0, 1.0)
-    if arr.ndim == 1:
-        channels = 1
-        arr = arr.reshape(-1, 1)
-    else:
-        channels = arr.shape[1]
-    samples = (arr * 32767).astype(np.int16)
-    with wave.open(path, "w") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(2)
-        wf.setframerate(samplerate)
-        wf.writeframes(samples.tobytes())
-
-
-def _read_wav(path: str):
-    """从 WAV 文件读取音频（委托 core.audio_capture.read_wav，返回 AudioResult | None）"""
-    from core.audio_capture import read_wav
-    return read_wav(path)
 
 def _resolve_media_path(project_dir: str, rel_path: str) -> str:
     """安全解析项目内媒体路径。
@@ -74,16 +53,16 @@ def ensure_builtin_audio_tracks(project, project_dir: str) -> None:
 
 def _load_project_audio(project_dir: str, source) -> "AudioResult | None":
     """从 project.json source 声明的 WAV 路径恢复混合音频。无音频时返回 None。"""
-    from core.audio_capture import mix_audio_results
+    from core.audio_capture import mix_audio_results, read_wav
 
     mic_audio = None
     sys_audio = None
     if source and source.audio_mic:
         mic_path = _resolve_media_path(project_dir, source.audio_mic)
-        mic_audio = _read_wav(mic_path)
+        mic_audio = read_wav(mic_path)
     if source and source.audio_system:
         sys_path = _resolve_media_path(project_dir, source.audio_system)
-        sys_audio = _read_wav(sys_path)
+        sys_audio = read_wav(sys_path)
 
     if mic_audio is None and sys_audio is None:
         return None

@@ -4,16 +4,18 @@ import bisect
 import json
 import logging
 import math
-
-logger = logging.getLogger(__name__)
 import os
-from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Generator, Callable
+from dataclasses import dataclass
+from typing import Generator
+
 import numpy as np
+from PIL import Image
+
 from core.screen_capture import CapturedFrame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -159,7 +161,6 @@ class Compositor:
                          duration: float = 0.0,
                          cache_max_bytes: int = 256 * 1024 * 1024) -> int:
         """从 CompressedFrameStore 文件加载帧。返回帧数。"""
-        import json
         # 读取帧偏移索引
         idx_path = store_path.rsplit(".", 1)[0] + ".idx"
         if os.path.exists(idx_path):
@@ -234,7 +235,6 @@ class Compositor:
         )
         for i in range(actual_count):
             timestamp = i * frame_interval
-            from core.screen_capture import CapturedFrame
             frames.append(CapturedFrame(
                 data=None, timestamp=timestamp, index=i,
                 _loader=loader,
@@ -309,7 +309,6 @@ class Compositor:
         self.clear_preview_cache()
 
     def set_crop(self, crop):
-        from core.project import CropRegion
         self._crop_region = crop
         self.clear_preview_cache()
 
@@ -498,7 +497,6 @@ class Compositor:
         if self._crop_region is not None:
             cr = self._crop_region
             if cr.width < 1.0 or cr.height < 1.0:
-                from core.project import CropRegion
                 cx_c = int(cr.x * w)
                 cy_c = int(cr.y * h)
                 cw_c = max(2, int(cr.width * w))

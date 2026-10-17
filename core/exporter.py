@@ -8,14 +8,18 @@ import threading
 import wave
 import numpy as np
 from dataclasses import dataclass
-from PIL import Image
+from typing import TYPE_CHECKING
+
 import ffmpeg
+from PIL import Image
+from PyQt5.QtCore import QObject, pyqtSignal
 
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
-
-from core.compositor import Compositor
 from core.aspect_ratio import calculate_export_dimensions, calculate_fill_crop_region
 from core.audio_mix import compose_audio
+from core.compositor import Compositor
+
+if TYPE_CHECKING:
+    from core.project import CropRegion
 
 logger = logging.getLogger(__name__)
 

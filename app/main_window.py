@@ -4,6 +4,10 @@ import os
 import shutil
 from pathlib import Path
 
+from PyQt5.QtCore import QTimer, Qt, QUrl, pyqtSignal
+from PyQt5.QtGui import (
+    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap,
+)
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QSplitter,
     QFileDialog, QApplication, QMessageBox, QToolBar, QAction,
@@ -11,10 +15,6 @@ from PyQt5.QtWidgets import (
     QLabel, QScrollArea, QShortcut, QLineEdit,
     QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from PyQt5.QtGui import QPixmap, QPainter, QColor, QKeySequence, QIcon
-from PyQt5.QtCore import QUrl
-from PyQt5.QtGui import QDesktopServices
 
 from app.config import AppConfig
 from app.constants import DEFAULT_SAMPLE_RATE
@@ -29,7 +29,7 @@ from ui.crop_overlay import CropOverlay
 from ui.home_page import HomePage
 from ui.inspector_panel import InspectorPanel
 from app.project_session import ProjectSession
-from app.project_restore_mixin import ProjectRestoreMixin, _write_wav
+from app.project_restore_mixin import ProjectRestoreMixin
 from app.audio_flow_mixin import AudioFlowMixin
 from app.recording_flow_mixin import RecordingFlowMixin
 from app.export_flow_mixin import ExportFlowMixin
@@ -38,16 +38,11 @@ from app.export_controller import ExportController
 from app.resources import get_app_icon
 
 
-
-
-
-
 class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRestoreMixin, QMainWindow):
     """主窗口，管理录制/预览/导出的生命周期"""
 
     recording_started = pyqtSignal()
     recording_stopped = pyqtSignal()
-    export_requested = pyqtSignal(str)
 
     def __init__(self, config: AppConfig):
         super().__init__()
@@ -137,7 +132,6 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
     ]
 
     def _check_deps(self):
-        import shutil
         missing = [d for d in self.DEPENDENCIES if not shutil.which(d["cmd"])]
         if not missing:
             return
@@ -696,9 +690,6 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
     def update_status(self, text: str):
         self._status_label.setText(text)
 
-    def show_preview(self, pixmap: QPixmap):
-        self._preview.show_frame(pixmap)
-
     def _on_play_toggle(self):
         if not self._compositor.frames:
             return
@@ -1052,16 +1043,7 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
         if self._playback:
             self._playback.seek(self._playback.current_frame)
 
-    # ── 导出 ──────────────────────────────────────────────
-
-
-
-
-
-
-
-    def _on_new_project(self):
-        self.update_status("● 新建项目...")
+    # ── 项目 ──────────────────────────────────────────────
 
     def _on_project_deleted(self, path: str):
         """删除项目目录并刷新画廊"""
@@ -1093,15 +1075,10 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
         except Exception as exc:
             self._show_notification("保存项目失败", str(exc), "error")
 
-    def _toggle_fullscreen(self):
-        if self.isFullScreen():
-            self.showNormal()
-        else:
-            self.showFullScreen()
-
     def _on_about(self):
-        QMessageBox.about(self, "关于 Recordly",
-            "Recordly v1.0.4\n\n"
+        QMessageBox.about(
+            self, "关于 Recordly",
+            f"Recordly v{QApplication.applicationVersion()}\n\n"
             "开源演示视频录制与编辑工具\n\n"
             "作者：devcxl\n"
             "GitHub：https://github.com/devcxl/recordly")
@@ -1115,38 +1092,3 @@ class MainWindow(ExportFlowMixin, RecordingFlowMixin, AudioFlowMixin, ProjectRes
         if hasattr(self, '_timeline'):
             self._timeline.redo()
             self._on_timeline_selection_changed()
-
-    def _on_add_text_track(self):
-        from PyQt5.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(self, "添加文字标注", "输入标注内容:")
-        if not ok or not text:
-            return
-        track = self._make_track("text", text)
-        self._timeline.tracks.append(track)
-        self._timeline.update()
-
-    def _on_add_camera_track(self):
-        from PyQt5.QtWidgets import QInputDialog
-        device, ok = QInputDialog.getText(self, "添加画中画", "摄像头设备号 (默认 0):", text="0")
-        if not ok:
-            return
-        track = self._make_track("camera", device or "0")
-        self._timeline.tracks.append(track)
-        self._timeline.update()
-
-    def _on_delete_selected_track(self):
-        idx = self._timeline.selected_index
-        if idx >= 0:
-            track = self._timeline.tracks[idx]
-            if track.clips:
-                self._timeline.delete_clip(idx, 0)
-
-    def _make_track(self, type_: str, content: str):
-        return Track(type=type_, name=type_, clips=[
-            Clip(type=type_, content=content,
-                 start=0.0, end=self._timeline.duration),
-        ])
-
-    @property
-    def timeline_tracks(self) -> list:
-        return getattr(self, '_timeline', None) and self._timeline.tracks or []

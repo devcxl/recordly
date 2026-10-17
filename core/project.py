@@ -9,21 +9,11 @@ from datetime import datetime
 from typing import Optional, Literal
 from uuid import uuid4
 
+from core.aspect_ratio import AspectRatio
 from core.frame_style import FrameStyle
 
 # ── 速度选项 ──────────────────────────────────────────────
 SPEED_OPTIONS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
-
-# ── 宽高比预设 ────────────────────────────────────────────
-ASPECT_RATIO_PRESETS = [
-    "native", "16:9", "9:16", "1:1", "4:3", "4:5", "16:10", "10:16",
-]
-AspectRatio = str  # 预设值之一 或 "W:H" 自定义
-
-# ── 缩放深度 ────────────────────────────────────────────
-ZoomDepth = int  # 1-6
-ZOOM_DEPTH_SCALES = {1: 1.25, 2: 1.5, 3: 1.8, 4: 2.2, 5: 3.5, 6: 5.0}
-DEFAULT_ZOOM_DEPTH = 3
 
 
 @dataclass
@@ -420,9 +410,9 @@ def _validate_schema(data: dict):
                         f"timeline[{ti}].clips[{ci}] 必须是对象")
                 _validate_clip(c, f"timeline[{ti}].clips[{ci}]")
 
-    for field in ("cursor_events", "click_events"):
-        if data.get(field):
-            _check_point_list(data[field], field)
+    for key in ("cursor_events", "click_events"):
+        if data.get(key):
+            _check_point_list(data[key], key)
 
     monitor_offset = data.get("monitor_offset")
     if monitor_offset:

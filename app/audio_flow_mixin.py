@@ -13,11 +13,11 @@ from uuid import uuid4
 
 from PyQt5.QtWidgets import QDialog, QFileDialog
 
+from core.audio_capture import read_wav as _read_wav, write_wav as _write_wav
 from core.commands import (
     AddClipCommand, ChangeVolumeCommand, CompositeCommand,
 )
 from core.project import AudioRegion, Clip, Track, sync_audio_regions_from_clips
-from app.project_restore_mixin import _read_wav, _write_wav
 from ui.record_audio_dialog import RecordAudioDialog
 
 

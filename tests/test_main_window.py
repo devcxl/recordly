@@ -1838,9 +1838,9 @@ def _make_track_audio_window(project_dir):
 
 def _write_test_wav(path):
     import numpy as np
-    from app.main_window import _write_wav
+    from core.audio_capture import write_wav
     sr = 8000
-    _write_wav(path, np.ones((sr, 1), dtype=np.float32) * 0.25, sr)
+    write_wav(path, np.ones((sr, 1), dtype=np.float32) * 0.25, sr)
 
 
 def test_track_audio_provider_reads_per_track_wav(tmp_path, monkeypatch):
