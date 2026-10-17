@@ -30,10 +30,8 @@ Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It 
 - Speed control from 0.25x to 2.0x
 - Volume: inline continuous volume slider on each clip (0% - 200%) plus an Inspector panel, both with Undo/Redo support
 - Audio mixing: timeline audio regions composed in memory (compose_audio), identical semantics for preview and export
-- Annotations: text / arrow / image / blur
 - Frame styling: background color, rounded corners, shadow
 - Smart zoom: automatically tracks the area around mouse clicks (zoom track)
-- Camera picture-in-picture via OpenCV with smart scaling
 
 ### Export
 
@@ -95,7 +93,7 @@ recordly
 | sounddevice | Microphone audio capture |
 | pynput | Global mouse tracking |
 | ffmpeg-python | Video export (FFmpeg binding) |
-| opencv-python-headless | Video decoding and camera picture-in-picture |
+| opencv-python-headless | Video frame encoding/decoding (preview / export) |
 
 ---
 
@@ -120,7 +118,7 @@ recordly/
 │   ├── cursor_effects.py   # Cursor effects
 │   ├── compositor.py       # Frame compositor
 │   ├── camera.py           # Smart camera system
-│   ├── effects.py          # Annotation effects
+│   ├── effects.py          # Text annotation effect (not wired to UI)
 │   ├── frame_style.py      # Frame styling
 │   ├── exporter.py         # FFmpeg export engine (CPU / NVENC / GIF)
 │   ├── project.py          # Project model (deep validation on load)
@@ -134,11 +132,10 @@ recordly/
 │   ├── preview_widget.py   # Preview player
 │   ├── export_dialog.py    # Export dialog
 │   ├── settings_dialog.py  # Settings dialog
-│   ├── annotation_panel.py # Annotation panel
 │   ├── crop_overlay.py     # Crop overlay
 │   ├── project_card.py     # Project card widget
 │   └── project_gallery.py  # Project gallery
-├── tests/                  # 33 test files, 691 test cases
+├── tests/                  # 33 test files, 692 test cases
 ├── docs/                   # Docs (prd / adr / design / dev / review / task)
 ├── debian/                 # Debian packaging (dh-python + pybuild)
 ├── .aur/                   # AUR PKGBUILD
@@ -155,7 +152,7 @@ pip install pytest pytest-cov
 python -m pytest tests/ -v
 ```
 
-The suite contains 691 test cases covering recording, composition, export, the command layer, and UI interactions. CI runs it on every push, including a wheel build smoke test.
+The suite contains 692 test cases covering recording, composition, export, the command layer, and UI interactions. CI runs it on every push, including a wheel build smoke test.
 
 ---
 
