@@ -471,7 +471,7 @@ class TestFullRoundtrip:
                 f.write(p)
 
         # ── Phase 2: 模拟重开 → _on_open_project 加载 ──
-        import ui.preview_widget as preview_mod
+        import ui.playback_controller as playback_module
         captured_audio = [None]
 
         class FakePlayback:
@@ -481,7 +481,7 @@ class TestFullRoundtrip:
                 pass
             def set_on_frame_changed(self, cb):
                 pass
-        monkeypatch.setattr(preview_mod, "PlaybackController", FakePlayback)
+        monkeypatch.setattr(playback_module, "PlaybackController", FakePlayback)
 
         def btn():
             ns = SimpleNamespace()

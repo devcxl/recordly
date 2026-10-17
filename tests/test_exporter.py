@@ -256,7 +256,7 @@ class TestExportWorker:
         compose_calls = []
         mixed = np.zeros((100, 2), dtype=np.float32)
         monkeypatch.setattr(
-            "core.exporter.compose_audio",
+            "core.export_mp4_mixin.compose_audio",
             lambda regions, samplerate, duration=None: (
                 compose_calls.append((regions, samplerate, duration)) or mixed))
         saved = []
@@ -267,7 +267,7 @@ class TestExportWorker:
 
         ffmpeg_inputs = []
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.input",
+            "core.export_mp4_mixin.ffmpeg.input",
             lambda *args, **_kwargs: (ffmpeg_inputs.append(args) or object()))
         captured = {}
 
@@ -280,14 +280,14 @@ class TestExportWorker:
                             write=lambda _d: None, close=lambda: None),
                         stderr=[], terminate=lambda: None, wait=lambda: 0)))
 
-        monkeypatch.setattr("core.exporter.ffmpeg.output", fake_output)
+        monkeypatch.setattr("core.export_mp4_mixin.ffmpeg.output", fake_output)
         monkeypatch.setattr(
             worker, "_stream_frames_parallel", lambda *a, **_k: True)
         monkeypatch.setattr(
-            "core.exporter.os.path.exists",
+            "core.export_mp4_mixin.os.path.exists",
             lambda path: path in ("/tmp/mic.wav", "out.mp4"))
         monkeypatch.setattr(
-            "core.exporter.os.path.getsize", lambda _p: 12345)
+            "core.export_mp4_mixin.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 
@@ -324,7 +324,7 @@ class TestExportWorker:
         ]
 
         monkeypatch.setattr(
-            "core.exporter.compose_audio", lambda *a, **_k: None)
+            "core.export_mp4_mixin.compose_audio", lambda *a, **_k: None)
         saved = []
         monkeypatch.setattr(
             ExportWorker, "_save_temp_wav",
@@ -333,7 +333,7 @@ class TestExportWorker:
 
         ffmpeg_inputs = []
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.input",
+            "core.export_mp4_mixin.ffmpeg.input",
             lambda *args, **_kwargs: (ffmpeg_inputs.append(args) or object()))
         captured = {}
 
@@ -346,13 +346,13 @@ class TestExportWorker:
                             write=lambda _d: None, close=lambda: None),
                         stderr=[], terminate=lambda: None, wait=lambda: 0)))
 
-        monkeypatch.setattr("core.exporter.ffmpeg.output", fake_output)
+        monkeypatch.setattr("core.export_mp4_mixin.ffmpeg.output", fake_output)
         monkeypatch.setattr(
             worker, "_stream_frames_parallel", lambda *a, **_k: True)
         monkeypatch.setattr(
-            "core.exporter.os.path.exists", lambda path: path == "out.mp4")
+            "core.export_mp4_mixin.os.path.exists", lambda path: path == "out.mp4")
         monkeypatch.setattr(
-            "core.exporter.os.path.getsize", lambda _p: 12345)
+            "core.export_mp4_mixin.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 
@@ -383,7 +383,7 @@ class TestExportWorker:
         compose_calls = []
         mixed = np.zeros((100, 2), dtype=np.float32)
         monkeypatch.setattr(
-            "core.exporter.compose_audio",
+            "core.export_mp4_mixin.compose_audio",
             lambda regions, samplerate, duration=None: (
                 compose_calls.append((regions, samplerate, duration)) or mixed))
         saved = []
@@ -394,15 +394,15 @@ class TestExportWorker:
 
         ffmpeg_inputs = []
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.input",
+            "core.export_mp4_mixin.ffmpeg.input",
             lambda *args, **_kwargs: (ffmpeg_inputs.append(args) or object()))
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.output",
+            "core.export_mp4_mixin.ffmpeg.output",
             lambda *args, **_kwargs: SimpleNamespace(
                 overwrite_output=lambda: SimpleNamespace(
                     compile=lambda: ["ffmpeg", "-y", "out.mp4"])))
         monkeypatch.setattr(
-            "core.exporter.subprocess.Popen",
+            "core.export_mp4_mixin.subprocess.Popen",
             lambda *a, **_kw: SimpleNamespace(
                 stdin=SimpleNamespace(
                     write=lambda _d: None, close=lambda: None),
@@ -410,10 +410,10 @@ class TestExportWorker:
         monkeypatch.setattr(
             worker, "_stream_frames_parallel", lambda *a, **_k: True)
         monkeypatch.setattr(
-            "core.exporter.os.path.exists",
+            "core.export_mp4_mixin.os.path.exists",
             lambda path: path in ("/tmp/mic.wav", "out.mp4"))
         monkeypatch.setattr(
-            "core.exporter.os.path.getsize", lambda _p: 12345)
+            "core.export_mp4_mixin.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_nvenc()
 
@@ -460,7 +460,7 @@ class TestExportWorker:
         compose_calls = []
         mixed = np.zeros((100, 2), dtype=np.float32)
         monkeypatch.setattr(
-            "core.exporter.compose_audio",
+            "core.export_mp4_mixin.compose_audio",
             lambda regions, samplerate, duration=None: (
                 compose_calls.append((regions, samplerate, duration)) or mixed))
         monkeypatch.setattr(
@@ -468,10 +468,10 @@ class TestExportWorker:
             staticmethod(lambda audio, samplerate: "/tmp/mixed.wav"))
         ffmpeg_inputs = []
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.input",
+            "core.export_mp4_mixin.ffmpeg.input",
             lambda *args, **_kwargs: (ffmpeg_inputs.append(args) or object()))
         monkeypatch.setattr(
-            "core.exporter.ffmpeg.output",
+            "core.export_mp4_mixin.ffmpeg.output",
             lambda *args, **_kwargs: SimpleNamespace(
                 overwrite_output=lambda: SimpleNamespace(
                     run_async=lambda **_kw: SimpleNamespace(
@@ -481,10 +481,10 @@ class TestExportWorker:
         monkeypatch.setattr(
             worker, "_stream_frames_parallel", lambda *a, **_k: True)
         monkeypatch.setattr(
-            "core.exporter.os.path.exists",
+            "core.export_mp4_mixin.os.path.exists",
             lambda path: path in ("/tmp/music.wav", "out.mp4"))
         monkeypatch.setattr(
-            "core.exporter.os.path.getsize", lambda _p: 12345)
+            "core.export_mp4_mixin.os.path.getsize", lambda _p: 12345)
 
         worker._export_mp4_cpu()
 

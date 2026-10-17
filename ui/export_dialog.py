@@ -189,7 +189,7 @@ class ExportDialog(QDialog):
     def _probe_gpu_async(self):
         """后台线程执行 is_gpu_available()（含 ffmpeg 探测，最长 10s），
         结果通过信号回填 UI，不阻塞对话框打开。"""
-        from core.exporter import is_gpu_available
+        from core.export_ffmpeg import is_gpu_available
 
         bridge = _GpuProbeBridge()
         bridge.probed.connect(self._on_gpu_probed)

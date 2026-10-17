@@ -307,7 +307,8 @@ def test_frame_update_shows_time_and_follows_playhead():
 def test_playback_receives_regions_based_audio_player(monkeypatch):
     from types import SimpleNamespace
     from app.main_window import MainWindow
-    import ui.preview_widget as preview_module
+    import ui.audio_preview_player as audio_module
+    import ui.playback_controller as playback_module
 
     captured = {}
 
@@ -318,7 +319,7 @@ def test_playback_receives_regions_based_audio_player(monkeypatch):
         def set_on_frame_changed(self, callback):
             captured["callback"] = callback
 
-    monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
+    monkeypatch.setattr(playback_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
         _compositor=SimpleNamespace(fps=30, frames=[]),
@@ -331,7 +332,7 @@ def test_playback_receives_regions_based_audio_player(monkeypatch):
     MainWindow._create_playback_controller(window)
 
     player = captured["audio_player"]
-    assert isinstance(player, preview_module.AudioPreviewPlayer)
+    assert isinstance(player, audio_module.AudioPreviewPlayer)
     assert player.samplerate == 48000
     assert "audio_result" not in captured
     assert "video_clips" not in captured
@@ -344,7 +345,8 @@ def test_playback_player_truncates_to_video_duration(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from app.main_window import MainWindow
     from core.project import AudioRegion
-    import ui.preview_widget as preview_module
+    import ui.audio_preview_player as audio_module
+    import ui.playback_controller as playback_module
 
     captured = {}
 
@@ -370,7 +372,7 @@ def test_playback_player_truncates_to_video_duration(monkeypatch, tmp_path):
         start_ms=0, end_ms=60000, source_start_ms=0,
         source_end_ms=60000, audio_path=path, volume=1.0)]
 
-    monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
+    monkeypatch.setattr(playback_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
         _compositor=SimpleNamespace(fps=30, total_output_frames=360, frames=[]),
@@ -390,7 +392,8 @@ def test_playback_falls_back_to_default_samplerate(monkeypatch):
     from types import SimpleNamespace, MethodType
     from app.constants import DEFAULT_SAMPLE_RATE
     from app.main_window import MainWindow
-    import ui.preview_widget as preview_module
+    import ui.audio_preview_player as audio_module
+    import ui.playback_controller as playback_module
 
     captured = {}
 
@@ -401,7 +404,7 @@ def test_playback_falls_back_to_default_samplerate(monkeypatch):
         def set_on_frame_changed(self, callback):
             captured["callback"] = callback
 
-    monkeypatch.setattr(preview_module, "PlaybackController", FakePlayback)
+    monkeypatch.setattr(playback_module, "PlaybackController", FakePlayback)
     window = SimpleNamespace(
         _preview=SimpleNamespace(set_fps=lambda fps: None),
         _compositor=SimpleNamespace(fps=30, frames=[]),
@@ -414,7 +417,7 @@ def test_playback_falls_back_to_default_samplerate(monkeypatch):
     MainWindow._create_playback_controller(window)
 
     player = captured["audio_player"]
-    assert isinstance(player, preview_module.AudioPreviewPlayer)
+    assert isinstance(player, audio_module.AudioPreviewPlayer)
     assert player.samplerate == DEFAULT_SAMPLE_RATE
 
 
@@ -866,10 +869,10 @@ def test_apply_cursor_config_updates_active_effect():
 
 
 def test_export_dialog_exposes_mp4_fps_and_bitrate(qapp, monkeypatch):
-    import core.exporter
+    import core.export_ffmpeg
     from ui.export_dialog import ExportDialog
 
-    monkeypatch.setattr(core.exporter, "is_gpu_available", lambda: False)
+    monkeypatch.setattr(core.export_ffmpeg, "is_gpu_available", lambda: False)
     dialog = ExportDialog(default_fps=60, default_bitrate="20M")
 
     assert dialog.mp4_fps_value == 60
@@ -1151,6 +1154,8 @@ def test_playhead_seek_play_ignores_input_focus(monkeypatch):
         _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
         _editor_interface=editor,
     )
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
     monkeypatch.setattr(
         main_window_module.QApplication, "activeWindow", lambda: window)
 
@@ -1191,6 +1196,8 @@ def test_playhead_seek_play_schedules_delayed_playback(monkeypatch):
         _stacked_widget=SimpleNamespace(currentWidget=lambda: editor),
         _editor_interface=editor,
     )
+    window._is_editor_active_and_safe = MethodType(
+        MainWindow._is_editor_active_and_safe, window)
     monkeypatch.setattr(
         main_window_module.QApplication, "activeWindow", lambda: window)
 
