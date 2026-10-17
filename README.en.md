@@ -11,7 +11,7 @@ Recordly is a PyQt5 + FFmpeg based desktop screen recorder and video editor. It 
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-696%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-697%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -135,7 +135,7 @@ recordly/
 │   ├── crop_overlay.py     # Crop overlay
 │   ├── project_card.py     # Project card widget
 │   └── project_gallery.py  # Project gallery
-├── tests/                  # 33 test files, 692 test cases
+├── tests/                  # 33 test files, 697 test cases
 ├── docs/                   # Docs (prd / adr / design / dev / review / task)
 ├── debian/                 # Debian packaging (dh-python + pybuild)
 ├── .aur/                   # AUR PKGBUILD
@@ -152,7 +152,7 @@ pip install pytest pytest-cov
 python -m pytest tests/ -v
 ```
 
-The suite contains 692 test cases covering recording, composition, export, the command layer, and UI interactions. CI runs it on every push, including a wheel build smoke test.
+The suite contains 697 test cases covering recording, composition, export, the command layer, and UI interactions. CI runs it on every push, including a wheel build smoke test.
 
 ---
 

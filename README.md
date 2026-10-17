@@ -11,7 +11,7 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-696%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-697%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -135,7 +135,7 @@ recordly/
 │   ├── crop_overlay.py     # 裁剪叠加层
 │   ├── project_card.py     # 项目卡片组件
 │   └── project_gallery.py  # 项目画廊
-├── tests/                  # 33 个测试文件，692 个用例
+├── tests/                  # 33 个测试文件，697 个用例
 ├── docs/                   # 文档（prd / adr / design / dev / review / task）
 ├── debian/                 # Debian 打包（dh-python + pybuild）
 ├── .aur/                   # AUR PKGBUILD
@@ -152,7 +152,7 @@ pip install pytest pytest-cov
 python -m pytest tests/ -v
 ```
 
-测试套件共 692 个用例，覆盖录制、合成、导出、命令层与 UI 交互；CI 在每次推送时自动运行，并包含 wheel 构建冒烟测试。
+测试套件共 697 个用例，覆盖录制、合成、导出、命令层与 UI 交互；CI 在每次推送时自动运行，并包含 wheel 构建冒烟测试。
 
 ---
 
