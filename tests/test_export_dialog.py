@@ -136,7 +136,7 @@ class TestGpuProbeAsync:
             time.sleep(0.2)
             return True
 
-        monkeypatch.setattr("core.exporter.is_gpu_available", slow_probe)
+        monkeypatch.setattr("core.export_ffmpeg.is_gpu_available", slow_probe)
 
         t0 = time.monotonic()
         dialog = ExportDialog()
@@ -153,7 +153,7 @@ class TestGpuProbeAsync:
         from ui.export_dialog import ExportDialog
 
         monkeypatch.setattr(
-            "core.exporter.is_gpu_available", lambda: True)
+            "core.export_ffmpeg.is_gpu_available", lambda: True)
 
         dialog = ExportDialog()
         deadline = time.monotonic() + 5.0

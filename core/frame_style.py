@@ -1,8 +1,11 @@
 """视频帧样式效果 — Compositor 效果插件"""
 
 import os
-from PIL import Image, ImageDraw, ImageFilter
 from dataclasses import dataclass
+
+from PIL import Image, ImageDraw, ImageFilter
+
+from core._gradient import create_gradient
 from core.compositor import Effect, CompositorContext
 
 
@@ -87,19 +90,9 @@ class FrameStyleEffect(Effect):
     def _make_gradient(self, w: int, h: int) -> Image.Image:
         params = self.style.bg_gradient
         if params:
-            from ._gradient import create_gradient
             return create_gradient(w, h, *params)
         # 默认渐变: 深紫→深蓝
-        img = Image.new("RGB", (w, h))
-        c1, c2 = (30, 30, 50), (20, 20, 60)
-        for y in range(h):
-            ratio = y / h
-            r = int(c1[0] + (c2[0] - c1[0]) * ratio)
-            g = int(c1[1] + (c2[1] - c1[1]) * ratio)
-            b = int(c1[2] + (c2[2] - c1[2]) * ratio)
-            for x in range(w):
-                img.putpixel((x, y), (r, g, b))
-        return img
+        return create_gradient(w, h, (30, 30, 50), (20, 20, 60))
 
     def _make_wallpaper(self, w: int, h: int) -> Image.Image:
         if self._wallpaper_cache and self._wallpaper_cache.size == (w, h):

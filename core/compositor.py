@@ -1,19 +1,20 @@
 """帧合成器 — 统一合成管线"""
 
 import bisect
-import json
 import logging
 import math
-
-logger = logging.getLogger(__name__)
-import os
-from PIL import Image, ImageDraw
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Generator, Callable
-import numpy as np
+from dataclasses import dataclass
+from typing import Generator
+
+from PIL import Image
+
+from core.cursor_zoom_mixin import CursorZoomMixin
+from core.frame_loading_mixin import FrameLoadingMixin
 from core.screen_capture import CapturedFrame
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,7 +43,7 @@ class Effect(ABC):
         ...
 
 
-class Compositor:
+class Compositor(FrameLoadingMixin, CursorZoomMixin):
     def __init__(self, width: int, height: int, fps: int = 30):
         self.width = width
         self.height = height
@@ -107,191 +108,6 @@ class Compositor:
     @property
     def monitor_top(self): return self._monitor_top
 
-    # ── 输入 ──────────────────────────────────────────────
-
-    def load_frames(self, frames: list[CapturedFrame]):
-        self._close_frames_data()
-        self._frames = list(frames)
-        self.clear_preview_cache()
-        if frames:
-            self._base_time = frames[0].timestamp
-            self._frame_times = [
-                frame.timestamp - self._base_time for frame in frames
-            ]
-            try:
-                self.width = frames[0].data.shape[1]
-                self.height = frames[0].data.shape[0]
-            except RuntimeError:
-                # 首帧解码失败时保留已有尺寸，避免闪退
-                pass
-        else:
-            self._frame_times = []
-
-    def load_video(self, video_path: str, fps: float) -> int:
-        """从 mp4/视频文件解码帧到 compositor。返回帧数。"""
-        import cv2
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise FileNotFoundError(f"无法打开视频文件: {video_path}")
-
-        frames: list[CapturedFrame] = []
-        index = 0
-        frame_interval = 1.0 / fps if fps > 0 else 1.0 / 30
-        while True:
-            ret, frame_bgr = cap.read()
-            if not ret:
-                break
-            timestamp = index * frame_interval
-            # cv2 解码为 BGR，转 RGB 与 compositor 其余路径（mss BGRA→RGB）
-            # 及 Image.fromarray(mode="RGB") 的色彩空间约定保持一致
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            frames.append(CapturedFrame(
-                data=frame_rgb, timestamp=timestamp, index=index,
-            ))
-            index += 1
-        cap.release()
-
-        if frames:
-            self.load_frames(frames)
-        return len(frames)
-
-    def load_frames_data(self, store_path: str, frame_count: int, fps: float,
-                         duration: float = 0.0,
-                         cache_max_bytes: int = 256 * 1024 * 1024) -> int:
-        """从 CompressedFrameStore 文件加载帧。返回帧数。"""
-        import json
-        # 读取帧偏移索引
-        idx_path = store_path.rsplit(".", 1)[0] + ".idx"
-        if os.path.exists(idx_path):
-            with open(idx_path) as f:
-                offsets = json.load(f)
-        else:
-            offsets = []
-            for i in range(frame_count):
-                offsets.append([0, 0])  # fallback
-
-        # 保持文件句柄打开 + LRU 缓存（与 CompressedFrameStore 一致）
-        import cv2
-        import numpy as np
-        from collections import OrderedDict
-        import threading
-        fh = open(store_path, "rb")
-        cache: OrderedDict[int, np.ndarray] = OrderedDict()
-        cache_nbytes = 0
-        cache_lock = threading.Lock()
-        read_lock = threading.Lock()
-        inflight: dict[int, threading.Event] = {}
-
-        def loader(_i):
-            nonlocal cache_nbytes
-            while True:
-                with cache_lock:
-                    cached = cache.pop(_i, None)
-                    if cached is not None:
-                        cache[_i] = cached
-                        return cached
-                    ready = inflight.get(_i)
-                    if ready is None:
-                        ready = threading.Event()
-                        inflight[_i] = ready
-                        break
-                ready.wait()
-
-            try:
-                off, length = offsets[_i]
-                with read_lock:
-                    fh.seek(off)
-                    payload = fh.read(length)
-                if not payload:
-                    raise RuntimeError(
-                        f"帧 {_i}: 偏移 {off} 处读取到空数据")
-                arr = np.frombuffer(payload, dtype=np.uint8)
-                frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame_bgr is None:
-                    raise RuntimeError(
-                        f"帧 {_i}: JPEG 解码失败 "
-                        f"(offset={off}, len={length})")
-                rgb = np.ascontiguousarray(frame_bgr[:, :, ::-1])
-            except Exception:
-                with cache_lock:
-                    inflight.pop(_i).set()
-                raise
-
-            with cache_lock:
-                cache[_i] = rgb
-                cache_nbytes += rgb.nbytes
-                while cache_nbytes > cache_max_bytes and len(cache) > 1:
-                    _, evicted = cache.popitem(last=False)
-                    cache_nbytes -= evicted.nbytes
-                inflight.pop(_i).set()
-            return rgb
-
-        actual_count = max(frame_count, len(offsets))
-        frames: list = []
-        frame_interval = (
-            duration / actual_count if duration > 0 and actual_count > 0
-            else 1.0 / fps if fps > 0 else 1.0 / 30
-        )
-        for i in range(actual_count):
-            timestamp = i * frame_interval
-            from core.screen_capture import CapturedFrame
-            frames.append(CapturedFrame(
-                data=None, timestamp=timestamp, index=i,
-                _loader=loader,
-            ))
-        if frames:
-            self.fps = fps
-            self.load_frames(frames)
-            self._frames_data_handle = fh
-        else:
-            fh.close()
-        return len(frames)
-
-    def _close_frames_data(self):
-        if self._frames_data_handle is not None:
-            self._frames_data_handle.close()
-            self._frames_data_handle = None
-
-    def close(self):
-        self._close_frames_data()
-
-    @property
-    def source_duration(self) -> float:
-        if not self._frame_times:
-            return 0.0
-        if len(self._frame_times) == 1:
-            return 1 / self.fps
-        intervals = [
-            end - start
-            for start, end in zip(self._frame_times, self._frame_times[1:])
-            if end > start
-        ]
-        tail = float(np.median(intervals)) if intervals else 1 / self.fps
-        return self._frame_times[-1] + tail
-
-    def load_cursor_events(self, events: list, clicks: list):
-        self._cursor_events = events or []
-        self._click_events = []
-        for e in clicks or []:
-            self._click_events.append((e.x, e.y, e.timestamp - self._base_time))
-
-    def set_monitor_offset(self, left: int, top: int):
-        """设置显示器在屏幕坐标系中的偏移量"""
-        self._monitor_left = left
-        self._monitor_top = top
-
-    def set_cursor(self, x: int, y: int, state: str = "idle"):
-        self._cursor_x = max(0, min(x, self.width))
-        self._cursor_y = max(0, min(y, self.height))
-        self._cursor_state = state
-
-    def add_click(self, x: int, y: int, ts: float):
-        self._click_events.append((x, y, ts))
-
-    def set_zoom(self, rect: tuple | None):
-        self._zoom_rect = rect
-        self.clear_preview_cache()
-
     def load_camera(self, camera):
         self._camera = camera
         self.clear_preview_cache()
@@ -309,7 +125,6 @@ class Compositor:
         self.clear_preview_cache()
 
     def set_crop(self, crop):
-        from core.project import CropRegion
         self._crop_region = crop
         self.clear_preview_cache()
 
@@ -320,142 +135,6 @@ class Compositor:
         self._effects.pop(name, None)
 
     # ── 合成 ──────────────────────────────────────────────
-
-    def _interpolate_cursor(self, ts: float) -> tuple[int, int]:
-        """根据帧时间戳插值出当前帧的鼠标位置（减去显示器偏移得到帧内坐标）"""
-        if not self._cursor_events:
-            return self._cursor_x, self._cursor_y
-        events = self._cursor_events
-        target = self._base_time + ts
-        if target <= events[0].timestamp:
-            x, y = events[0].x, events[0].y
-        elif target >= events[-1].timestamp:
-            x, y = events[-1].x, events[-1].y
-        else:
-            # 二分查找目标时间戳
-            lo, hi = 0, len(events) - 1
-            while lo < hi:
-                mid = (lo + hi) // 2
-                if events[mid].timestamp < target:
-                    lo = mid + 1
-                else:
-                    hi = mid
-            i = lo
-            e0, e1 = events[i - 1], events[i]
-            if e1.timestamp == e0.timestamp:
-                x, y = e1.x, e1.y
-            else:
-                t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
-                x = int(e0.x + (e1.x - e0.x) * t)
-                y = int(e0.y + (e1.y - e0.y) * t)
-        return x - self._monitor_left, y - self._monitor_top
-
-    def _interpolate_cursor_raw(self, rel_ts: float) -> tuple[int, int]:
-        """按相对时间插值光标位置（用于 keyframe 生成）"""
-        target = self._base_time + rel_ts
-        events = self._cursor_events
-        if not events:
-            return self._cursor_x, self._cursor_y
-        if target <= events[0].timestamp:
-            x, y = events[0].x, events[0].y
-        elif target >= events[-1].timestamp:
-            x, y = events[-1].x, events[-1].y
-        else:
-            for i in range(1, len(events)):
-                if events[i].timestamp >= target:
-                    e0, e1 = events[i - 1], events[i]
-                    if e1.timestamp == e0.timestamp:
-                        x, y = e1.x, e1.y
-                    else:
-                        t = (target - e0.timestamp) / (e1.timestamp - e0.timestamp)
-                        x = int(e0.x + (e1.x - e0.x) * t)
-                        y = int(e0.y + (e1.y - e0.y) * t)
-                    break
-            else:
-                x, y = events[-1].x, events[-1].y
-        return x - self._monitor_left, y - self._monitor_top
-
-    def _get_zoom_at(self, ts: float,
-                     source_ts: float | None = None) -> tuple | None:
-        if self._manual_zoom_clips is not None:
-            if not self._manual_zoom_clips:
-                return None
-            starts = [c.start for c in self._manual_zoom_clips]
-            i = bisect.bisect_right(starts, ts) - 1
-            if i >= 0:
-                c = self._manual_zoom_clips[i]
-                if ts <= c.end and c.rect:
-                    target = tuple(c.rect)
-                    duration = max(0.0, c.end - c.start)
-                    transition = min(
-                        max(0.0, getattr(c, "transition_duration", 0.4)),
-                        duration / 2,
-                    )
-                    if transition <= 0:
-                        return target
-
-                    full = (0, 0, self.width, self.height)
-                    previous = full
-                    if i > 0:
-                        prev_clip = self._manual_zoom_clips[i - 1]
-                        if (prev_clip.rect
-                                and c.start - prev_clip.end <= 0.001):
-                            previous = tuple(prev_clip.rect)
-
-                    elapsed = ts - c.start
-                    if elapsed < transition:
-                        return self._interpolate_rect(
-                            previous, target, elapsed / transition)
-
-                    remaining = c.end - ts
-                    if remaining < transition:
-                        if i + 1 < len(self._manual_zoom_clips):
-                            next_clip = self._manual_zoom_clips[i + 1]
-                            if (next_clip.rect
-                                    and next_clip.start - c.end <= 0.001):
-                                # 相邻 Clip 的平移由下一个 Clip 入场过渡完成，
-                                # 避免当前 Clip 先移动一次导致边界跳变。
-                                return target
-                        return self._interpolate_rect(
-                            target, full,
-                            1.0 - remaining / transition,
-                        )
-                    return target
-            return None
-        if not self._camera:
-            return None
-        w, h = self.width, self.height
-        camera_ts = ts if source_ts is None else source_ts
-        fx, fy, scale = self._camera.sample(camera_ts * 1000)
-        zw = int(w / scale)
-        zh = int(h / scale)
-        zx = int(fx * w - zw / 2)
-        zy = int(fy * h - zh / 2)
-        zx = max(0, min(zx, w - zw))
-        zy = max(0, min(zy, h - zh))
-        return (zx, zy, zw, zh)
-
-    @staticmethod
-    def _interpolate_rect(start: tuple, end: tuple,
-                          progress: float) -> tuple[int, int, int, int]:
-        progress = max(0.0, min(1.0, progress))
-        eased = 10 * progress ** 3 - 15 * progress ** 4 + 6 * progress ** 5
-        return tuple(round(a + (b - a) * eased)
-                     for a, b in zip(start, end))
-
-    @staticmethod
-    def _transform_point(x: int, y: int, width: int, height: int,
-                         zoom: tuple | None = None,
-                         crop_rect: tuple | None = None) -> tuple[int, int]:
-        if zoom:
-            zx, zy, zw, zh = zoom
-            x = int((x - zx) * width / max(zw, 1))
-            y = int((y - zy) * height / max(zh, 1))
-        if crop_rect:
-            crop_x, crop_y, crop_w, crop_h = crop_rect
-            x = int((x - crop_x) * width / max(crop_w, 1))
-            y = int((y - crop_y) * height / max(crop_h, 1))
-        return x, y
 
     def prepare_frame(self, frame: CapturedFrame,
                       timeline_ts: float | None = None,
@@ -498,7 +177,6 @@ class Compositor:
         if self._crop_region is not None:
             cr = self._crop_region
             if cr.width < 1.0 or cr.height < 1.0:
-                from core.project import CropRegion
                 cx_c = int(cr.x * w)
                 cy_c = int(cr.y * h)
                 cw_c = max(2, int(cr.width * w))

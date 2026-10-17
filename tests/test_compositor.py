@@ -517,7 +517,6 @@ class TestCursorEffectThreadSafety:
     def test_concurrent_apply_no_exception(self):
         """CursorEffect.apply() 加 Lock 后多线程调用不应崩溃"""
         from core.cursor_effects import CursorEffect
-        from core.effects import TextAnnotationEffect
         import threading
         import concurrent.futures
 

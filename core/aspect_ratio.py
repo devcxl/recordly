@@ -1,7 +1,6 @@
 """宽高比计算工具"""
 
 from dataclasses import dataclass
-from typing import Literal
 
 # 宽高比预设值列表（与 core.project 同步）
 ASPECT_RATIO_PRESETS: list[str] = [

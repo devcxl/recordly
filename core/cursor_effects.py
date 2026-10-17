@@ -3,7 +3,6 @@
 import math
 import os
 import threading
-import numpy as np
 from PIL import Image, ImageDraw
 from core.compositor import Effect, CompositorContext
 

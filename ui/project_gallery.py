@@ -1,7 +1,7 @@
 """ProjectGallery 卡片网格容器"""
 
 from PyQt5.QtWidgets import (
-    QScrollArea, QWidget, QVBoxLayout, QMessageBox, QLayout, QSizePolicy, QLabel,
+    QScrollArea, QWidget, QVBoxLayout, QMessageBox, QLayout, QLabel,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPoint, QRect, QSize
 

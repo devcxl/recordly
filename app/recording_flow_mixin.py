@@ -13,9 +13,8 @@ from pathlib import Path
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
-from core.cursor_effects import CursorEffect
+from core.audio_capture import write_wav as _write_wav
 from core.project import Project, SourceInfo
-from app.project_restore_mixin import _write_wav
 
 
 class RecordingFlowMixin:
@@ -33,17 +32,7 @@ class RecordingFlowMixin:
             return
 
         # 立即创建项目目录和占位 project.json
-        name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
-        os.makedirs(project_dir, exist_ok=True)
-
-        project = Project()
-        project.name = name
-        project.save(str(Path(project_dir) / "project.json"))
-        self._project_dir = project_dir
-
-        self._project_name = name
+        self._create_recording_project()
         self.showMinimized()
         QTimer.singleShot(500, self._start_recording_from_home)
 
@@ -60,17 +49,23 @@ class RecordingFlowMixin:
             return
         self._update_ui_state()
 
-    def _create_project_for_recording(self):
-        """托盘录制时自动创建项目目录"""
+    def _create_recording_project(self) -> str:
+        """创建录制项目目录与占位 project.json，返回项目目录。"""
         name = f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         project_dir = str(Path(self.config.projects_dir) / f"{timestamp}_{name}")
         os.makedirs(project_dir, exist_ok=True)
-        self._project_name = name
+
         project = Project()
         project.name = name
         project.save(str(Path(project_dir) / "project.json"))
+        self._project_name = name
         self._project_dir = project_dir
+        return project_dir
+
+    def _create_project_for_recording(self):
+        """托盘录制时自动创建项目目录"""
+        self._create_recording_project()
         self.showMinimized()
 
     def _cleanup_failed_recording(self):
@@ -133,15 +128,7 @@ class RecordingFlowMixin:
             )
             offset = self._recorded_data.get("monitor_offset", (0, 0))
             self._compositor.set_monitor_offset(offset[0], offset[1])
-            from core.cursor_effects import CursorEffect
-            self._cursor_effect = CursorEffect(
-                cursor_size=self.config.cursor_size,
-                cursor_theme=self.config.cursor_theme,
-                cursor_style=self.config.cursor_style,
-            )
-            self._compositor.register_effect("cursor", self._cursor_effect)
-            if not self.config.trail_enabled:
-                self._cursor_effect.enabled["trail"] = False
+            self._register_cursor_effect(self._compositor)
             self._btn_export.setEnabled(True)
             self._btn_crop.setEnabled(True)
             self._btn_add_audio.setEnabled(True)
@@ -193,7 +180,6 @@ class RecordingFlowMixin:
 
         try:
             frames = self._recorded_data["frames"]
-            project_dir = Path(self._project_dir)
             project = Project()
             project.name = getattr(self, '_project_name',
                                    f"录制 {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -215,7 +201,6 @@ class RecordingFlowMixin:
             )
             project._frame_count = len(frames)
             # 保存帧偏移索引（供重新打开时定位每帧）
-            import json
             offsets = self._recording_controller.recorder.screen.frame_offsets
             idx_path = str(Path(self._project_dir) / "frames.idx")
             with open(idx_path, "w") as f:

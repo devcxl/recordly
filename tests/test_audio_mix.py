@@ -9,7 +9,7 @@ from core.project import AudioRegion
 
 
 def _write_wav(path: str, data, samplerate: int):
-    """写入 16-bit PCM WAV（等价 app/main_window._write_wav 逻辑，纯 wave 模块）"""
+    """写入 16-bit PCM WAV（测试独立实现，避免依赖被测音频 I/O）"""
     arr = np.asarray(data, dtype=np.float32)
     arr = np.clip(arr, -1.0, 1.0)
     if arr.ndim == 1:

@@ -11,7 +11,7 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyQt5-5.15%2B-green" alt="PyQt5">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-  <img src="https://img.shields.io/badge/tests-696%20passed-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-697%20passed-brightgreen" alt="Tests">
 </p>
 
 ---
@@ -30,10 +30,8 @@ Recordly 是一款基于 PyQt5 + FFmpeg 的桌面录屏与视频编辑工具，�
 - 速度控制：0.25x - 2.0x 变速
 - 音量调节：clip 内嵌连续音量滑块（0% - 200%）+ Inspector 属性面板，支持撤销/重做
 - 音频混合：时间轴音频区域合成（compose_audio），预览与导出语义一致
-- 标注：文本/箭头/图片/模糊
 - 帧样式：背景色、圆角、阴影
 - 智能缩放：自动追踪鼠标点击区域放大（zoom 轨道）
-- 摄像头画中画：OpenCV 摄像头叠加，支持智能缩放
 
 ### 导出
 
@@ -95,7 +93,7 @@ recordly
 | sounddevice | 麦克风音频捕获 |
 | pynput | 全局鼠标追踪 |
 | ffmpeg-python | 视频导出（FFmpeg 封装） |
-| opencv-python-headless | 视频解码与摄像头画中画 |
+| opencv-python-headless | 视频帧编解码（预览 / 导出） |
 
 ---
 
@@ -120,7 +118,7 @@ recordly/
 │   ├── cursor_effects.py   # 光标特效
 │   ├── compositor.py       # 帧合成器
 │   ├── camera.py           # 智能镜头系统
-│   ├── effects.py          # 标注效果
+│   ├── effects.py          # 文字标注效果（未接入 UI）
 │   ├── frame_style.py      # 帧样式
 │   ├── exporter.py         # FFmpeg 导出引擎（CPU / NVENC / GIF）
 │   ├── project.py          # 项目数据模型（加载时深度校验）
@@ -134,11 +132,10 @@ recordly/
 │   ├── preview_widget.py   # 预览播放器
 │   ├── export_dialog.py    # 导出对话框
 │   ├── settings_dialog.py  # 设置对话框
-│   ├── annotation_panel.py # 标注面板
 │   ├── crop_overlay.py     # 裁剪叠加层
 │   ├── project_card.py     # 项目卡片组件
 │   └── project_gallery.py  # 项目画廊
-├── tests/                  # 33 个测试文件，691 个用例
+├── tests/                  # 33 个测试文件，697 个用例
 ├── docs/                   # 文档（prd / adr / design / dev / review / task）
 ├── debian/                 # Debian 打包（dh-python + pybuild）
 ├── .aur/                   # AUR PKGBUILD
@@ -155,7 +152,7 @@ pip install pytest pytest-cov
 python -m pytest tests/ -v
 ```
 
-测试套件共 691 个用例，覆盖录制、合成、导出、命令层与 UI 交互；CI 在每次推送时自动运行，并包含 wheel 构建冒烟测试。
+测试套件共 697 个用例，覆盖录制、合成、导出、命令层与 UI 交互；CI 在每次推送时自动运行，并包含 wheel 构建冒烟测试。
 
 ---
 

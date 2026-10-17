@@ -88,7 +88,7 @@ class TestPreviewWidgetImport:
     def test_duration_truncates_oversized_regions(self, tmp_path):
         """超长 region（超出视频时长）被 duration 截断，不拖长播放（慢放回归）"""
         from core.project import AudioRegion
-        from ui.preview_widget import AudioPreviewPlayer
+        from ui.audio_preview_player import AudioPreviewPlayer
 
         samplerate = 44100
         long = np.zeros((samplerate * 60, 2), dtype=np.float32) + 0.1  # 60s BGM
@@ -108,7 +108,7 @@ class TestPreviewWidgetImport:
 
 class TestPlaybackController:
     def test_audio_clock_selects_video_frame(self):
-        from ui.preview_widget import PlaybackController
+        from ui.playback_controller import PlaybackController
 
         class FakeWidget:
             def start_playback(self, generator):
@@ -142,7 +142,7 @@ class TestPlaybackController:
         assert playback.current_frame == 12
 
     def test_finished_audio_clock_is_closed(self):
-        from ui.preview_widget import PlaybackController
+        from ui.playback_controller import PlaybackController
 
         class FakeWidget:
             def start_playback(self, generator):
@@ -180,7 +180,7 @@ class TestPlaybackController:
         assert audio.closed is True
 
     def test_seek_works_before_first_play(self):
-        from ui.preview_widget import PlaybackController
+        from ui.playback_controller import PlaybackController
 
         class FakeWidget:
             def show_frame(self, _frame):
@@ -204,7 +204,7 @@ class TestPlaybackController:
         assert compositor.composed == [7]
 
     def test_uses_edited_timeline_frame_count(self):
-        from ui.preview_widget import PlaybackController
+        from ui.playback_controller import PlaybackController
 
         class FakeWidget:
             def show_frame(self, _frame):
@@ -230,7 +230,7 @@ class TestPlaybackController:
         assert compositor.composed == [3]
 
     def test_replay_after_last_frame_restarts_from_zero(self):
-        from ui.preview_widget import PlaybackController
+        from ui.playback_controller import PlaybackController
 
         class FakeWidget:
             def start_playback(self, generator):
@@ -261,7 +261,7 @@ class TestAudioPreviewPlayer:
         """相同 regions 下 timeline_data == compose_audio 输出（逐样本）"""
         from core.audio_mix import compose_audio
         from core.project import AudioRegion
-        from ui.preview_widget import AudioPreviewPlayer
+        from ui.audio_preview_player import AudioPreviewPlayer
 
         samplerate = 1000
         mic_data = np.array([
@@ -292,7 +292,7 @@ class TestAudioPreviewPlayer:
 
     def test_output_callback_position_is_the_audio_master_clock(self, tmp_path):
         from core.project import AudioRegion
-        from ui.preview_widget import AudioPreviewPlayer
+        from ui.audio_preview_player import AudioPreviewPlayer
 
         path = str(tmp_path / "audio.wav")
         _write_wav(path, np.ones((20, 1), dtype=np.float32), 10)
@@ -312,7 +312,7 @@ class TestAudioPreviewPlayer:
         assert player.current_time == pytest.approx(0.9)
 
     def test_empty_audio_falls_back_without_opening_output_device(self):
-        from ui.preview_widget import AudioPreviewPlayer
+        from ui.audio_preview_player import AudioPreviewPlayer
 
         opened = []
         player = AudioPreviewPlayer(
@@ -326,7 +326,7 @@ class TestAudioPreviewPlayer:
         """删除/移动/音量编辑后 timeline_data 与 compose_audio 语义一致变化"""
         from core.audio_mix import compose_audio
         from core.project import AudioRegion
-        from ui.preview_widget import AudioPreviewPlayer
+        from ui.audio_preview_player import AudioPreviewPlayer
 
         samplerate = 1000
         data = np.array([
@@ -385,7 +385,7 @@ class TestZoomOverlay:
         from PyQt5.QtCore import QEvent, QPointF, Qt
         from PyQt5.QtGui import QMouseEvent
         from PyQt5.QtWidgets import QLabel
-        from ui.preview_widget import ZoomOverlay
+        from ui.zoom_overlay import ZoomOverlay
 
         label = QLabel()
         label.resize(1000, 1000)
@@ -420,7 +420,7 @@ class TestZoomOverlay:
         from PyQt5.QtCore import QEvent, QPointF, Qt
         from PyQt5.QtGui import QMouseEvent
         from PyQt5.QtWidgets import QLabel
-        from ui.preview_widget import ZoomOverlay
+        from ui.zoom_overlay import ZoomOverlay
 
         label = QLabel()
         label.resize(1000, 500)

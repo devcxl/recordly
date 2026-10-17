@@ -187,7 +187,6 @@ class ProjectCard(QFrame):
         self._editing = False
 
         if new_name != self._summary.name:
-            old_name = self._summary.name
             self._summary.name = new_name
             self.rename_requested.emit(self._summary.path, new_name)
 

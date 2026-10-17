@@ -68,7 +68,7 @@ def profile_stages(comp, num_samples=50, target_w=1920, target_h=1080):
         raw_frame = comp._frames[source_idx]
 
         t0 = time.perf_counter()
-        img_data = raw_frame.data
+        _ = raw_frame.data  # 触发 JPEG 解码，计时才有意义
         timings['jpeg_decode_ms'].append((time.perf_counter() - t0) * 1000)
 
         t0 = time.perf_counter()

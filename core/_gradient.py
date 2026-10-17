@@ -23,5 +23,7 @@ def create_gradient(w: int, h: int,
         yy, xx = np.meshgrid(np.linspace(0, 1, h), np.linspace(0, 1, w), indexing="ij")
         ratios = (xx + yy) / 2.0                                         # (h, w)
         pixels = (c1 + (c2 - c1) * ratios[..., np.newaxis]).astype(np.uint8)
+    else:
+        raise ValueError(f"不支持的渐变方向: {direction}")
 
     return Image.fromarray(pixels, "RGB")

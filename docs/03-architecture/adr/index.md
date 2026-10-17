@@ -16,6 +16,7 @@
 | [`2026-07-19-timeline-interaction-routing-and-snapping.md`](2026-07-19-timeline-interaction-routing-and-snapping.md) | 时间线快捷键路由、吸附坐标与缩放块建模 |
 | [`2026-07-19-undo-redo-shortcuts.md`](2026-07-19-undo-redo-shortcuts.md) | 撤销/重做快捷键 QShortcut + 命令描述独立于 UI |
 | [`2026-08-10-dual-audio-tracks-re-record.md`](2026-08-10-dual-audio-tracks-re-record.md) | 双音频轨道编辑与麦克风补录 |
+| [`2026-10-17-remove-unreleased-annotation-pip.md`](2026-10-17-remove-unreleased-annotation-pip.md) | 移除未发布的标注与摄像头画中画脚手架 |
 
 ## 命名说明
 

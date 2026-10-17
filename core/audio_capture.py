@@ -2,17 +2,18 @@
 
 import logging
 import os
-import sys
-import time
 import subprocess
-import wave
-
-logger = logging.getLogger(__name__)
+import sys
 import threading
+import wave
+from dataclasses import dataclass
+
 import numpy as np
 import sounddevice as sd
-from dataclasses import dataclass
-from app.constants import DEFAULT_SAMPLE_RATE, DEFAULT_AUDIO_CHANNELS
+
+from app.constants import DEFAULT_AUDIO_CHANNELS, DEFAULT_SAMPLE_RATE
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,10 +24,7 @@ class AudioResult:
 
 
 def read_wav(path: str) -> AudioResult | None:
-    """从 WAV 文件读取音频（16-bit PCM → float32）；文件不存在返回 None。
-
-    由 app/main_window._read_wav 提升而来，返回类型改为 AudioResult。
-    """
+    """从 WAV 文件读取音频（16-bit PCM → float32）；文件不存在返回 None。"""
     if not os.path.exists(path):
         return None
     with wave.open(path, "r") as wf:
@@ -37,6 +35,23 @@ def read_wav(path: str) -> AudioResult | None:
         if channels > 1:
             samples = samples.reshape(-1, channels)
         return AudioResult(data=samples, samplerate=samplerate, channels=channels)
+
+
+def write_wav(path: str, data, samplerate: int) -> None:
+    """将 numpy float32 音频数据写入 16-bit PCM WAV 文件。"""
+    arr = np.asarray(data, dtype=np.float32)
+    arr = np.clip(arr, -1.0, 1.0)
+    if arr.ndim == 1:
+        channels = 1
+        arr = arr.reshape(-1, 1)
+    else:
+        channels = arr.shape[1]
+    samples = (arr * 32767).astype(np.int16)
+    with wave.open(path, "w") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
 
 
 def mix_audio_results(*results: AudioResult | None) -> AudioResult | None:
@@ -79,7 +94,7 @@ class MicrophoneCapture:
     def start(self):
         self._buffer.clear()
 
-        def callback(indata, frames, time_info, status):
+        def callback(indata, frames, _time_info, status):
             if status:
                 logger.debug("麦克风状态: %s", status)
             self._buffer.append(indata.copy())
