@@ -1,7 +1,5 @@
 import { defineConfig } from 'vitepress'
 
-// GitHub Pages 项目站点部署路径：/<repo>/。仓库为 recordly，故 base 为 /recordly/。
-// 若部署到自定义域名或用户主页，请相应调整；也可通过 CI 环境变量 BASE_PATH 覆盖。
 const base = process.env.BASE_PATH || '/recordly/'
 
 const prd = [
@@ -45,47 +43,234 @@ const adr = [
   { text: '双音频轨道编辑与补录', link: '/03-architecture/adr/2026-08-10-dual-audio-tracks-re-record' },
 ]
 
+const overviewItems = [
+  { text: '项目概览', link: '/00-overview/' },
+  { text: 'PRD 索引', link: '/01-product/prd/' },
+  { text: 'Tech Spec 索引', link: '/03-architecture/system-design/' },
+  { text: 'ADR 索引', link: '/03-architecture/adr/' },
+  { text: '文档迁移报告', link: '/archive/adoption-migration-report' },
+]
+
+const archiveItems = [
+  { text: '归档说明', link: '/archive/' },
+  { text: '归档 · 任务 DAG', link: '/archive/design/' },
+  { text: '归档 · 评审记录', link: '/archive/review/' },
+  { text: '归档 · 任务清单', link: '/archive/task/' },
+]
+
+const researchItems = [
+  { text: '官网与文档体系调研', link: '/dev/research/vitepress-github-pages-strategy' },
+]
+
 export default defineConfig({
-  lang: 'zh-CN',
-  title: 'Recordly Docs',
-  description: 'Recordly 桌面录屏与视频编辑工具 —— 项目文档',
+  title: 'Recordly',
   base,
   lastUpdated: true,
   cleanUrls: true,
   srcExclude: ['.agents/**'],
+  sitemap: {
+    hostname: 'https://devcxl.github.io/recordly/',
+  },
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}logo.svg` }],
+    ['meta', { name: 'theme-color', content: '#e53935' }],
+    ['meta', { property: 'og:type', content: 'website' }],
+    ['meta', { property: 'og:site_name', content: 'Recordly' }],
+    ['meta', { property: 'og:title', content: 'Recordly - 软件演示与教程录屏剪辑神器' }],
+    [
+      'meta',
+      {
+        property: 'og:description',
+        content: '告别枯燥原画录屏。光标高亮平滑、镜头平滑推近放大、双音轨独立旁白补录，录完即可一键出片。100% 免费开源与离线安全。',
+      },
+    ],
+  ],
   themeConfig: {
+    logo: '/logo.svg',
     outline: { level: [2, 3] },
-    nav: [
-      { text: '首页', link: '/' },
-      { text: '使用指南', link: '/guide/' },
-      { text: '产品需求', link: '/01-product/prd/' },
-      { text: '技术方案', link: '/03-architecture/system-design/' },
-      { text: 'ADR', link: '/03-architecture/adr/' },
-      { text: '归档', link: '/archive/' },
-    ],
-    sidebar: [
-      { text: '使用指南', items: [
-        { text: '新用户使用指南', link: '/guide/' },
-      ]},
-      { text: '概览', items: [
-        { text: '项目概览', link: '/00-overview/' },
-        { text: 'PRD 索引', link: '/01-product/prd/' },
-        { text: 'Tech Spec 索引', link: '/03-architecture/system-design/' },
-        { text: 'ADR 索引', link: '/03-architecture/adr/' },
-        { text: '文档迁移报告', link: '/archive/adoption-migration-report' },
-      ]},
-      { text: '01 产品需求 (PRD)', items: prd },
-      { text: '03 技术方案 (Tech Spec)', items: techSpec },
-      { text: '03 架构决策 (ADR)', items: adr },
-      { text: '历史归档', items: [
-        { text: '归档说明', link: '/archive/' },
-        { text: '归档 · 任务 DAG', link: '/archive/design/' },
-        { text: '归档 · 评审记录', link: '/archive/review/' },
-        { text: '归档 · 任务清单', link: '/archive/task/' },
-      ]},
-    ],
-    socialLinks: [
-      { icon: 'github', link: 'https://github.com/devcxl/recordly' },
-    ],
+    socialLinks: [{ icon: 'github', link: 'https://github.com/devcxl/recordly' }],
+    search: {
+      provider: 'local',
+      options: {
+        locales: {
+          root: {
+            translations: {
+              button: { buttonText: '搜索文档与解答', buttonAriaLabel: '搜索文档与解答' },
+              modal: {
+                displayDetails: '显示详细列表',
+                resetButtonTitle: '清除搜索',
+                backButtonTitle: '返回',
+                noResultsText: '未找到相关内容',
+                footer: {
+                  selectText: '选择',
+                  navigateText: '切换',
+                  closeText: '关闭',
+                },
+              },
+            },
+          },
+          en: {
+            translations: {
+              button: { buttonText: 'Search', buttonAriaLabel: 'Search documentation' },
+              modal: {
+                displayDetails: 'Display detailed list',
+                resetButtonTitle: 'Reset search',
+                backButtonTitle: 'Close search',
+                noResultsText: 'No results for',
+                footer: {
+                  selectText: 'to select',
+                  navigateText: 'to navigate',
+                  closeText: 'to close',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  locales: {
+    root: {
+      label: '简体中文',
+      lang: 'zh-CN',
+      title: 'Recordly',
+      description: '专为软件演示与教程打造的桌面录屏剪辑神器 —— 100% 免费、开源、离线可用',
+      themeConfig: {
+        nav: [
+          { text: '首页', link: '/' },
+          { text: '功能特性', link: '/features' },
+          { text: '使用教程', link: '/guide/' },
+          { text: '常见问题', link: '/faq' },
+          { text: '免费下载', link: '/#download' },
+          { text: 'Releases', link: 'https://github.com/devcxl/recordly/releases' },
+        ],
+        footer: {
+          message: '基于 MIT 协议开源发布 · 100% 离线与隐私优先',
+          copyright:
+            'Copyright © 2026 Recordly · <a href="/recordly/00-overview/">开发与架构规范 (PRD / ADR / 技术方案)</a>',
+        },
+        sidebar: {
+          '/guide/': [
+            {
+              text: '新手教程',
+              items: [
+                { text: '15 分钟快速上手', link: '/guide/' },
+                { text: '安装与启动', link: '/guide/#安装与启动' },
+                { text: '首页导览', link: '/guide/#首页导览' },
+                { text: '第一次录制', link: '/guide/#第一次录制' },
+                { text: '编辑器界面导览', link: '/guide/#编辑器界面导览' },
+                { text: '时间线剪辑操作', link: '/guide/#时间线剪辑' },
+                { text: '变速与音量微调', link: '/guide/#速度与音量' },
+                { text: '双音频分轨与补录', link: '/guide/#音频进阶' },
+                { text: '智能镜头缩放', link: '/guide/#智能缩放' },
+                { text: '光标特效与画面裁剪', link: '/guide/#光标特效与画面裁剪' },
+                { text: '导出视频与 GIF', link: '/guide/#导出视频' },
+                { text: '项目保存与异常恢复', link: '/guide/#项目管理与保存' },
+                { text: '常见问题解答', link: '/faq' },
+              ],
+            },
+          ],
+          '/features': [
+            {
+              text: '功能特性',
+              items: [
+                { text: '功能特性全览', link: '/features' },
+                { text: '高清流畅屏幕采集', link: '/features#高清流畅的屏幕采集' },
+                { text: '醒目光标特效系统', link: '/features#醒目光标特效与轨迹平滑' },
+                { text: '双音轨与旁白补录', link: '/features#独立双音轨与「原地补录」旁白' },
+                { text: '演示专用多轨时间线', link: '/features#演示专用多轨时间线' },
+                { text: '智能镜头运镜与缩放', link: '/features#智能镜头运镜与局部缩放' },
+                { text: '全渠道尺寸快速导出', link: '/features#全渠道尺寸与高速多格式导出' },
+                { text: '本地持久化与隐私安全', link: '/features#本地持久化与工程安全' },
+              ],
+            },
+          ],
+          '/faq': [
+            {
+              text: '常见问题',
+              items: [
+                { text: '常见使用疑问解答', link: '/faq' },
+                { text: '返回新手教程', link: '/guide/' },
+                { text: '功能特性介绍', link: '/features' },
+              ],
+            },
+          ],
+          '/00-overview/': [{ text: '开发概览', items: overviewItems }],
+          '/01-product/': [{ text: '01 产品需求 (PRD)', items: prd }],
+          '/03-architecture/': [
+            { text: '03 技术方案 (Tech Spec)', items: techSpec },
+            { text: '03 架构决策 (ADR)', items: adr },
+          ],
+          '/dev/': [{ text: '研发调研', items: researchItems }],
+          '/archive/': [{ text: '历史归档', items: archiveItems }],
+        },
+      },
+    },
+    en: {
+      label: 'English',
+      lang: 'en-US',
+      link: '/en/',
+      title: 'Recordly',
+      description: 'Create polished software walkthroughs and demo videos in minutes — 100% free, open source, and offline.',
+      themeConfig: {
+        nav: [
+          { text: 'Home', link: '/en/' },
+          { text: 'Features', link: '/en/features' },
+          { text: 'Tutorial', link: '/en/guide/' },
+          { text: 'FAQ', link: '/en/faq' },
+          { text: 'Download', link: '/en/#download' },
+          { text: 'Releases', link: 'https://github.com/devcxl/recordly/releases' },
+        ],
+        footer: {
+          message: 'Released under the MIT License · 100% Offline & Privacy-First',
+          copyright:
+            'Copyright © 2026 Recordly · <a href="/recordly/00-overview/">Architecture & Engineering Specs</a>',
+        },
+        sidebar: {
+          '/en/guide/': [
+            {
+              text: 'Tutorial',
+              items: [
+                { text: '15-Minute Quick Walkthrough', link: '/en/guide/' },
+                { text: 'Installation', link: '/en/guide/#installation' },
+                { text: 'Home Gallery', link: '/en/guide/#home-gallery' },
+                { text: 'First Recording', link: '/en/guide/#first-recording' },
+                { text: 'Editor Interface', link: '/en/guide/#editor-interface' },
+                { text: 'Timeline Editing', link: '/en/guide/#timeline-editing' },
+                { text: 'Dual Audio & Retakes', link: '/en/guide/#advanced-audio' },
+                { text: 'Smart Camera Zoom', link: '/en/guide/#smart-zoom-track' },
+                { text: 'Exporting Video & GIF', link: '/en/guide/#exporting-video' },
+                { text: 'FAQ & Troubleshooting', link: '/en/faq' },
+              ],
+            },
+          ],
+          '/en/features': [
+            {
+              text: 'Features',
+              items: [
+                { text: 'Feature Details', link: '/en/features' },
+                { text: 'Screen Capture', link: '/en/features#high-performance-screen-capture' },
+                { text: 'Cursor Beautification', link: '/en/features#cursor-beautification-and-trajectory-smoothing' },
+                { text: 'Dual Audio & Retakes', link: '/en/features#dual-audio-channels-in-place-voiceover-retakes' },
+                { text: 'Multi-Track Timeline', link: '/en/features#demo-first-multi-track-timeline' },
+                { text: 'Cinematic Pan & Zoom', link: '/en/features#cinematic-camera-pan-zoom' },
+                { text: 'Multi-Format Export', link: '/en/features#multi-platform-formats-fast-gpu-export' },
+                { text: 'Project Safety & Privacy', link: '/en/features#project-safety-100-offline-privacy' },
+              ],
+            },
+          ],
+          '/en/faq': [
+            {
+              text: 'FAQ',
+              items: [
+                { text: 'Frequently Asked Questions', link: '/en/faq' },
+                { text: 'Getting Started Guide', link: '/en/guide/' },
+                { text: 'Feature Overview', link: '/en/features' },
+              ],
+            },
+          ],
+        },
+      },
+    },
   },
 })
